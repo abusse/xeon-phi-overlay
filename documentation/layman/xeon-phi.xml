@@ -1,0 +1,11 @@
+<?xml version="1.0" ?>
+<layman>
+	<overlay
+		type    = "git"
+		src     = "https://github.com/abusse/xeon-phi-overlay.git"
+		contact = "mail@anselm-busse.de"
+		name    = "xeon-phi">
+		<link>http://www.anselm-busse.de</link>
+		<description>Xeon Phi ebuilds for Gentoo</description>
+	</overlay>
+</layman>
