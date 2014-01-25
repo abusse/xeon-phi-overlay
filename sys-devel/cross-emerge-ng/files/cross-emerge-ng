@@ -1,0 +1,34 @@
+#!/bin/sh
+
+if [ -z "$SYSROOT" ]; then
+	echo "ERROR: You have to set SYSROOT to use cross-emerge-ng!"
+	exit 1
+fi
+
+# Get host triplet from build platform in /
+export CBUILD=$(portageq envvar CHOST)
+
+# Switch to host platform in SYSROOT
+export ROOT="${SYSROOT}"
+export PORTAGE_CONFIGROOT="${SYSROOT}"
+
+# Get host triplet from host platform in SYSROOT
+CHOST=$(portageq envvar CHOST)
+
+# Generate compiler wrappers.
+mkdir -p "${SYSROOT}"/etc/crossdev-target
+for prog in gcc g++; do
+	[ -x "${SYSROOT}/etc/crossdev-target/${prog}" ] && continue
+        echo "Generating wrapper ${SYSROOT}/etc/crossdev-target/${prog}"
+        cp "__PREFIX__/share/crossdev/wrappers/toolchain-wrapper" "${SYSROOT}/etc/crossdev-target/${prog}"
+        sed -i "s/<<PROGRAM>>/"$(echo "${CHOST}-${prog}" | sed -e 's/[\/&]/\\&/g')"/g" "${SYSROOT}/etc/crossdev-target/${prog}"
+        sed -i "s/<<SYSROOT>>/"$(echo "${SYSROOT}" | sed -e 's/[\/&]/\\&/g')"/g" "${SYSROOT}/etc/crossdev-target/${prog}"
+        chmod +x "${SYSROOT}/etc/crossdev-target/${prog}"
+done
+
+if [ -z "$DONT_WRAP_COMPILERS" ]; then
+	export CC=${SYSROOT}/etc/crossdev-target/gcc
+	export CXX=${SYSROOT}/etc/crossdev-target/g++
+fi
+
+exec emerge "$@"
