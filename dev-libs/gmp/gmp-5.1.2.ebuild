@@ -67,7 +67,8 @@ src_compile() {
 	econf \
 		--localstatedir=/var/state/gmp \
 		$(use_enable cxx) \
-		$(use_enable static-libs static)
+		$(use_enable static-libs static) \
+		--disable-assembly \
 	
 	emake || die
 

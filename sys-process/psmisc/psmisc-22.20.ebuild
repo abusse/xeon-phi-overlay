@@ -26,6 +26,7 @@ DOCS="AUTHORS ChangeLog NEWS README"
 
 src_prepare() {
 	epatch "${FILESDIR}"/${P}-selinux.patch #437332
+	sed -i "s:defined(__x86_64__):0:g" src/lists.h || die
 }
 
 src_configure() {

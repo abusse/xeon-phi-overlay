@@ -143,6 +143,7 @@ src_configure() {
 		--openssldir="${EPREFIX}"${SSL_CNF_DIR} \
 		--libdir=$(get_libdir) \
 		shared threads \
+		no-asm \
 		|| die
 
 	# Clean out hardcoded flags that openssl uses

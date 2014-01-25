@@ -40,6 +40,7 @@ pkg_setup() {
 
 src_prepare() {
 	epatch "${FILESDIR}"/${P}-x86-pic-check.patch #417179
+	epatch "${FILESDIR}"/${P}-k1om.patch
 	sed -i 's:@toolexeclibdir@:$(libdir):g' Makefile.in || die #462814
 	epatch_user
 	elibtoolize

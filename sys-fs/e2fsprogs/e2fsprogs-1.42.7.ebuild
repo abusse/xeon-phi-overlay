@@ -60,6 +60,8 @@ src_prepare() {
 
 	# Avoid rebuild
 	touch lib/ss/ss_err.h
+
+	sed -i "s:def EXT2FS_REQUIRE_486: 1:g" lib/ext2fs/bitops.h || die
 }
 
 src_configure() {
