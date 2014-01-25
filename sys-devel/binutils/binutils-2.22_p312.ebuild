@@ -2,6 +2,8 @@
 # Distributed under the terms of the GNU General Public License v2
 # $Header: $
 
+KEYWORDS="~amd64"
+
 extra_eclass=""
 if [[ -n ${BINUTILS_TYPE} ]] ; then
 	BTYPE=${BINUTILS_TYPE}
