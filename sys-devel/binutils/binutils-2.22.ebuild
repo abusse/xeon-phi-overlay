@@ -4,6 +4,8 @@
 
 KEYWORDS="~amd64"
 
+MPSS_VER=3.1.2
+
 extra_eclass=""
 if [[ -n ${BINUTILS_TYPE} ]] ; then
 	BTYPE=${BINUTILS_TYPE}
@@ -12,7 +14,6 @@ else
 	99999999)  BTYPE="cvs";;
 	9999)      BTYPE="git";;
 	9999_pre*) BTYPE="snap";;
-	*_p*)   BTYPE="phi";;
 	*.*.90)    BTYPE="snap";;
 	*.*.*.*.*) BTYPE="hjlu";;
 	*)         BTYPE="rel";;
@@ -36,11 +37,6 @@ git)
 snap)
 	BVER=${PV/9999_pre}
 	;;
-phi)
-	BVER=${PV}
-	MPSS_VER=${PV#*_p}
-	MPSS_VER=${MPSS_VER:0:1}.${MPSS_VER:1:1}.${MPSS_VER:2:1}
-	;;	
 *)
 	BVER=${BINUTILS_VER:-${PV}}
 	;;
@@ -59,17 +55,8 @@ is_cross() { [[ ${CHOST} != ${CTARGET} ]] ; }
 DESCRIPTION="Tools necessary to build programs"
 HOMEPAGE="http://sourceware.org/binutils/"
 
-case ${BTYPE} in
-	cvs|git) SRC_URI="" ;;
-	snap)
-		SRC_URI="ftp://gcc.gnu.org/pub/binutils/snapshots/binutils-${BVER}.tar.bz2
-			ftp://sourceware.org/pub/binutils/snapshots/binutils-${BVER}.tar.bz2" ;;
-	hjlu)
-		SRC_URI="mirror://kernel/linux/devel/binutils/binutils-${BVER}.tar."
-		version_is_at_least 2.21.51.0.5 && SRC_URI+="xz" || SRC_URI+="bz2" ;;
-	rel) SRC_URI="mirror://gnu/binutils/binutils-${BVER}.tar.bz2" ;;
-	phi) SRC_URI="http://registrationcenter.intel.com/irc_nas/3778/mpss-src-${MPSS_VER}.tar"
-esac
+SRC_URI="http://registrationcenter.intel.com/irc_nas/3778/mpss-src-${MPSS_VER}.tar"
+
 add_src_uri() {
 	[[ -z $2 ]] && return
 	local a=$1
@@ -137,8 +124,8 @@ tc-binutils_unpack() {
 	if [[ ${BTYPE} == phi ]] ; then
 		use vanilla || die "Xeon Phi toolchain only supports a vanilla build!"
 		unpack ${A}
-		unpack ./mpss-${MPSS_VER}/src/binutils-${PV%_p*}+mpss${MPSS_VER}.tar.bz2
-		mv binutils-${PV%_p*}+mpss${MPSS_VER} ${S}
+		unpack ./mpss-${MPSS_VER}/src/binutils-${PV}+mpss${MPSS_VER}.tar.bz2
+		mv binutils-${PV}+mpss${MPSS_VER} ${S}
 	fi
 }
 

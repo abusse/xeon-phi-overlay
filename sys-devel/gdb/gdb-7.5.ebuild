@@ -16,37 +16,9 @@ is_cross() { [[ ${CHOST} != ${CTARGET} ]] ; }
 
 RPM=
 MY_PV=${PV}
-case ${PV} in
-*.*.*.*.*.*)
-	# fedora version: gdb-6.8.50.20090302-8.fc11.src.rpm
-	inherit versionator rpm
-	gvcr() { get_version_component_range "$@"; }
-	MY_PV=$(gvcr 1-4)
-	RPM="${PN}-${MY_PV}-$(gvcr 5).fc$(gvcr 6).src.rpm"
-	SRC_URI="mirror://fedora/development/source/SRPMS/${RPM}"
-	;;
-*.*.50.*)
-	# weekly snapshots
-	SRC_URI="ftp://sourceware.org/pub/gdb/snapshots/current/gdb-weekly-${PV}.tar.bz2"
-	;;
-*_p*)
-	# Xeon Phi
-	MPSS_VER=${PV#*_p}
-	MPSS_VER=${MPSS_VER:0:1}.${MPSS_VER:1:1}.${MPSS_VER:2:1}
-	SRC_URI="http://registrationcenter.intel.com/irc_nas/3778/mpss-src-${MPSS_VER}.tar"	
-	;;
-9999*)
-	# live git tree
-	EGIT_REPO_URI="git://sourceware.org/git/binutils-gdb.git"
-	inherit git-2
-	SRC_URI=""
-	;;
-*)
-	# Normal upstream release
-	SRC_URI="mirror://gnu/gdb/${P}.tar.bz2
-		ftp://sourceware.org/pub/gdb/releases/${P}.tar.bz2"
-	;;
-esac
+
+MPSS_VER=3.1.2
+SRC_URI="http://registrationcenter.intel.com/irc_nas/3778/mpss-src-${MPSS_VER}.tar"	
 
 PATCH_VER="1"
 DESCRIPTION="GNU debugger"
@@ -77,8 +49,8 @@ S=${WORKDIR}/${PN}-${MY_PV}
 src_unpack() {
 	use vanilla || die "Xeon Phi toolchain only supports a vanilla build!"
 	unpack ${A}
-	unpack ./mpss-${MPSS_VER}/src/gdb-${PV%_p*}+mpss${MPSS_VER}.tar.bz2
-	mv gdb-${PV%_p*}+mpss${MPSS_VER} ${S}
+	unpack ./mpss-${MPSS_VER}/src/gdb-${PV}+mpss${MPSS_VER}.tar.bz2
+	mv gdb-${PV}+mpss${MPSS_VER} ${S}
 }
 
 src_prepare() {

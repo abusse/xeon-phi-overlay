@@ -23,7 +23,7 @@ inherit toolchain
 DESCRIPTION="The GNU Compiler Collection"
 
 LICENSE="GPL-3+ LGPL-3+ || ( GPL-3+ libgcc libstdc++ gcc-runtime-library-exception-3.1 ) FDL-1.3+"
-KEYWORDS="~alpha ~amd64 ~arm ~hppa ~ia64 ~m68k ~mips ~ppc ~ppc64 ~s390 ~sh ~sparc ~x86 -amd64-fbsd -x86-fbsd"
+KEYWORDS="~amd64"
 
 RDEPEND=""
 DEPEND="${RDEPEND}
@@ -34,8 +34,7 @@ if [[ ${CATEGORY} != cross-* ]] ; then
 	PDEPEND="${PDEPEND} elibc_glibc? ( >=sys-libs/glibc-2.8 )"
 fi
 
-MPSS_VER=${PV#*_p}
-MPSS_VER=${MPSS_VER:0:1}.${MPSS_VER:1:1}.${MPSS_VER:2:1}
+MPSS_VER=3.1.2
 SRC_URI="http://registrationcenter.intel.com/irc_nas/3778/mpss-src-${MPSS_VER}.tar"	
 
 src_unpack() {
@@ -52,8 +51,8 @@ src_unpack() {
 
 	use vanilla || die "Xeon Phi toolchain only supports a vanilla build!"
 	unpack ${A}
-	unpack ./mpss-${MPSS_VER}/src/gcc-${PV%_p*}+mpss${MPSS_VER}.tar.bz2
-	mv gcc-${PV%_p*}+mpss${MPSS_VER} ${S}
+	unpack ./mpss-${MPSS_VER}/src/gcc-${PV}+mpss${MPSS_VER}.tar.bz2
+	mv gcc-${PV}+mpss${MPSS_VER} ${S}
 
 	cd ${S}
 	epatch "${FILESDIR}/${PV}/gengtype.c.patch"

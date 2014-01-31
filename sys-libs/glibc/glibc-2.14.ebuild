@@ -7,7 +7,7 @@ DESCRIPTION="GNU libc6 (also called glibc2) C library"
 HOMEPAGE="http://www.gnu.org/software/libc/libc.html"
 
 LICENSE="LGPL-2.1+ BSD HPND inner-net"
-KEYWORDS="~amd64 ~ia64 ~ppc ~ppc64 ~s390 ~sh ~sparc ~x86"
+KEYWORDS="~amd64"
 RESTRICT="strip" # strip ourself #46186
 EMULTILIB_PKG="true"
 
@@ -15,17 +15,14 @@ EMULTILIB_PKG="true"
 RELEASE_VER=""
 BRANCH_UPDATE=""
 SNAP_VER=""
+
+MPSS_VER=3.1.2
+
 case ${PV} in
 9999*)
 	EGIT_REPO_URIS=( "git://sourceware.org/git/glibc.git" "git://sourceware.org/git/glibc-ports.git" )
 	EGIT_SOURCEDIRS=( "${S}" "${S}/ports" )
 	inherit git-2
-	;;
-*_p*)
-	RELEASE_VER=${PV%_p*}
-	SNAP_VER=${PV#*_p}
-	MPSS_VER=${PV#*_p}
-	MPSS_VER=${MPSS_VER:0:1}.${MPSS_VER:1:1}.${MPSS_VER:2:1}
 	;;
 *)
 	RELEASE_VER=${PV}
@@ -194,7 +191,7 @@ eblit-src_unpack-pre() {
 	use vanilla || die "Xeon Phi toolchain only supports a vanilla build!"
 	unpack ${A}
 	unpack ./mpss-${MPSS_VER}/src/glibc-${PV%_p*}+mpss${MPSS_VER}.tar.bz2
-	mv glibc-${PV%_p*}+mpss${MPSS_VER} ${S}
+	mv glibc-${PV}+mpss${MPSS_VER} ${S}
 }
 
 eblit-src_unpack-post() {
