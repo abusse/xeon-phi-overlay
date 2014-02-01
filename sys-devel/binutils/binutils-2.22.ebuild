@@ -121,12 +121,11 @@ tc-binutils_unpack() {
 	esac
 	mkdir -p "${MY_BUILDDIR}"
 	[[ -d ${WORKDIR}/patch ]] && mkdir "${WORKDIR}"/patch/skip
-	if [[ ${BTYPE} == phi ]] ; then
-		use vanilla || die "Xeon Phi toolchain only supports a vanilla build!"
-		unpack ${A}
-		unpack ./mpss-${MPSS_VER}/src/binutils-${PV}+mpss${MPSS_VER}.tar.bz2
-		mv binutils-${PV}+mpss${MPSS_VER} ${S}
-	fi
+
+	use vanilla || die "Xeon Phi toolchain only supports a vanilla build!"
+	unpack ${A}
+	unpack ./mpss-${MPSS_VER}/src/binutils-${PV}+mpss${MPSS_VER}.tar.bz2
+	mv binutils-${PV}+mpss${MPSS_VER} ${S}
 }
 
 # In case the ebuild wants to add a few of their own.
