@@ -1,0 +1,88 @@
+diff -urN a/micctrl/micctrl.c b/micctrl/micctrl.c
+--- a/libmpssconfig/genfs.c	2014-11-18 23:01:53.000000000 +0100
++++ b/libmpssconfig/genfs.c	2014-12-25 21:49:28.329424568 +0100
+@@ -1749,6 +1750,7 @@
+ 	struct stat sbuf;
+ 	unsigned int inode = 721;  // simply somewhere to start
+ 	unsigned int offset = 0;
++	char buffer[10];
+
+ 	if (mpssut_filename(menv, NULL, gzname, PATH_MAX, "%s", mic->config.rootdev.target))
+ 		unlink(gzname);
+@@ -1769,11 +1771,21 @@
+ 	}
+
+ 	oldmask = umask(S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+-	if ((cpiofp = fopen(cpioname, "a")) == NULL) {
++	if ((cpiofp = fopen(cpioname, "r+")) == NULL) {
+ 		umask(oldmask);
+ 		return errno;
+ 	}
+
++	// find end of cpio and set file pointer before magic number
++	buffer[9] = '\0';
++	fseek(cpiofp, -9, SEEK_END);
++	do{
++		fread(buffer, sizeof(char), 9, cpiofp);
++		fseek(cpiofp, -10, SEEK_CUR);
++	} while(strncmp(buffer,"TRAILER!!!",9));
++
++	fseek(cpiofp, -109, SEEK_CUR);
++
+ 	follow_dir(menv, top->subdir, "", cpiofp, &inode, &offset, perrs);
+ 	cpio_trailer(cpiofp, &inode, &offset);
+
+--- a/micctrl/network.c     2014-12-25 19:30:33.000000000 +0100
++++ b/micctrl/network.c     2014-12-25 20:07:59.000000000 +0100
+@@ -960,7 +960,7 @@
+ 		return 0;
+ 	}
+
+-	if ((fd = open(iname, O_RDONLY)) < 0) {
++	if ((fd = open(iname, O_RDONLY, 0644)) < 0) {
+ 		display(PERROR, "%s: Could not open %s\n", mic->name, iname);
+ 		return 0;
+ 	}
+@@ -990,7 +990,7 @@
+ 	    (mic->config.rootdev.type == ROOT_TYPE_SPLITNFS)) {
+ 		mpssut_filename(&mpssenv, NULL, oname, PATH_MAX, "%s/etc/ssh/%s",
+ 			      strchr(mic->config.rootdev.target, ':') + 1, name);
+-		if ((fd = open(oname, O_WRONLY|O_CREAT) & 0777) < 0) {
++		if ((fd = open(oname, O_WRONLY|O_CREAT, 0644) & 0777) < 0) {
+ 			display(PERROR, "%s: Could not open %s\n", mic->name, oname);
+ 			free(buffer);
+ 			return 0;
+@@ -3809,7 +3809,7 @@
+ 		return;
+ 	}
+
+-	if ((fd = open("/etc/resolv.conf", O_RDONLY)) < 0) {
++	if ((fd = open("/etc/resolv.conf", O_RDONLY, 0644)) < 0) {
+ 		free(buf);
+ 		return;
+ 	}
+
+--- a/micctrl/utilfuncs.c     2014-12-25 19:30:33.000000000 +0100
++++ b/micctrl/utilfuncs.c     2014-12-25 20:07:59.000000000 +0100
+@@ -234,7 +234,7 @@
+ 	mpssut_filename(&mpssenv, NULL, permfile, PATH_MAX, "/permfile");
+ 	tmpname = mpssut_tempnam(permfile);
+
+-	if ((fd = open(tmpname, O_RDWR | O_CREAT)) < 0) {
++	if ((fd = open(tmpname, O_RDWR | O_CREAT, 0644)) < 0) {
+ 		free(tmpname);
+ 		display(PERROR, "Failed permissions test - cannot determine if %s is secure\n", mpssenv.destdir);
+ 		exit(errno);
+
+--- a/mpssd/mpssd.c	2014-12-25 19:30:33.000000000 +0100
++++ b/mpssd/mpssd.c	2014-12-25 20:07:59.000000000 +0100
+@@ -1416,7 +1416,7 @@
+ 		len = read(fd, cookie, MPSS_COOKIE_SIZE);
+ 		close(fd);
+
+-		if ((fd = open(cookiename, O_WRONLY|O_CREAT)) < 0) {
++		if ((fd = open(cookiename, O_WRONLY|O_CREAT, 0644)) < 0) {
+ 			mpsslog(PERROR, "Failed to open %s: %s\n", cookiename, strerror(errno));
+ 			goto cookie_done;
+ 		}
+
