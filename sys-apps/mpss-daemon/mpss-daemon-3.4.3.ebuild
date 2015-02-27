@@ -32,4 +32,5 @@ src_install() {
 
 	doenvd ${FILESDIR}/90mpssd || die
 	doinitd ${FILESDIR}/mpss || die
+	doinitd ${FILESDIR}/net.mic0 || die
 }
