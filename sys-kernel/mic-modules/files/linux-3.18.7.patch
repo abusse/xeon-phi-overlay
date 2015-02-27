@@ -1,0 +1,67 @@
+diff -Naur mic-modules-3.4.3_old/host/linux.c mic-modules-3.4.3_new/host/linux.c
+--- mic-modules-3.4.3_old/host/linux.c	2015-02-27 10:00:14.831327076 +0100
++++ mic-modules-3.4.3_new/host/linux.c	2015-02-26 18:41:37.424248179 +0100
+@@ -181,7 +181,7 @@
+ 	}
+ 
+ 	if (on) {
+-		rc = __f_setown(filp, task_pid(current), PIDTYPE_PID, 0);
++		__f_setown(filp, task_pid(current), PIDTYPE_PID, 0);
+ 		filp->private_data = filp;
+ 	} else {
+ 		filp->private_data = NULL;
+@@ -333,9 +333,6 @@
+ 			NULL, "mic%d", mic_ctx->bd_info->bi_ctx.bi_id);
+ 	err = sysfs_create_group(&mic_ctx->bd_info->bi_sysfsdev->kobj, &bd_attr_group);
+ 	mic_ctx->sysfs_state = sysfs_get_dirent(mic_ctx->bd_info->bi_sysfsdev->kobj.sd,
+-#if (LINUX_VERSION_CODE > KERNEL_VERSION(2,6,35))
+-				NULL,
+-#endif
+ 				"state");
+ 
+ 	dev_set_drvdata(mic_ctx->bd_info->bi_sysfsdev, mic_ctx);
+diff -Naur mic-modules-3.4.3_old/host/linvnet.c mic-modules-3.4.3_new/host/linvnet.c
+--- mic-modules-3.4.3_old/host/linvnet.c	2015-02-27 10:00:14.831327076 +0100
++++ mic-modules-3.4.3_new/host/linvnet.c	2015-02-26 18:41:37.424248179 +0100
+@@ -321,7 +321,7 @@
+ 		desc->rd_valid = 1;
+ 	}
+ 
+-	if ((dev_veth = alloc_netdev(sizeof(micveth_info_t), "mic%d", micveth_setup)) == NULL) {
++	if ((dev_veth = alloc_netdev(sizeof(micveth_info_t), "mic%d", NET_NAME_UNKNOWN, micveth_setup)) == NULL) {
+ 		return -ENOMEM;
+ 	}
+ 
+@@ -341,7 +341,7 @@
+ 
+ static ssize_t show_veth(struct device *dev,
+ 			 struct device_attribute *attr, char *buf);
+-DEVICE_ATTR(veth, S_IRUGO|S_IWUGO, show_veth, NULL);
++DEVICE_ATTR(veth, 0660, show_veth, NULL);
+ 
+ static int
+ micveth_init_int(int num_bds, struct device *dev)
+diff -Naur mic-modules-3.4.3_old/include/mic_common.h mic-modules-3.4.3_new/include/mic_common.h
+--- mic-modules-3.4.3_old/include/mic_common.h	2015-02-27 10:00:14.831327076 +0100
++++ mic-modules-3.4.3_new/include/mic_common.h	2015-02-26 18:41:37.424248179 +0100
+@@ -415,7 +415,7 @@
+ 	product_family_t	bi_family;
+ 	struct board_info	*bd_info;
+ 	sysfs_info_t		sysfs_info;
+-	struct sysfs_dirent	*sysfs_state;
++	struct kernfs_node	*sysfs_state;
+ 	spinlock_t		sysfs_lock;
+ 	mic_dma_handle_t	dma_handle;
+ 	uint32_t		boot_mem;
+diff -Naur mic-modules-3.4.3_old/vnet/micveth_dma.c mic-modules-3.4.3_new/vnet/micveth_dma.c
+--- mic-modules-3.4.3_old/vnet/micveth_dma.c	2015-02-27 10:00:14.831327076 +0100
++++ mic-modules-3.4.3_new/vnet/micveth_dma.c	2015-02-26 18:41:37.424248179 +0100
+@@ -1030,7 +1030,7 @@
+ 	struct net_device *dev_vnet;
+ 	int ret = 0;
+ 
+-	if ((dev_vnet = (struct net_device *)alloc_netdev(sizeof(struct micvnet_info), "mic%d", 
++	if ((dev_vnet = (struct net_device *)alloc_netdev(sizeof(struct micvnet_info), "mic%d", NET_NAME_UNKNOWN, 
+ 					   micvnet_setup)) == NULL) {
+ 		printk(KERN_ERR "%s: alloc_netdev failed\n", __func__);
+ 		return -ENOMEM;
