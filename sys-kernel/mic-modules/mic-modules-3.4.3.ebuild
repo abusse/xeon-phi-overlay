@@ -28,7 +28,9 @@ src_unpack() {
 }
 
 src_prepare() {
-	epatch "${FILESDIR}/linux-3.18.7.patch"
+	if kernel_is ge 3 18 7; then
+		epatch "${FILESDIR}/linux-3.18.7.patch"
+	fi
 }
 
 src_compile() {
