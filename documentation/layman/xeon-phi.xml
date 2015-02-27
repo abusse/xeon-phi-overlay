@@ -3,9 +3,9 @@
 	<overlay
 		type    = "git"
 		src     = "https://github.com/abusse/xeon-phi-overlay.git"
-		contact = "mail@anselm-busse.de"
+		contact = "davideb@ethz.ch"
 		name    = "xeon-phi">
-		<link>http://www.anselm-busse.de</link>
+		<link></link>
 		<description>Xeon Phi ebuilds for Gentoo</description>
 	</overlay>
 </layman>
