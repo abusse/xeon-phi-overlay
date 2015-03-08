@@ -27,6 +27,12 @@ src_unpack() {
         unpack ./mpss-${PV}/src/${P}.tar.bz2
 }
 
+src_prepare() {
+	if kernel_is ge 3 18 7; then
+		epatch "${FILESDIR}/linux-3.18.7.patch"
+	fi
+}
+
 src_compile() {
 	set_arch_to_kernel
 
