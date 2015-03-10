@@ -15,7 +15,7 @@ SLOT="0"
 KEYWORDS="~amd64"
 
 DEPEND="app-text/asciidoc"
-RDEPEND="=sys-libs/libmicmgmt-${PV}"
+RDEPEND="=sys-libs/libmicmgmt-${PV} =sys-firmware/mpss-flash-${PV}"
 
 src_unpack() {
 	[ `uname -m` != "x86_64" ] && die "This tool is for the Xeon Phi host not the card."
