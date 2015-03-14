@@ -1,0 +1,22 @@
+diff -Nur a/Configure b/Configure
+--- a/Configure	2015-03-14 10:14:10.043902666 +0000
++++ b/Configure	2015-03-14 10:17:06.083902674 +0000
+@@ -673,7 +673,7 @@
+ my $zlib=1;      # but "no-zlib" is default
+ my $no_krb5=0;   # but "no-krb5" is implied unless "--with-krb5-..." is used
+ my $no_rfc3779=1; # but "no-rfc3779" is default
+-my $no_asm=0;
++my $no_asm=1;  # no asm for xeon phi in openssl so far
+ my $no_dso=0;
+ my $no_gmp=0;
+ my @skip=();
+@@ -768,7 +768,7 @@
+ 	$flags="";
+ 	$depflags="";
+ 	$openssl_experimental_defines="";
+-	$openssl_algorithm_defines="";
++	$openssl_algorithm_defines="#define OPENSSL_NO_ASM\n";
+ 	$openssl_thread_defines="";
+ 	$openssl_sys_defines="";
+ 	$openssl_other_defines="";
+

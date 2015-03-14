@@ -1,0 +1,58 @@
+diff -uNr a/doc/pic.ms b/doc/pic.ms
+--- a/doc/pic.ms	2014-02-02 20:23:34.671877705 +0000
++++ b/doc/pic.ms	2014-02-02 20:23:03.111877705 +0000
+@@ -522,10 +522,10 @@
+ 	]
+ 	move right 0.1 from last [] .e;
+ }
+-gridarrow(0.5);
+-gridarrow(1);
+-gridarrow(1.5);
+-gridarrow(2);
++.\"gridarrow(0.5);
++.\"gridarrow(1);
++.\"gridarrow(1.5);
++.\"gridarrow(2);
+ undef gridarrow
+ .PE
+ .CE "1: Diagonal arrows (dotted boxes show the implied 0.5-inch grid)"
+@@ -656,15 +656,15 @@
+ between dots:
+ .KS
+ .PS
+-box dotted "default";
+-move;
+-box dotted 0.05 "0.05";
+-move;
+-box dotted 0.1 "0.1";
+-move;
+-box dotted 0.15 "0.15";
+-move;
+-box dotted 0.2 "0.2";
++.\"box dotted "default";
++.\"move;
++.\"box dotted 0.05 "0.05";
++.\"move;
++.\"box dotted 0.1 "0.1";
++.\"move;
++.\"box dotted 0.15 "0.15";
++.\"move;
++.\"box dotted 0.2 "0.2";
+ .PE
+ .CE "2: Dotted objects"
+ .
+@@ -2353,10 +2353,10 @@
+ 	]
+ 	move right 0.1 from last [] .e;
+ }
+-gridarrow(0.5);
+-gridarrow(1);
+-gridarrow(1.5);
+-gridarrow(2);
++.\"gridarrow(0.5);
++.\"gridarrow(1);
++.\"gridarrow(1.5);
++.\"gridarrow(2);
+ undef gridarrow
+ .PE
+ .CE "1: Diagonal arrows (dotted boxes show the implied 0.5-inch grid)"

@@ -1,0 +1,13 @@
+diff -Nur a/lib/ext2fs/bitops.h b/lib/ext2fs/bitops.h
+--- a/lib/ext2fs/bitops.h	2014-07-03 14:33:48.000000000 +0000
++++ b/lib/ext2fs/bitops.h	2015-03-12 15:20:17.576556459 +0000
+@@ -340,7 +340,7 @@
+
+ _INLINE_ __u32 ext2fs_swab32(__u32 val)
+ {
+-#ifdef EXT2FS_REQUIRE_486
++#if 1
+ 	__asm__("bswap %0" : "=r" (val) : "0" (val));
+ #else
+ 	__asm__("xchgb %b0,%h0\n\t"	/* swap lower bytes	*/
+

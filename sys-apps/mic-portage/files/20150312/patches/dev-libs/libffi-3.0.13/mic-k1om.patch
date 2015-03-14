@@ -1,0 +1,307 @@
+diff --git a/src/x86/ffi64.c b/src/x86/ffi64.c
+index 2014af2..92aaec1 100644
+--- a/src/x86/ffi64.c
++++ b/src/x86/ffi64.c
+@@ -45,7 +45,10 @@
+ #include <sunmedia_types.h>
+ #define UINT128 __m128i
+ #else
++typedef struct { int64_t m[8]; } __int512_t;
++
+ #define UINT128 __int128_t
++#define UINT512 __int512_t
+ #endif
+ #endif
+
+@@ -54,6 +57,7 @@ union big_int_union
+   UINT32 i32;
+   UINT64 i64;
+   UINT128 i128;
++  UINT512 i512;
+ };
+
+ struct register_args
+@@ -507,10 +511,26 @@ ffi_call (ffi_cif *cif, void (*fn)(void), void *rvalue, void **avalue)
+ 		  break;
+ 		case X86_64_SSE_CLASS:
+ 		case X86_64_SSEDF_CLASS:
+-		  reg_args->sse[ssecount++].i64 = *(UINT64 *) a;
++		  reg_args->sse[ssecount].i512.m[0] = *(UINT64 *) a;
++		  reg_args->sse[ssecount].i512.m[1] = 0;
++		  reg_args->sse[ssecount].i512.m[2] = 0;
++		  reg_args->sse[ssecount].i512.m[3] = 0;
++		  reg_args->sse[ssecount].i512.m[4] = 0;
++		  reg_args->sse[ssecount].i512.m[5] = 0;
++		  reg_args->sse[ssecount].i512.m[6] = 0;
++		  reg_args->sse[ssecount].i512.m[7] = 0;
++		  ssecount++;
+ 		  break;
+ 		case X86_64_SSESF_CLASS:
+-		  reg_args->sse[ssecount++].i32 = *(UINT32 *) a;
++		  reg_args->sse[ssecount].i512.m[0] = *(UINT32 *) a;
++		  reg_args->sse[ssecount].i512.m[1] = 0;
++		  reg_args->sse[ssecount].i512.m[2] = 0;
++		  reg_args->sse[ssecount].i512.m[3] = 0;
++		  reg_args->sse[ssecount].i512.m[4] = 0;
++		  reg_args->sse[ssecount].i512.m[5] = 0;
++		  reg_args->sse[ssecount].i512.m[6] = 0;
++		  reg_args->sse[ssecount].i512.m[7] = 0;
++		  ssecount++;
+ 		  break;
+ 		default:
+ 		  abort();
+@@ -649,7 +669,7 @@ ffi_closure_unix64_inner(ffi_closure *closure, void *rvalue,
+       /* Otherwise, allocate space to make them consecutive.  */
+       else
+ 	{
+-	  char *a = alloca (16);
++	  char *a = alloca (64);
+ 	  int j;
+
+ 	  avalue[i] = a;
+diff --git a/src/x86/unix64.S b/src/x86/unix64.S
+index dcd6bc7..6f66606 100644
+--- a/src/x86/unix64.S
++++ b/src/x86/unix64.S
+@@ -24,6 +24,14 @@
+    WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
++
++
++   PORT TO THE INTEL MIC ARCHITECTURE:
++   EMILIO CASTILLO VILLAR
++   CRISTOBAL CAMARERO COTERILLO
++
++   UNIVERSITY OF CANTABRIA
++   SPAIN
+    ----------------------------------------------------------------------- */
+
+ #ifdef __x86_64__
+@@ -70,7 +78,7 @@ ffi_call_unix64:
+ .Lret_from_load_sse:
+
+ 	/* Deallocate the reg arg area.  */
+-	leaq	176(%r10), %rsp
++	leaq	560(%r10), %rsp
+
+ 	/* Call the user function.  */
+ 	call	*%r11
+@@ -146,11 +154,19 @@ ffi_call_unix64:
+
+ 	.align 2
+ .Lst_float:
+-	movss	%xmm0, (%rdi)
++	movl 	$1, %eax
++	kmov	%eax, %k1
++	vpackstorelps %zmm0, (%rdi){%k1}
++	vpackstorehps %zmm0, 64(%rdi){%k1}
++	/*movss	%xmm0, (%rdi)*/
+ 	ret
+ 	.align 2
+ .Lst_double:
+-	movsd	%xmm0, (%rdi)
++	movl 	$1, %eax
++	kmov	%eax, %k1
++	vpackstorelpd %zmm0, (%rdi){%k1}
++	vpackstorehpd %zmm0, 64(%rdi){%k1}
++	/*movsd	%xmm0, (%rdi)*/
+ 	ret
+ .Lst_ldouble:
+ 	fstpt	(%rdi)
+@@ -165,16 +181,36 @@ ffi_call_unix64:
+ 	   value to a 16 byte scratch area first.  Bits 8, 9, and 10
+ 	   control where the values are located.  Only one of the three
+ 	   bits will be set; see ffi_prep_cif_machdep for the pattern.  */
+-	movd	%xmm0, %r10
+-	movd	%xmm1, %r11
++	movq 	%rax, %r10
++	movl 	$1, %eax
++	kmov	%eax, %k1
++	movq	%r10, %rax
++
++	vpackstorelpd %zmm0, -200(%rsp){%k1}
++	vpackstorehpd %zmm0, -136(%rsp){%k1}
++	movq 	-200(%rsp), %r10
++
++	vpackstorelpd %zmm1, -200(%rsp){%k1}
++	vpackstorehpd %zmm1, -136(%rsp){%k1}
++	movq 	-200(%rsp), %r11
++
++	/*movd	%zmm0, %r10
++	movd	%zmm1, %r11*/
+ 	testl	$0x100, %ecx
+-	cmovnz	%rax, %rdx
+-	cmovnz	%r10, %rax
++	jz .Lst_struct_n1
++	movq	%rax, %rdx
++	movq	%r10, %rax
++.Lst_struct_n1:
++
+ 	testl	$0x200, %ecx
+-	cmovnz	%r10, %rdx
++	jz .Lst_struct_n2
++		movq	%r10, %rdx
++.Lst_struct_n2:
+ 	testl	$0x400, %ecx
+-	cmovnz	%r10, %rax
+-	cmovnz	%r11, %rdx
++	jz .Lst_struct_n3
++		movq	%r10, %rax
++		movq	%r11, %rdx
++.Lst_struct_n3:
+ 	movq	%rax, (%rsi)
+ 	movq	%rdx, 8(%rsi)
+
+@@ -190,14 +226,32 @@ ffi_call_unix64:
+ 	.align 2
+ .LUW3:
+ .Lload_sse:
+-	movdqa	48(%r10), %xmm0
+-	movdqa	64(%r10), %xmm1
+-	movdqa	80(%r10), %xmm2
+-	movdqa	96(%r10), %xmm3
+-	movdqa	112(%r10), %xmm4
+-	movdqa	128(%r10), %xmm5
+-	movdqa	144(%r10), %xmm6
+-	movdqa	160(%r10), %xmm7
++	vloadunpacklq	48(%r10),  %zmm0
++	vloadunpacklq	112(%r10), %zmm1
++	vloadunpacklq	176(%r10), %zmm2
++	vloadunpacklq	240(%r10), %zmm3
++	vloadunpacklq	304(%r10), %zmm4
++	vloadunpacklq	368(%r10), %zmm5
++	vloadunpacklq	432(%r10), %zmm6
++	vloadunpacklq	496(%r10), %zmm7
++
++	vloadunpackhq	112(%r10), %zmm0
++	vloadunpackhq	176(%r10), %zmm1
++	vloadunpackhq	240(%r10), %zmm2
++	vloadunpackhq	304(%r10), %zmm3
++	vloadunpackhq	368(%r10), %zmm4
++	vloadunpackhq	432(%r10), %zmm5
++	vloadunpackhq	496(%r10), %zmm6
++	vloadunpackhq	560(%r10), %zmm7
++
++	/*vmovaps	48(%r10),  %zmm0
++	vmovaps	112(%r10), %zmm1
++	vmovaps	176(%r10), %zmm2
++	vmovaps	240(%r10), %zmm3
++	vmovaps	304(%r10), %zmm4
++	vmovaps	368(%r10), %zmm5
++	vmovaps	432(%r10), %zmm6
++	vmovaps	496(%r10), %zmm7*/
+ 	jmp	.Lret_from_load_sse
+
+ .LUW4:
+@@ -211,7 +265,7 @@ ffi_closure_unix64:
+ .LUW5:
+ 	/* The carry flag is set by the trampoline iff SSE registers
+ 	   are used.  Don't clobber it before the branch instruction.  */
+-	leaq    -200(%rsp), %rsp
++	leaq    -584(%rsp), %rsp
+ .LUW6:
+ 	movq	%rdi, (%rsp)
+ 	movq    %rsi, 8(%rsp)
+@@ -223,13 +277,13 @@ ffi_closure_unix64:
+ .Lret_from_save_sse:
+
+ 	movq	%r10, %rdi
+-	leaq	176(%rsp), %rsi
++	leaq	560(%rsp), %rsi
+ 	movq	%rsp, %rdx
+-	leaq	208(%rsp), %rcx
++	leaq	592(%rsp), %rcx
+ 	call	ffi_closure_unix64_inner@PLT
+
+ 	/* Deallocate stack frame early; return value is now in redzone.  */
+-	addq	$200, %rsp
++	addq	$584, %rsp
+ .LUW7:
+
+ 	/* The first byte of the return value contains the FFI_TYPE.  */
+@@ -279,11 +333,13 @@ ffi_closure_unix64:
+
+ 	.align 2
+ .Lld_float:
+-	movss	-24(%rsp), %xmm0
++	vbroadcastss	-24(%rsp), %zmm0
++	/*movss	-24(%rsp), %xmm0*/
+ 	ret
+ 	.align 2
+ .Lld_double:
+-	movsd	-24(%rsp), %xmm0
++	vbroadcastsd	-24(%rsp), %zmm0
++	/*movsd	-24(%rsp), %xmm0*/
+ 	ret
+ 	.align 2
+ .Lld_ldouble:
+@@ -299,27 +355,55 @@ ffi_closure_unix64:
+ 	   that rax gets the second word.  */
+ 	movq	-24(%rsp), %rcx
+ 	movq	-16(%rsp), %rdx
+-	movq	-16(%rsp), %xmm1
++	vbroadcastsd	-16(%rsp), %zmm1
++	/*movq	-16(%rsp), %xmm1*/
+ 	testl	$0x100, %eax
+-	cmovnz	%rdx, %rcx
+-	movd	%rcx, %xmm0
+-	testl	$0x200, %eax
++	jz .Lld_struct_1
++
++	movq	%rdx, %rcx
++.Lld_struct_1:
++	subq	$8, %rsp
++	movq	%rcx, (%rsp)
++	addq	$8, %rsp
++	vbroadcastss	(%rsp), %zmm0
++
++	/*movd	%rcx, %zmm0*/
+ 	movq	-24(%rsp), %rax
+-	cmovnz	%rdx, %rax
++	testl	$0x200, %eax
++	jz .Lld_struct_2
++	movq	%rdx, %rax
++.Lld_struct_2:
+ 	ret
+
+ 	/* See the comment above .Lload_sse; the same logic applies here.  */
+ 	.align 2
+ .LUW8:
+ .Lsave_sse:
+-	movdqa	%xmm0, 48(%rsp)
+-	movdqa	%xmm1, 64(%rsp)
+-	movdqa	%xmm2, 80(%rsp)
+-	movdqa	%xmm3, 96(%rsp)
+-	movdqa	%xmm4, 112(%rsp)
+-	movdqa	%xmm5, 128(%rsp)
+-	movdqa	%xmm6, 144(%rsp)
+-	movdqa	%xmm7, 160(%rsp)
++	vpackstorelq	%zmm0, 48(%rsp)
++	vpackstorelq	%zmm1, 112(%rsp)
++	vpackstorelq	%zmm2, 176(%rsp)
++	vpackstorelq	%zmm3, 240(%rsp)
++	vpackstorelq	%zmm4, 304(%rsp)
++	vpackstorelq	%zmm5, 368(%rsp)
++	vpackstorelq	%zmm6, 432(%rsp)
++	vpackstorelq	%zmm7, 496(%rsp)
++
++	vpackstorehq	%zmm0, 112(%rsp)
++	vpackstorehq	%zmm1, 176(%rsp)
++	vpackstorehq	%zmm2, 240(%rsp)
++	vpackstorehq	%zmm3, 304(%rsp)
++	vpackstorehq	%zmm4, 368(%rsp)
++	vpackstorehq	%zmm5, 432(%rsp)
++	vpackstorehq	%zmm6, 496(%rsp)
++	vpackstorehq	%zmm7, 560(%rsp)
++        /*vmovaps	%zmm0, 48(%rsp)
++	vmovaps	%zmm1, 112(%rsp)
++	vmovaps	%zmm2, 176(%rsp)
++	vmovaps	%zmm3, 240(%rsp)
++	vmovaps	%zmm4, 304(%rsp)
++	vmovaps	%zmm5, 368(%rsp)
++	vmovaps	%zmm6, 432(%rsp)
++	vmovaps	%zmm7, 496(%rsp) */
+ 	jmp	.Lret_from_save_sse
+
+ .LUW9:

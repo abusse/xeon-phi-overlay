@@ -1,0 +1,12 @@
+diff -Nur a/src/lists.h b/src/lists.h
+--- a/src/lists.h	2013-04-01 06:58:53.000000000 +0000
++++ b/src/lists.h	2015-03-12 12:13:22.536555906 +0000
+@@ -62,7 +62,7 @@
+  */
+ extern inline void attribute((used,__gnu_inline__,always_inline,__artificial__)) prefetch(const void *restrict x)
+ {
+-#if   defined(__x86_64__)
++#if   0
+     asm volatile ("prefetcht0 %0"  :: "m" (*(unsigned long *)x))
+ #elif defined(__ia64__)
+     asm volatile ("lfetch [%0]"    :: "r" (x))

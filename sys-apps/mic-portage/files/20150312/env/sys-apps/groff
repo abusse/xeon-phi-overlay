@@ -1,0 +1,5 @@
+# insert epatch_user hook that is currently not in ebuild
+
+post_src_prepare() {
+	epatch_user
+}
