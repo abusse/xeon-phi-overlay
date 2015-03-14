@@ -1,26 +1,16 @@
-# Copyright 1999-2013 Gentoo Foundation
+# Copyright 1999-2015 Gentoo Foundation
 # Distributed under the terms of the GNU General Public License v2
 # $Header: $
 
-PATCH_VER="1.2"
-UCLIBC_VER="1.0"
+MPSS_VER="3.4.3"
 
-# Hardened gcc 4 stuff
-PIE_VER="0.5.3"
-SPECS_VER="0.2.0"
-SPECS_GCC_VER="4.4.3"
-# arch/libc configurations known to be stable with {PIE,SSP}-by-default
-PIE_GLIBC_STABLE="x86 amd64 ppc ppc64 arm ia64"
-PIE_UCLIBC_STABLE="x86 arm amd64 ppc ppc64"
-SSP_STABLE="amd64 x86 ppc ppc64 arm"
-# uclibc need tls and nptl support for SSP support
-# uclibc need to be >= 0.9.33
-SSP_UCLIBC_STABLE="x86 amd64 ppc ppc64 arm"
-#end Hardened stuff
+PATCH_VER=${MPSS_VER}
+
+TOOLCHAIN_GCC_PV=${PV%_p*}
 
 inherit toolchain
 
-DESCRIPTION="The GNU Compiler Collection"
+DESCRIPTION="The GNU Compiler Collection with patches for k1om (Xeon Phi) architecture"
 
 LICENSE="GPL-3+ LGPL-3+ || ( GPL-3+ libgcc libstdc++ gcc-runtime-library-exception-3.1 ) FDL-1.3+"
 KEYWORDS="~amd64"
@@ -34,7 +24,6 @@ if [[ ${CATEGORY} != cross-* ]] ; then
 	PDEPEND="${PDEPEND} elibc_glibc? ( >=sys-libs/glibc-2.8 )"
 fi
 
-MPSS_VER=3.4.3
 SRC_URI="http://registrationcenter.intel.com/irc_nas/6253/mpss-src-${MPSS_VER}.tar"
 
 src_unpack() {
@@ -56,12 +45,6 @@ src_unpack() {
 
 	cd ${S}
 	epatch "${FILESDIR}/${PV%_p*}/gengtype.c.patch"
-
-	#toolchain_src_unpack
-
-	use vanilla && return 0
-
-	[[ ${CHOST} == ${CTARGET} ]] && epatch "${FILESDIR}"/gcc-spec-env.patch
 }
 
 src_configure() {
