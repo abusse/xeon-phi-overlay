@@ -1,0 +1,36 @@
+diff -urN a/micctrl/network.c b/micctrl/network.c
+--- a/micctrl/network.c	2017-03-11 18:18:32.350478464 +0100
++++ b/micctrl/network.c	2017-03-11 18:20:26.550479798 +0100
+@@ -995,7 +995,7 @@
+ 		(mic->config.rootdev.type == ROOT_TYPE_PFS)) {
+ 		mpssut_filename(&mpssenv, NULL, oname, PATH_MAX, "%s/etc/ssh/%s",
+ 			      strchr(mic->config.rootdev.target, ':') + 1, name);
+-		if ((fd = open(oname, O_WRONLY|O_CREAT) & 0777) < 0) {
++		if ((fd = open(oname, O_WRONLY|O_CREAT, 0644) & 0777) < 0) {
+ 			display(PERROR, "%s: Could not open %s\n", mic->name, oname);
+ 			free(buffer);
+ 			return 0;
+diff -urN a/micctrl/utilfuncs.c b/micctrl/utilfuncs.c
+--- a/micctrl/utilfuncs.c	2017-03-11 18:18:32.350478464 +0100
++++ b/micctrl/utilfuncs.c	2017-03-11 18:21:22.300480449 +0100
+@@ -238,7 +238,7 @@
+ 	mpssut_filename(&mpssenv, NULL, permfile, PATH_MAX, "/permfile");
+ 	tmpname = mpssut_tempnam(permfile);
+ 
+-	if ((fd = open(tmpname, O_RDWR | O_CREAT)) < 0) {
++	if ((fd = open(tmpname, O_RDWR | O_CREAT, 0644)) < 0) {
+ 		free(tmpname);
+ 		display(PERROR, "Failed permissions test - cannot determine if %s is secure\n", mpssenv.destdir);
+ 		exit(errno);
+diff -urN a/mpssd/mpssd.c b/mpssd/mpssd.c
+--- a/mpssd/mpssd.c	2017-03-11 18:18:32.350478464 +0100
++++ b/mpssd/mpssd.c	2017-03-11 18:19:22.830479054 +0100
+@@ -1418,7 +1418,7 @@
+ 		len = read(fd, cookie, MPSS_COOKIE_SIZE);
+ 		close(fd);
+ 
+-		if ((fd = open(cookiename, O_WRONLY|O_CREAT)) < 0) {
++		if ((fd = open(cookiename, O_WRONLY|O_CREAT, 0644)) < 0) {
+ 			mpsslog(PERROR, "Failed to open %s: %s\n", cookiename, strerror(errno));
+ 			goto cookie_done;
+ 		}
