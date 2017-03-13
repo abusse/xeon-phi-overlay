@@ -2,7 +2,8 @@
 # Distributed under the terms of the GNU General Public License v2
 # $Header: $
 
-EAPI="5"
+EAPI=5
+
 K_DEBLOB_AVAILABLE="1"
 ETYPE="sources"
 inherit kernel-2

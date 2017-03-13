@@ -2,6 +2,8 @@
 # Distributed under the terms of the GNU General Public License v2
 # $Header: $
 
+EAPI=5
+
 KEYWORDS="~amd64"
 
 MPSS_VER=3.4.3
@@ -83,11 +85,8 @@ IUSE="cxx nls multitarget multislot static-libs test vanilla"
 if version_is_at_least 2.19 ; then
 	IUSE+=" zlib"
 fi
-if use multislot ; then
-	SLOT="${BVER}"
-else
-	SLOT="0"
-fi
+SLOT="${BVER}"
+
 
 RDEPEND=">=sys-devel/binutils-config-1.9"
 in_iuse zlib && RDEPEND+=" zlib? ( sys-libs/zlib )"
