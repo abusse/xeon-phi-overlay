@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "http://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+<use>
+	<flag name="firmware">Installs a kernel and userland image for the MIC
+		 card. Disable only if you know what you're doing!</flag>
+	<flag name="modules">Use MPSS MIC kernel module. Disable only if you know
+		what you're doing!</flag>
+</use>
+</pkgmetadata>

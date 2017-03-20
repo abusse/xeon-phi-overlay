@@ -12,13 +12,18 @@ SRC_URI=${MPSS_SRC_SRC_URI}
 SLOT="0"
 KEYWORDS="~amd64"
 
+IUSE="+firmware +modules"
+
 PATCHES=(
 	"${FILESDIR}/${P}.patch"
 )
 
 DEPEND="=sys-libs/mpss-headers-${PV}
         =sys-libs/libscif-${PV}"
-RDEPEND=${DEPEND}
+RDEPEND="${DEPEND}
+	modules? ( =sys-kernel/mpss-modules-${PV} )
+	firmware? ( =sys-kernel/mic-image-${PV} )
+	=sys-apps/mpss-micmgmt-${PV}"
 
 src_unpack() {
     unpack ${A}
