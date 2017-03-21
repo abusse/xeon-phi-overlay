@@ -16,6 +16,10 @@ KEYWORDS="~amd64"
 RDEPEND=""
 DEPEND="virtual/linux-sources"
 
+PATCHES=(
+	"${FILESDIR}/mic_blk.patch"
+)
+
 MODULE_NAMES="mic(extra:)"
 BUILD_TARGETS="modules"
 

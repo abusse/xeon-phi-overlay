@@ -1,0 +1,25 @@
+diff -Naur a/host/vhost/mic_blk.c b/host/vhost/mic_blk.c
+--- a/host/vhost/mic_blk.c	2016-05-20 19:45:59.000000000 +0200
++++ b/host/vhost/mic_blk.c	2017-03-21 12:02:21.000000000 +0100
+@@ -436,6 +436,9 @@
+ 	struct vb_shared *vb_shared;
+ 	int ret = 0;
+ 	struct kstat stat;
++	#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
++		struct path p;
++	#endif
+ 
+ 	if (index >= MAX_BOARD_SUPPORTED) {
+ 		ret = -ENOBUFS;
+@@ -478,8 +481,9 @@
+ 	writel(SECTOR_SIZE, &vb_shared->blk_config.blk_size);
+ 
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
+-	stat.size = (loff_t)0;  // CAZ TODO this is temportary until you fix this code.
+-	stat.mode = (umode_t)0;
++	p.mnt = vblk->virtblk_file->f_path.mnt;
++	p.dentry = vblk->virtblk_file->f_path.dentry;
++	ret = vfs_getattr(&p, &stat);   
+ #else
+ 	ret = vfs_getattr(vblk->virtblk_file->f_path.mnt,
+ 					  vblk->virtblk_file->f_path.dentry, &stat);
