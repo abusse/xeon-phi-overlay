@@ -5,7 +5,7 @@
 EAPI=5
 PYTHON_COMPAT=( python{2_7,3_4} )
 
-inherit flag-o-matic eutils python-single-r1
+inherit flag-o-matic eutils python-single-r1 intel-mpss
 
 export CTARGET=${CTARGET:-${CHOST}}
 if [[ ${CTARGET} == ${CHOST} ]] ; then
@@ -18,8 +18,7 @@ is_cross() { [[ ${CHOST} != ${CTARGET} ]] ; }
 RPM=
 MY_PV=${PV}
 
-MPSS_VER=3.8.1
-SRC_URI="http://registrationcenter-download.intel.com/akdlm/irc_nas/11194/mpss-src-${MPSS_VER}.tar"
+SRC_URI=${MPSS_SRC_SRC_URI}
 
 DESCRIPTION="GNU debugger"
 HOMEPAGE="https://sourceware.org/gdb/"

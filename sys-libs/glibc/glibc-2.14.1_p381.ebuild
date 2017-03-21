@@ -1,7 +1,7 @@
 # Copyright 1999-2017 Gentoo Foundation
 # Distributed under the terms of the GNU General Public License v2
 
-inherit eutils versionator toolchain-funcs flag-o-matic gnuconfig multilib systemd unpacker multiprocessing prefix
+inherit eutils versionator toolchain-funcs flag-o-matic gnuconfig multilib systemd unpacker multiprocessing prefix intel-mpss
 
 DESCRIPTION="GNU libc6 (also called glibc2) C library"
 HOMEPAGE="https://www.gnu.org/software/libc/libc.html"
@@ -13,8 +13,6 @@ EMULTILIB_PKG="true"
 
 # Configuration variables
 RELEASE_VER=""
-
-MPSS_VER=3.8.1
 
 EXTRA_ECONF="--enable-add-ons"
 	# see https://sourceware.org/glibc/wiki/Release/2.20 3.2.1
@@ -102,7 +100,7 @@ gentoo_uris() {
 	echo mirror://gentoo/$1 ${devspace//URI/$1}
 }
 SRC_URI=$(
-	echo http://registrationcenter-download.intel.com/akdlm/irc_nas/11194/mpss-src-${MPSS_VER}.tar
+	echo ${MPSS_SRC_SRC_URI}
 	[[ -n ${PATCH_VER}      ]] && gentoo_uris ${P%_p*}-patches-${PATCH_VER}.tar.bz2
 )
 SRC_URI+=" ${GCC_BOOTSTRAP_VER:+multilib? ( $(gentoo_uris gcc-${GCC_BOOTSTRAP_VER}-multilib-bootstrap.tar.bz2) )}"

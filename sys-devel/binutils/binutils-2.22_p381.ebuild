@@ -5,12 +5,11 @@ EAPI="5"
 
 PATCHVER="1.0"
 ELF2FLT_VER=""
-inherit toolchain-binutils
+inherit toolchain-binutils intel-mpss
 
 KEYWORDS="~amd64"
 
-MPSS_VER=3.8.1
-SRC_URI="http://registrationcenter-download.intel.com/akdlm/irc_nas/11194/mpss-src-${MPSS_VER}.tar"
+SRC_URI=${MPSS_SRC_SRC_URI}
 
 tc-binutils_unpack() {
 	case ${BTYPE} in

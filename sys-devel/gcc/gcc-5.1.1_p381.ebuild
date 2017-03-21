@@ -3,13 +3,9 @@
 
 EAPI=5
 
-MPSS_VER="3.8.1"
-
-PATCH_VER=${MPSS_VER}
-
 TOOLCHAIN_GCC_PV=${PV%_p*}
 
-inherit toolchain
+inherit toolchain intel-mpss
 
 DESCRIPTION="The GNU Compiler Collection with patches for k1om (Xeon Phi) architecture"
 
@@ -25,7 +21,7 @@ if [[ ${CATEGORY} != cross-* ]] ; then
 	PDEPEND="${PDEPEND} elibc_glibc? ( >=sys-libs/glibc-2.8 )"
 fi
 
-SRC_URI="http://registrationcenter-download.intel.com/akdlm/irc_nas/11194/mpss-src-${MPSS_VER}.tar"
+SRC_URI=${MPSS_SRC_SRC_URI}
 
 EXTRA_ECONF="--disable-libitm"
 

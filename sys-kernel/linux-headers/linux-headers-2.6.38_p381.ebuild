@@ -1,9 +1,9 @@
 # Copyright 1999-2017 Gentoo Foundation
 # Distributed under the terms of the GNU General Public License v2
 
-EAPI=5
+EAPI=6
 
-MPSS_VER=3.8.1
+inherit intel-mpss
 
 ETYPE="headers"
 H_SUPPORTEDARCH="amd64"
@@ -19,7 +19,7 @@ tc-arch() {
 
 detect_version
 
-SRC_URI="http://registrationcenter-download.intel.com/akdlm/irc_nas/11194/mpss-src-${MPSS_VER}.tar"
+SRC_URI=${MPSS_SRC_SRC_URI}
 KEYWORDS="~amd64"
 
 DEPEND="app-arch/xz-utils
