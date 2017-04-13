@@ -16,6 +16,7 @@ IUSE="+firmware +modules ssh1"
 
 PATCHES=(
 	"${FILESDIR}/${P}.patch"
+	"${FILESDIR}/passwd-array-fix.patch"
 )
 
 DEPEND="=sys-libs/mpss-headers-${PV}

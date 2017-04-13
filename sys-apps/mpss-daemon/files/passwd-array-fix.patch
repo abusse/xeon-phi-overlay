@@ -1,0 +1,40 @@
+diff -Naur a/libmpssconfig/passwd.c b/libmpssconfig/passwd.c
+--- a/libmpssconfig/passwd.c	2017-03-31 19:37:55.972108423 +0200
++++ b/libmpssconfig/passwd.c	2017-03-31 19:39:18.489104790 +0200
+@@ -99,31 +99,31 @@
+ 	if ((*lastd = strchr(*pw, ':')) == NULL)
+ 		goto parse_shadow_error;
+ 	**lastd = '\0';
+-	if (*lastd[1] != ':')
++	if ((*lastd)[1] != ':')
+ 		(*lastd)++;
+ 
+ 	if ((*minage = strchr(*lastd, ':')) == NULL)
+ 		goto parse_shadow_error;
+ 	**minage = '\0';
+-	if (*minage[1] != ':')
++	if ((*minage)[1] != ':')
+ 		(*minage)++;
+ 
+ 	if ((*maxage = strchr(*minage, ':')) == NULL)
+ 		goto parse_shadow_error;
+ 	**maxage = '\0';
+-	if (*maxage[1] != ':')
++	if ((*maxage)[1] != ':')
+ 		(*maxage)++;
+ 
+ 	if ((*passwarn = strchr(*maxage, ':')) == NULL)
+ 		goto parse_shadow_error;
+ 	**passwarn = '\0';
+-	if (*passwarn[1] != ':')
++	if ((*passwarn)[1] != ':')
+ 		(*passwarn)++;
+ 
+ 	if ((*inactive = strchr(*passwarn, ':')) == NULL)
+ 		goto parse_shadow_error;
+ 	**inactive = '\0';
+-	if (*inactive[1] != ':')
++	if ((*inactive)[1] != ':')
+ 		(*inactive)++;
+ 
+ 	if ((*expire = strchr(*inactive, ':')) == NULL)
