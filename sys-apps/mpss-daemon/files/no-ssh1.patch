@@ -1,0 +1,13 @@
+diff -Naur a/micctrl/user.c b/micctrl/user.c
+--- a/micctrl/user.c	2017-03-31 20:37:49.446950208 +0200
++++ b/micctrl/user.c	2017-03-31 20:57:51.497897283 +0200
+@@ -2886,8 +2886,7 @@
+ 	char *name;
+ 	char *type;
+ 	int optional;
+-} hkeys[] = {{"ssh_host_key", "rsa1", FALSE},
+-	     {"ssh_host_rsa_key", "rsa", FALSE},
++} hkeys[] = {{"ssh_host_rsa_key", "rsa", FALSE},
+ 	     {"ssh_host_dsa_key", "dsa", FALSE},
+ 	     {"ssh_host_ecdsa_key", "ecdsa", TRUE},
+ 	     {NULL, NULL}};
