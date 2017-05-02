@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE repositories SYSTEM "https://www.gentoo.org/dtd/repositories.dtd">
+<repositories xmlns="" version="1.0">
+    <repo quality="experimental" status="unofficial">
+        <name><![CDATA[xeon-phi]]></name>
+        <description lang="en"><![CDATA[Ebuilds for the software stack of the Intel Xeon Phi (Knights Corner and Knights Landing)]]></description>
+        <homepage>https://github.com/abusse/xeon-phi-overlay</homepage>
+        <owner type="person">
+            <email>anselm.busse@outlook.com</email>
+            <name><![CDATA[Anselm Busse]]></name>
+        </owner>
+        <source type="git">git://github.com/abusse/xeon-phi-overlay.git</source>
+        <source type="git">https://github.com/abusse/xeon-phi-overlay.git</source>
+        <source type="git">git@github.com:abusse/xeon-phi-overlay.git</source>
+        <feed>https://github.com/abusse/xeon-phi-overlay/commits/master.atom</feed>
+    </repo>
+</repositories>
