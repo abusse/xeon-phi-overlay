@@ -95,7 +95,7 @@ emerge -av sys-devel/crossdev
 Using crossdev, it is possible to build a toolchain from the sources supplied by Intel:
 
 ```
-USE="vanilla -sanitize -vtv" crossdev -v --target cross-x86_64-k1om-linux-gnu --binutils 2.22_p381 --gcc 5.1.1_p381 --kernel 2.6.38_p381 --libc 2.14.1_p381
+USE="vanilla -sanitize -vtv" crossdev -v --target cross-x86_64-k1om-linux-gnu --binutils 2.22_p382 --gcc 5.1.1_p382 --kernel 2.6.38_p382 --libc 2.14.1_p382
 ```
 
-Note that the patch level of the tools indicate the MPSS version. For example MPSS version 3.8.1 results in `*_p381`. Furthermore, it is important to use the **`vanilla`** flag as the gentoo patches will not apply to the Intel source. Finally, the GCC for the Xeon Phi does not support sanitizer functions (**-sanitize**) and the virtual table verification feature (**-vtv**).
+Note that the patch level of the tools indicate the MPSS version. For example MPSS version 3.8.2 results in `*_p382`. Furthermore, it is important to use the **`vanilla`** flag as the gentoo patches will not apply to the Intel source. Finally, the GCC for the Xeon Phi does not support sanitizer functions (**-sanitize**) and the virtual table verification feature (**-vtv**).
