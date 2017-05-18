@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "http://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <maintainer type="person">
+    <email>anselm.busse@outlook.com</email>
+    <name>Anselm Busse</name>
+  </maintainer>
+  <longdescription>
+    COI provides an API infrastructure for offloading.
+  </longdescription>
+  <use>
+    <flag name="tutorials">
+      Installs tutorials.
+    </flag>
+  </use>
+</pkgmetadata>
