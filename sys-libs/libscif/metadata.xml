@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "http://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <maintainer type="person">
+    <email>anselm.busse@outlook.com</email>
+    <name>Anselm Busse</name>
+  </maintainer>
+  <longdescription>
+    libscif provides the userspace interface of the Symmetric Communications
+    Interface (SCIF), a low-level IPC mechanism which allows communication
+    between programs running on Intel MIC PCIe co-processors and/or their
+   'host'.
+  </longdescription>
+</pkgmetadata>

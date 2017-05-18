@@ -1,10 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE pkgmetadata SYSTEM "http://www.gentoo.org/dtd/metadata.dtd">
 <pkgmetadata>
-<use>
-	<flag name="firmware">Installs a kernel and userland image for the MIC
-		 card. Disable only if you know what you're doing!</flag>
-	<flag name="modules">Use MPSS MIC kernel module. Disable only if you know
-		what you're doing!</flag>
-</use>
+  <maintainer type="person">
+    <email>anselm.busse@outlook.com</email>
+    <name>Anselm Busse</name>
+  </maintainer>
+  <longdescription>
+    The mpss-daemon provides the Xeon Phi (Knights Corner) device management daemon 
+    and its control tool. The daemon is responsible for booting the device, 
+    capturing crash dumps, etc.
+  </longdescription>
+  <use>
+    <flag name="firmware">
+      Installs a kernel and userland image for the MIC card.
+      Disable only if you know what you're doing!
+    </flag>
+    <flag name="modules">
+      Use MPSS MIC kernel module.
+      Disable only if you know what you're doing!
+    </flag>
+    <flag name="ssh1">
+      Support the legacy/weak SSH1 protocol
+    </flag>    
+  </use>
 </pkgmetadata>

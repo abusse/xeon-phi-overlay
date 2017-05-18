@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "http://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <maintainer type="person">
+    <email>anselm.busse@outlook.com</email>
+    <name>Anselm Busse</name>
+  </maintainer>
+  <longdescription>
+     Automatically generates a version script from macro annotations in
+     the code. The parser is simplistic; don't get too creative.
+  </longdescription>
+</pkgmetadata>

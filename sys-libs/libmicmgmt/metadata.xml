@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "http://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <maintainer type="person">
+    <email>anselm.busse@outlook.com</email>
+    <name>Anselm Busse</name>
+  </maintainer>
+  <longdescription>
+    The MIC Management Library provides a user-space interface to manage one or
+    more Intel Xeon Phi coprocessors.
+  </longdescription>
+</pkgmetadata>

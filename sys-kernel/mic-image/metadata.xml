@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "http://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <maintainer type="person">
+    <email>anselm.busse@outlook.com</email>
+    <name>Anselm Busse</name>
+  </maintainer>
+  <longdescription>
+    Kernel and initial file system for Intel Xeon Phi coprocessor.
+    The Xeon Phi cards run a full Linux operating system. This ebuild
+    contains the kernel image and the initial file system of that 
+    Linux image.
+  </longdescription>
+</pkgmetadata>
