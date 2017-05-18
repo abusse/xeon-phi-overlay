@@ -11,24 +11,25 @@ DESCRIPTION="Utility for generating maps of symbols (System.map)"
 HOMEPAGE="https://software.intel.com/en-us/articles/intel-manycore-platform-software-stack-mpss"
 SRC_URI=${MPSS_SRC_SRC_URI}
 
+LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="~amd64"
 
 RDEPEND="dev-python/configparser"
 
 src_unpack() {
-    unpack ${A}
-    unpack ./mpss-${PV}/src/${P}.tar.bz2
+	unpack ${A}
+	unpack ./mpss-${PV}/src/${P}.tar.bz2
 }
 
 src_prepare() {
-    # The script is written for Python v2
-    sed -i -e 's/\(#!\/usr\/bin\/env python\)/\12/g' ${WORKDIR}/${P}/${PN}
+	# The script is written for Python v2
+	sed -i -e 's/\(#!\/usr\/bin\/env python\)/\12/g' "${WORKDIR}/${P}/${PN}"
 
-    eapply_user
+	eapply_user
 }
 
 src_install() {
-    mkdir -p ${D}/usr/bin
-    cp ${WORKDIR}/${P}/${PN} ${D}/usr/bin
+	mkdir -p "${D}/usr/bin"
+	cp "${WORKDIR}/${P}/${PN}" "${D}/usr/bin"
 }

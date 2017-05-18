@@ -15,7 +15,7 @@ tc-binutils_unpack() {
 	case ${BTYPE} in
 	cvs) cvs_src_unpack ;;
 	git) git-2_src_unpack ;;
-	*)   unpacker ${A} ;;
+	*)	 unpacker ${A} ;;
 	esac
 	mkdir -p "${MY_BUILDDIR}"
 	[[ -d ${WORKDIR}/patch ]] && mkdir "${WORKDIR}"/patch/skip
@@ -23,5 +23,5 @@ tc-binutils_unpack() {
 	use vanilla || die "Xeon Phi toolchain only supports a vanilla build!"
 	unpack ${A}
 	unpack ./mpss-${MPSS_VER}/src/binutils-${PV//_p*}+mpss${MPSS_VER}.tar.bz2
-	mv binutils-${PV//_p*}+mpss${MPSS_VER} ${S}
+	mv "binutils-${PV//_p*}+mpss${MPSS_VER}" "${S}"
 }

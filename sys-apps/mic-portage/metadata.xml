@@ -5,7 +5,7 @@
     <email>anselm.busse@outlook.com</email>
     <name>Anselm Busse</name>
   </maintainer>
-  <use>
-    <flag name='multitarget'>Adds support to binutils for cross compiling (does not work with gas)</flag>
-  </use>
+  <longdescription>
+    Several settings and patches to use the portage tree *ON* Intel Xeon Phi cards.
+  </longdescription>
 </pkgmetadata>

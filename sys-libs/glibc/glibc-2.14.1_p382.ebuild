@@ -28,7 +28,7 @@ case ${PV} in
 	;;
 esac
 GCC_BOOTSTRAP_VER="4.7.3-r1"
-NPTL_KERN_VER=${NPTL_KERN_VER:-"2.6.16"}       # min kernel version nptl requires
+NPTL_KERN_VER=${NPTL_KERN_VER:-"2.6.16"}	   # min kernel version nptl requires
 
 IUSE="debug gd hardened multilib nscd selinux systemtap profile suid vanilla crosscompile_opts_headers-only"
 
@@ -38,12 +38,12 @@ IUSE="debug gd hardened multilib nscd selinux systemtap profile suid vanilla cro
 #  CBUILD  - machine that will build the binaries
 # If CTARGET != CHOST, it means you want a libc for cross-compiling.
 # If CHOST != CBUILD, it means you want to cross-compile the libc.
-#  CBUILD = CHOST = CTARGET    - native build/install
+#  CBUILD = CHOST = CTARGET	   - native build/install
 #  CBUILD != (CHOST = CTARGET) - cross-compile a native build
 #  (CBUILD = CHOST) != CTARGET - libc for cross-compiler
 #  CBUILD != CHOST != CTARGET  - cross-compile a libc for a cross-compiler
 # For install paths:
-#  CHOST = CTARGET  - install into /
+#  CHOST = CTARGET	- install into /
 #  CHOST != CTARGET - install into /usr/CTARGET/
 
 export CBUILD=${CBUILD:-${CHOST}}
@@ -101,7 +101,7 @@ gentoo_uris() {
 }
 SRC_URI=$(
 	echo ${MPSS_SRC_SRC_URI}
-	[[ -n ${PATCH_VER}      ]] && gentoo_uris ${P%_p*}-patches-${PATCH_VER}.tar.bz2
+	[[ -n ${PATCH_VER}		]] && gentoo_uris ${P%_p*}-patches-${PATCH_VER}.tar.bz2
 )
 SRC_URI+=" ${GCC_BOOTSTRAP_VER:+multilib? ( $(gentoo_uris gcc-${GCC_BOOTSTRAP_VER}-multilib-bootstrap.tar.bz2) )}"
 
@@ -142,7 +142,7 @@ eblit-run() {
 
 src_unpack()  { eblit-run src_unpack  ; }
 src_compile() { eblit-run src_compile ; }
-src_test()    { eblit-run src_test    ; }
+src_test()	  { eblit-run src_test	  ; }
 src_install() { eblit-run src_install ; }
 
 # FILESDIR might not be available during binpkg install
@@ -158,7 +158,7 @@ eblit-src_unpack-pre() {
 	use vanilla || die "Xeon Phi toolchain only supports a vanilla build!"
 	unpack ${A}
 	unpack ./mpss-${MPSS_VER}/src/glibc-${PV%_p*}+mpss${MPSS_VER}.tar.bz2
-	mv glibc-${PV%_p*}+mpss${MPSS_VER} ${S}
+	mv "glibc-${PV%_p*}+mpss${MPSS_VER}" "${S}"
 }
 
 eblit-src_unpack-post() {

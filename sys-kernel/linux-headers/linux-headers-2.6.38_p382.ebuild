@@ -10,11 +10,11 @@ H_SUPPORTEDARCH="amd64"
 inherit kernel-2
 
 tc-arch-kernel() {
-        echo "k1om"
+		echo "k1om"
 }
 
 tc-arch() {
-        echo "amd64"
+		echo "amd64"
 }
 
 detect_version
@@ -29,8 +29,8 @@ RDEPEND="!!media-sound/alsa-headers"
 S=${WORKDIR}/linux-${PV%_p*}+mpss${MPSS_VER}
 
 src_unpack() {
-        unpack ${A}
-        unpack ./mpss-${MPSS_VER}/src/linux-${PV%_p*}+mpss${MPSS_VER}.tar.bz2
+		unpack ${A}
+		unpack ./mpss-${MPSS_VER}/src/linux-${PV%_p*}+mpss${MPSS_VER}.tar.bz2
 }
 
 src_install() {

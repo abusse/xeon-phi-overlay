@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "http://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <maintainer type="person">
+    <email>anselm.busse@outlook.com</email>
+    <name>Anselm Busse</name>
+  </maintainer>
+  <longdescription>
+    This software package provides users with industry standard benchmarks for
+    measuring the performance of the Intel(R) Xeon Phi(TM) X200 Processor.
+    In addition to providing compiled executable versions of the benchmarks,
+    there is also a Python automation infrastructure that will run the benchmarks
+    and provide analysis of the results. Some benchmark source code is provided.
+  </longdescription>
+</pkgmetadata>

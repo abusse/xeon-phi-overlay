@@ -28,9 +28,9 @@ pkg_setup() {
 }
 
 src_unpack() {
-    unpack ${A}
-    rpm_unpack ./mpss-${PV}/src/${P/mic/mpss}-1.src.rpm
-    mkdir ${P}
+	unpack ${A}
+	rpm_unpack ./mpss-${PV}/src/${P/mic/mpss}-1.src.rpm
+	mkdir ${P}
 	cd ${P} && unpack ../${P/mic/mpss}.tar.bz2
 }
 
@@ -44,17 +44,17 @@ src_prepare() {
 }
 
 src_install() {
-    linux-mod_src_install
+	linux-mod_src_install
 
-    insinto /lib/modules/${KV_FULL}/
-    newins Module.symvers scif.symvers
-    insinto ${KERNEL_DIR}/include/modules
-    newins include/scif.h scif.h
+	insinto /lib/modules/${KV_FULL}/
+	newins Module.symvers scif.symvers
+	insinto ${KERNEL_DIR}/include/modules
+	newins include/scif.h scif.h
 
-    insinto /lib/udev/rules.d
-    newins udev-mic.rules 50-udev-mic.rules
+	insinto /lib/udev/rules.d
+	newins udev-mic.rules 50-udev-mic.rules
 }
 
 pkg_preinst() {
-    linux-mod_pkg_preinst
+	linux-mod_pkg_preinst
 }

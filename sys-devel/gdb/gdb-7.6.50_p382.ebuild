@@ -1,6 +1,5 @@
-# Copyright 1999-2013 Gentoo Foundation
+# Copyright 1999-2017 Gentoo Foundation
 # Distributed under the terms of the GNU General Public License v2
-# $Header: $
 
 EAPI=5
 PYTHON_COMPAT=( python{2_7,3_4} )
@@ -56,12 +55,12 @@ S=${WORKDIR}/${PN}-${MY_PV}
 pkg_setup() {
 	use python && python-single-r1_pkg_setup
 }
-	
+
 src_unpack() {
 	use vanilla || die "Xeon Phi toolchain only supports a vanilla build!"
 	unpack ${A}
 	unpack ./mpss-${MPSS_VER}/src/gdb-${PV%_p*}+mpss${MPSS_VER}.tar.bz2
-	mv gdb-${PV%_p*}+mpss${MPSS_VER} ${S}
+	mv "gdb-${PV%_p*}+mpss${MPSS_VER}" "${S}"
 }
 
 src_prepare() {
@@ -192,7 +191,7 @@ pkg_postinst() {
 		ewarn "gdb is unable to get a mach task port when installed by Prefix"
 		ewarn "Portage, unprivileged.  To make gdb fully functional you'll"
 		ewarn "have to perform the following steps:"
-		ewarn "  % sudo chgrp procmod ${EPREFIX}/usr/bin/gdb"
-		ewarn "  % sudo chmod g+s ${EPREFIX}/usr/bin/gdb"
+		ewarn "	 % sudo chgrp procmod ${EPREFIX}/usr/bin/gdb"
+		ewarn "	 % sudo chmod g+s ${EPREFIX}/usr/bin/gdb"
 	fi
 }

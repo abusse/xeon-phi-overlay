@@ -5,10 +5,11 @@ EAPI=6
 
 inherit flag-o-matic rpm intel-xppsl
 
-DESCRIPTION="The memkind library is a user-extensible heap manager for high bandwidth memory (MCDRAM)"
+DESCRIPTION="User Extensible Heap Manager for high bandwidth memory (MCDRAM)"
 HOMEPAGE="${XPPSL_HOMPAGE}"
 SRC_URI="${XPPSL_SRC_URI}"
 
+LICENSE="BSD-2"
 SLOT="0"
 KEYWORDS="~amd64"
 

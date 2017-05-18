@@ -10,8 +10,8 @@ HOMEPAGE=${MPSS_URI}
 SRC_URI=${MPSS_SRC_SRC_URI}
 
 LICENSE="LGPL-2.1
-         BSD-2
-         tutorials? ( Intel-Sample-Code )"
+		 BSD-2
+		 tutorials? ( Intel-Sample-Code )"
 SLOT="0"
 KEYWORDS="~amd64"
 IUSE="tutorials"
@@ -20,8 +20,8 @@ RDEPEND="=sys-libs/libscif-${PV}"
 DEPEND="${RDEPEND} app-text/asciidoc"
 
 src_unpack() {
-    unpack ${A}
-    unpack ./mpss-${PV}/src/${P}.tar.bz2
+	unpack ${A}
+	unpack ./mpss-${PV}/src/${P}.tar.bz2
 }
 
 src_prepare() {

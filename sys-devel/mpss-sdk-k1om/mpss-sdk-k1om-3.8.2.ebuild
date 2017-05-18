@@ -18,14 +18,14 @@ RDEPEND="sys-libs/ncurses:5"	# k1om-mpss-linux-gdb is linked to ncurses 5
 S=${WORKDIR}
 
 src_unpack () {
-    unpack ${A}
-    rpm_unpack ./mpss-${PV}/${P}-1.x86_64.rpm
-    rm -rf ./mpss-${PV}
+	unpack ${A}
+	rpm_unpack ./mpss-${PV}/${P}-1.x86_64.rpm
+	rm -rf ./mpss-${PV}
 }
 
 src_install () {
-    cp -r * ${D}
+	cp -r * "${D}"
 
-    cat ${FILESDIR}/36mpss-sdk-k1om | sed "s/_MPSS_VER_/"${PV}"/g" > 36mpss-sdk-k1om-${PV}
-    doenvd 36mpss-sdk-k1om-${PV}
+	cat "${FILESDIR}/36mpss-sdk-k1om" | sed "s/_MPSS_VER_/"${PV}"/g" > "36mpss-sdk-k1om-${PV}"
+	doenvd "36mpss-sdk-k1om-${PV}"
 }

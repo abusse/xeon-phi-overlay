@@ -5,7 +5,7 @@
     <email>anselm.busse@outlook.com</email>
     <name>Anselm Busse</name>
   </maintainer>
-  <use>
-    <flag name='multitarget'>Adds support to binutils for cross compiling (does not work with gas)</flag>
-  </use>
+  <longdescription>
+    Metapackage for the Intel Xeon Phi Processor Software for Linux (Knights Landing).
+  </longdescription>
 </pkgmetadata>

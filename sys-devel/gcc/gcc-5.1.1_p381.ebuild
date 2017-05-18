@@ -30,7 +30,7 @@ src_unpack() {
 	use sanitize && die "Libsanitizer not available on Xeon Phi toolchain!"
 	unpack ${A}
 	unpack ./mpss-${MPSS_VER}/src/gcc-${PV%_p*}+mpss${MPSS_VER}.tar.bz2
-	mv gcc-${PV%_p*}+mpss${MPSS_VER} ${S}
+	mv "gcc-${PV%_p*}+mpss${MPSS_VER}" "${S}"
 }
 
 src_configure() {

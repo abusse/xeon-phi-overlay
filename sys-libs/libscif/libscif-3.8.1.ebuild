@@ -17,8 +17,8 @@ RDEPEND="app-text/asciidoc"
 DEPEND="=dev-util/gen-symver-map-${PV} =sys-libs/mpss-headers-${PV}"
 
 src_unpack() {
-    unpack ${A}
-    unpack ./mpss-${PV}/src/${P}.tar.bz2
-    unpack ./mpss-${PV}/src/mpss-metadata-${PV}.tar.bz2
-    cp mpss-metadata-${PV}/* ${P}
+	unpack ${A}
+	unpack ./mpss-${PV}/src/${P}.tar.bz2
+	unpack ./mpss-${PV}/src/mpss-metadata-${PV}.tar.bz2
+	cp mpss-metadata-${PV}/* ${P}
 }

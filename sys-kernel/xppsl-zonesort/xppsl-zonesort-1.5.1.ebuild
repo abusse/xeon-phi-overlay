@@ -9,6 +9,7 @@ DESCRIPTION="The zonesort kernel module for the Intel Knights Landing"
 HOMEPAGE="${XPPSL_HOMPAGE}"
 SRC_URI="${XPPSL_SRC_URI}"
 
+LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="~amd64"
 

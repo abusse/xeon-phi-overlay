@@ -24,12 +24,12 @@ src_unpack() {
 
 src_prepare() {
 	# The script is written for Python v2
-	sed -i -e 's/\(#!\/usr\/bin\/env python\)/\12/g' ${WORKDIR}/${P}/${PN}
+	sed -i -e 's/\(#!\/usr\/bin\/env python\)/\12/g' "${WORKDIR}/${P}/${PN}"
 
 	eapply_user
 }
 
 src_install() {
-	mkdir -p ${D}/usr/bin
-	cp ${WORKDIR}/${P}/${PN} ${D}/usr/bin
+	mkdir -p "${D}/usr/bin"
+	cp "${WORKDIR}/${P}/${PN}" "${D}/usr/bin"
 }

@@ -14,15 +14,15 @@ SLOT="0"
 KEYWORDS="~amd64"
 
 src_unpack() {
-    unpack ${A}
-    unpack ./mpss-${PV}/src/mpss-modules-${PV}.tar.bz2
-    mv mpss-modules-${PV} ${P}
+	unpack ${A}
+	unpack ./mpss-${PV}/src/mpss-modules-${PV}.tar.bz2
+	mv mpss-modules-${PV} ${P}
 }
 
 src_compile() {
-    true;
+	true;
 }
 
 src_install() {
-        emake DESTDIR="${D}" dev_install || die "Failed to install headers."
+		emake DESTDIR="${D}" dev_install || die "Failed to install headers."
 }

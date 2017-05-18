@@ -21,7 +21,7 @@ PATCHES=(
 )
 
 DEPEND="=sys-libs/mpss-headers-${PV}
-        =sys-libs/libscif-${PV}"
+		=sys-libs/libscif-${PV}"
 RDEPEND="${DEPEND}
 	modules? ( =sys-kernel/mpss-modules-${PV} )
 	firmware? ( =sys-kernel/mic-image-${PV} )
@@ -29,19 +29,19 @@ RDEPEND="${DEPEND}
 	ssh1? ( net-misc/openssh[ssh1] )"
 
 src_unpack() {
-    unpack ${A}
-    unpack ./mpss-${PV}/src/${P}.tar.bz2
+	unpack ${A}
+	unpack ./mpss-${PV}/src/${P}.tar.bz2
 }
 
 src_prepare() {
-    default
+	default
 
-    use ssh1 || epatch "${FILESDIR}/no-ssh1.patch"
+	use ssh1 || epatch "${FILESDIR}/no-ssh1.patch"
 }
 
 src_install() {
-    emake DESTDIR="${D}" install
+	emake DESTDIR="${D}" install
 
-    doenvd ${FILESDIR}/90mpssd || die
-    doinitd ${FILESDIR}/mpss || die
+	doenvd "${FILESDIR}/90mpssd" || die
+	doinitd "${FILESDIR}/mpss" || die
 }

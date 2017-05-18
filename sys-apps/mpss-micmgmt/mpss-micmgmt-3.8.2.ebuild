@@ -17,19 +17,18 @@ DEPEND="app-text/asciidoc"
 RDEPEND="=sys-libs/libmicmgmt-${PV} =sys-firmware/mpss-flash-${PV}"
 
 src_unpack() {
-    unpack ${A}
-    unpack ./mpss-${PV}/src/${P}.tar.bz2
+	unpack ${A}
+	unpack ./mpss-${PV}/src/${P}.tar.bz2
 
-    unpack ./mpss-${PV}/src/mpss-metadata-${PV}.tar.bz2
+	unpack ./mpss-${PV}/src/mpss-metadata-${PV}.tar.bz2
 }
 
 src_compile() {
-    append-cflags -fgnu89-inline
-    append-flags -Wno-error=unused-but-set-variable -Wno-error=unused-result
-    emake -I ${WORKDIR}/mpss-metadata-${PV} all
+	append-cflags -fgnu89-inline
+	append-flags -Wno-error=unused-but-set-variable -Wno-error=unused-result
+	emake -I "${WORKDIR}/mpss-metadata-${PV}" all
 }
 
 src_install() {
-    emake -I ${WORKDIR}/mpss-metadata-${PV} DESTDIR="${D}" install
+	emake -I "${WORKDIR}/mpss-metadata-${PV}" DESTDIR="${D}" install
 }
-

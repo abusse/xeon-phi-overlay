@@ -11,11 +11,12 @@ DESCRIPTION="A collection of tools to manage Intel(R) Xeon Phi(TM) processor"
 HOMEPAGE="${XPPSL_HOMPAGE}"
 SRC_URI="${XPPSL_SRC_URI}"
 
+LICENSE="Intel-XPPSL"
 SLOT="0"
 KEYWORDS="~amd64"
 
 RDEPEND="sys-apps/dmidecode
-         ${PYTHON_DEPS}"
+		 ${PYTHON_DEPS}"
 DEPEND="${RDEPEND}"
 
 CONFIG_CHECK="~DMI_SYSFS"
@@ -31,8 +32,8 @@ src_unpack() {
 }
 
 src_prepare() {
-    # The script is written for Python v2
-    sed -i -e 's/\(#!\/usr\/bin\/\)python/\1env python2/g' ${S}/apps/sysdiag/sysdiag
+	# The script is written for Python v2
+	sed -i -e 's/\(#!\/usr\/bin\/\)python/\1env python2/g' "${S}/apps/sysdiag/sysdiag"
 
-    eapply_user
+	eapply_user
 }

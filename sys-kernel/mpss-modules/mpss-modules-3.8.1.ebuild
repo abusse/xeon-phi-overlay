@@ -32,9 +32,9 @@ pkg_setup() {
 }
 
 src_unpack() {
-    unpack ${A}
-    rpm_unpack ./mpss-${PV}/src/${P/mic/mpss}-1.src.rpm
-    mkdir ${P}
+	unpack ${A}
+	rpm_unpack ./mpss-${PV}/src/${P/mic/mpss}-1.src.rpm
+	mkdir ${P}
 	cd ${P} && unpack ../${P/mic/mpss}.tar.bz2
 }
 
@@ -43,22 +43,22 @@ src_prepare() {
 		ewarn "The MIC kernel module is only provided for kernel version 4.4 and below."
 		ewarn "It might fail to build for the current kernel version ${KV_MAJOR}.${KV_MINOR}.${KV_PATCH}"
 	fi
-	
+
 	default
 }
 
 src_install() {
-    linux-mod_src_install
+	linux-mod_src_install
 
-    insinto /lib/modules/${KV_FULL}/
-    newins Module.symvers scif.symvers
-    insinto ${KERNEL_DIR}/include/modules
-    newins include/scif.h scif.h
+	insinto /lib/modules/${KV_FULL}/
+	newins Module.symvers scif.symvers
+	insinto ${KERNEL_DIR}/include/modules
+	newins include/scif.h scif.h
 
-    insinto /lib/udev/rules.d
-    newins udev-mic.rules 50-udev-mic.rules
+	insinto /lib/udev/rules.d
+	newins udev-mic.rules 50-udev-mic.rules
 }
 
 pkg_preinst() {
-    linux-mod_pkg_preinst
+	linux-mod_pkg_preinst
 }

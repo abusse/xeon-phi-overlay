@@ -17,16 +17,16 @@ DEPEND="app-text/asciidoc"
 RDEPEND="=sys-kernel/mic-rasmm-kernel-${PV}"
 
 src_unpack() {
-    unpack ${A}
-    unpack ./mpss-${PV}/src/mpss-micmgmt-${PV}.tar.bz2
-    unpack ./mpss-${PV}/src/mpss-metadata-${PV}.tar.bz2
-    mv mpss-micmgmt-${PV} ${P}
+	unpack ${A}
+	unpack ./mpss-${PV}/src/mpss-micmgmt-${PV}.tar.bz2
+	unpack ./mpss-${PV}/src/mpss-metadata-${PV}.tar.bz2
+	mv mpss-micmgmt-${PV} ${P}
 }
 
 src_compile() {
-    emake -I ${WORKDIR}/mpss-metadata-${PV} lib
+	emake -I "${WORKDIR}/mpss-metadata-${PV}" lib
 }
 
 src_install() {
-    emake -I ${WORKDIR}/mpss-metadata-${PV} DESTDIR="${D}" install_lib
+	emake -I "${WORKDIR}/mpss-metadata-${PV}" DESTDIR="${D}" install_lib
 }

@@ -1,10 +1,10 @@
-# Copyright 1999-2015 Gentoo Foundation
+# Copyright 1999-2017 Gentoo Foundation
 # Distributed under the terms of the GNU General Public License v2
-# $Header: $
 
 EAPI=5
 
-DESCRIPTION="Several settings and patches to use the default portage tree on Intel Xeon Phi cards"
+DESCRIPTION="Several settings and patches to use the portage tree *ON* Intel Xeon Phi cards."
+HOMEPAGE="https://github.com/abusse/xeon-phi-overlay/"
 
 LICENSE="GPL-2"
 SLOT="0"
