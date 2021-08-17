@@ -1,7 +1,7 @@
-# Copyright 1999-2017 Gentoo Foundation
+# Copyright 1999-2021 Gentoo Foundation
 # Distributed under the terms of the GNU General Public License v2
 
-EAPI=6
+EAPI=7
 
 inherit flag-o-matic rpm intel-xppsl
 
@@ -16,17 +16,22 @@ KEYWORDS="~amd64"
 RDEPEND="sys-process/numactl"
 DEPEND="${RDEPEND}"
 
+MY_PV=${PV%_p*}
+S="${WORKDIR}/${PN:6}-${MY_PV}+xpps"
+
 src_unpack() {
 	unpack ${A}
-	srcrpm_unpack $(find . -name ${P}-*.src.rpm)
+	srcrpm_unpack $(find . -name ${PN:6}*.src.rpm)
 }
 
 src_prepare() {
-	echo ${PV} > "${S}/jemalloc/VERSION"
-	echo ${PV} > "${S}/VERSION"
+	echo ${MY_PV} > "${S}/jemalloc/VERSION"
+	echo ${MY_PV} > "${S}/VERSION"
+
+	./autogen.sh || die
 
 	# TODO The package contains its own jemalloc, maybe it can replaced by the one from portage
-	./build_jemalloc.sh
+	./build_jemalloc.sh || die
 
 	append-cflags -U_FORTIFY_SOURCE
 

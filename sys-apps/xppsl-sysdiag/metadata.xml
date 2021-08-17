@@ -6,6 +6,9 @@
     <name>Anselm Busse</name>
   </maintainer>
   <longdescription>
-    A collection of tools to manage Intel Xeon Phi processor Knights Landing.
+    The SysDiag tool provides a variety of information and diagnostics
+    for the processor.  SysDiag also monitors DDR, MCDRAM and PCI-E
+    information. It also monitors temperature  and performance state
+    data of the CPU.
   </longdescription>
 </pkgmetadata>

@@ -12,4 +12,9 @@
     there is also a Python automation infrastructure that will run the benchmarks
     and provide analysis of the results. Some benchmark source code is provided.
   </longdescription>
+  <use>
+    <flag name="cluster">
+      Builds additional benchmarks that require a Parallel Studio Cluster License
+    </flag>
+  </use>
 </pkgmetadata>

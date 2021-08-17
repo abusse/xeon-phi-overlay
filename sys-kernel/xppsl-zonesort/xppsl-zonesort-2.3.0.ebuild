@@ -1,7 +1,7 @@
-# Copyright 1999-2017 Gentoo Foundation
+# Copyright 1999-2021 Gentoo Foundation
 # Distributed under the terms of the GNU General Public License v2
 
-EAPI=6
+EAPI=7
 
 inherit linux-mod rpm intel-xppsl
 
@@ -16,12 +16,17 @@ KEYWORDS="~amd64"
 RDEPEND=""
 DEPEND="virtual/linux-sources"
 
-MODULE_NAMES="zonesort_module(extra::xppsl-addons)"
+MODULE_NAMES="zonesort(extra::zonesort)"
 BUILD_TARGETS="modules"
 
-S=${WORKDIR}
+S="${WORKDIR}/zonesort-1.0+xpps"
 
 src_unpack() {
 	unpack ${A}
-	srcrpm_unpack $(find . -name xppsl-addons-${PV}-*.src.rpm)
+	srcrpm_unpack $(find . -name zonesort-1.0+xpps-${PV}*.src.rpm)
+}
+
+src_prepare() {
+	sed -i '1s/^/#include <linux\/io.h>/' "${S}/zonesort/zonesort.c"
+	default
 }
