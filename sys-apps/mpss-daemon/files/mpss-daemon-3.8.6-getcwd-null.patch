@@ -1,0 +1,13 @@
+--- a/libmpssconfig/genfs.c	2019-07-01 22:45:06.000000000 +0200
++++ b/libmpssconfig/genfs.c	2026-08-05 20:33:11.532731257 +0200
+@@ -1749,7 +1749,9 @@
+ 	char command[PATH_MAX];
+ 	char cwd[PATH_MAX];
+ 
+-	if (getcwd(cwd, PATH_MAX) < 0)
++	/* getcwd() returns NULL on failure, never a negative pointer, so the
++	   original "< 0" test could never fire and cwd was used uninitialised. */
++	if (getcwd(cwd, PATH_MAX) == NULL)
+ 		return 1;
+ 
+ 	if (chdir(cdir) < 0)

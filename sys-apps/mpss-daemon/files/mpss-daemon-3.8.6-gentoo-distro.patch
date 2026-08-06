@@ -1,0 +1,77 @@
+--- a/libmpssconfig/micenv.c	2019-07-01 22:45:06.000000000 +0200
++++ b/libmpssconfig/micenv.c	2026-08-05 22:07:42.585738774 +0200
+@@ -106,6 +106,8 @@
+ 			menv->dist = DISTRIB_SUSE;
+ 		else if (!strcasecmp(dist, "ubuntu"))
+ 			menv->dist = DISTRIB_UBUNTU;
++		else if (!strcasecmp(dist, "gentoo"))
++			menv->dist = DISTRIB_GENTOO;
+ 		else
+ 			return (SETENV_FUNC_DIST << 16) | SETENV_CMDLINE_DIST;
+ 	} else if ((dist = getenv("MPSS_DIST")) != NULL) {
+@@ -117,10 +119,14 @@
+ 			menv->dist = DISTRIB_SUSE;
+ 		else if (!strcasecmp(dist, "ubuntu"))
+ 			menv->dist = DISTRIB_UBUNTU;
++		else if (!strcasecmp(dist, "gentoo"))
++			menv->dist = DISTRIB_GENTOO;
+ 		else
+ 			return (SETENV_FUNC_DIST << 16) | SETENV_ENV_DIST;
+ 	} else {
+-		if ((stat(REDHAT_NETWORK_DIR, &sbuf) == 0) && S_ISDIR(sbuf.st_mode))
++		if (stat(GENTOO_RELEASE_FILE, &sbuf) == 0)
++			menv->dist = DISTRIB_GENTOO;
++		else if ((stat(REDHAT_NETWORK_DIR, &sbuf) == 0) && S_ISDIR(sbuf.st_mode))
+ 			menv->dist = DISTRIB_REDHAT;
+ 		else if ((stat(SUSE_NETWORK_DIR, &sbuf) == 0) && S_ISDIR(sbuf.st_mode))
+ 			menv->dist = DISTRIB_SUSE;
+@@ -133,6 +139,7 @@
+ 	switch(menv->dist) {
+ 	case DISTRIB_REDHAT:
+ 	case DISTRIB_SUSE:
++	case DISTRIB_GENTOO:
+ 		menv->lockfile = LSB_LOCK_FILENAME;
+ 		break;
+ 	case DISTRIB_UBUNTU:
+--- a/libmpssconfig/mpssconfig.h	2019-07-01 22:45:06.000000000 +0200
++++ b/libmpssconfig/mpssconfig.h	2026-08-05 22:07:42.584738764 +0200
+@@ -218,6 +218,12 @@
+ #define REDHAT_NETWORK_DIR "/etc/sysconfig/network-scripts"
+ #define SUSE_NETWORK_DIR "/etc/sysconfig/network"
+ #define UBUNTU_NETWORK_DIR "/etc/network"
++/* Gentoo/OpenRC has no per-interface config directory -- everything lives in
++   /etc/conf.d/net -- so point micctrl at its own directory.  The files it
++   writes there are templates to translate into OpenRC config, not something
++   the system reads directly. */
++#define GENTOO_NETWORK_DIR "/etc/mpss/network"
++#define GENTOO_RELEASE_FILE "/etc/gentoo-release"
+ 
+ /**
+  * Mic family
+@@ -239,6 +245,7 @@
+ #define DISTRIB_REDHAT	1
+ #define DISTRIB_SUSE	2
+ #define DISTRIB_UBUNTU	3
++#define DISTRIB_GENTOO	4
+ 	char	*home;
+ 	char	*confdir;
+ 	char	*destdir;
+--- a/micctrl/network.c	2019-07-01 22:45:06.000000000 +0200
++++ b/micctrl/network.c	2026-08-05 22:07:42.585738774 +0200
+@@ -141,7 +141,15 @@
+ 		ubuntu_br_remove,
+ 		ubuntu_attach_hostbridge,
+ 		ubuntu_host_addif,
+-		ubuntu_remove_bridges}
++		ubuntu_remove_bridges},
++	  {GENTOO_NETWORK_DIR,
++		GENTOO_NETWORK_DIR,
++		"/usr/sbin/brctl",
++		common_net_remove,
++		common_br_remove,
++		common_attach_hostbridge,
++		common_host_addif,
++		common_remove_bridges}
+ 	};
+ 
+ #define MIC_DEFAULT_BIG_MTU	"64512";

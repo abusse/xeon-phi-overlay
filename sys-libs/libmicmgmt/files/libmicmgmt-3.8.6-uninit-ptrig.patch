@@ -1,0 +1,22 @@
+--- a/miclib/src/knc_device.cpp	2019-07-01 22:45:21.000000000 +0200
++++ b/miclib/src/knc_device.cpp	2026-08-05 20:26:29.710668356 +0200
+@@ -625,6 +625,9 @@
+         uint8_t dummy_buf = 0;
+         uint32_t *param = (uint32_t *)(&ptrig);
+ 
++        /* *param type-puns the head of the struct, so zero it first -- the
++           rest of this file already memsets mr_rsp_ptrig before every use. */
++        memset(&ptrig, 0, sizeof(struct mr_rsp_ptrig));
+         ptrig.power = power;
+         ptrig.time = time_window;
+ 
+@@ -637,6 +640,9 @@
+         uint8_t dummy_buf = 0;
+         uint32_t *param = (uint32_t *)(&ptrig);
+ 
++        /* *param type-puns the head of the struct, so zero it first -- the
++           rest of this file already memsets mr_rsp_ptrig before every use. */
++        memset(&ptrig, 0, sizeof(struct mr_rsp_ptrig));
+         ptrig.power = power;
+         ptrig.time = time_window;
+ 

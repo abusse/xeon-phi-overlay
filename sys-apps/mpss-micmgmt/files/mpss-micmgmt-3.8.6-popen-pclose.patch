@@ -1,0 +1,20 @@
+--- a/apps/mpssinfo/host.c	2019-07-01 22:45:21.000000000 +0200
++++ b/apps/mpssinfo/host.c	2026-08-05 20:31:20.497608559 +0200
+@@ -122,7 +122,7 @@
+         }
+     }
+ 
+-    fclose(ptr);
++    pclose(ptr);
+     return 0;
+ }
+ 
+@@ -152,7 +152,7 @@
+ 	else
+ 		log_msg_start("\t\tMPSS Version\t\t: NotAvailable\n");
+ 
+-    fclose(ptr);
++    pclose(ptr);
+     return 0;
+ }
+ 
