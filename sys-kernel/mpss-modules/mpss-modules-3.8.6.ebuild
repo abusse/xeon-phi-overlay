@@ -1,9 +1,9 @@
-# Copyright 1999-2017 Gentoo Foundation
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
-EAPI=6
+EAPI=8
 
-inherit eutils rpm linux-mod intel-mpss
+inherit linux-mod-r1 rpm intel-mpss
 
 DESCRIPTION="Host driver for Intel Xeon Phi coprocessor cards"
 HOMEPAGE=${MPSS_URI}
@@ -13,8 +13,10 @@ LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="~amd64"
 
-RDEPEND=""
-DEPEND="virtual/linux-sources"
+# The driver calls set_fs()/KERNEL_DS, which x86 lost in 5.10, so 5.4 is a hard
+# ceiling rather than a warning.  Raising it means porting the remaining uaccess
+# calls in host/ to kernel_read()/kernel_write().
+MODULES_KERNEL_MAX=5.4
 
 PATCHES=(
 	# Intel's last KNC release targets RHEL 7.4 (3.10).  This forward-ports it
@@ -28,50 +30,37 @@ PATCHES=(
 	"${FILESDIR}/${P}-linux-5.4.patch"
 )
 
-MODULE_NAMES="mic(extra:)"
-BUILD_TARGETS="modules"
-
 MIC_ARCH=k1om
-
-pkg_setup() {
-	linux-mod_pkg_setup
-
-	BUILD_PARAMS="KERNEL_SRC=${KV_DIR} KERNEL_VERSION=${KV_MAJOR}.${KV_MINOR}.${KV_PATCH} V=1 KBUILD_VERBOSE=1 MIC_CARD_ARCH=${MIC_ARCH}"
-}
 
 src_unpack() {
 	unpack ${A}
 	rpm_unpack ./mpss-${PV}/src/${P/mic/mpss}-1.src.rpm
-	mkdir ${P}
+	mkdir ${P} || die
 	cd ${P} && unpack ../${P/mic/mpss}.tar.bz2
 }
 
-src_prepare() {
-	if kernel_is -ge 5 10 0 ; then
-		ewarn "This driver still calls set_fs()/KERNEL_DS, which was removed from"
-		ewarn "x86 in 5.10, so it is not expected to build on kernel"
-		ewarn "${KV_MAJOR}.${KV_MINOR}.${KV_PATCH}. Use a 5.4 LTS kernel, or port the"
-		ewarn "remaining uaccess calls in host/ over to kernel_read()/kernel_write()."
-	elif kernel_is -gt 5 4 0 ; then
-		ewarn "The patched module is only tested up to kernel 5.4."
-		ewarn "It might fail to build for the current kernel version ${KV_MAJOR}.${KV_MINOR}.${KV_PATCH}"
-	fi
+src_compile() {
+	local modlist=( mic=extra )
+	local modargs=(
+		KERNEL_SRC="${KV_OUT_DIR}"
+		KERNEL_VERSION="${KV_FULL}"
+		MIC_CARD_ARCH="${MIC_ARCH}"
+	)
 
-	default
+	linux-mod-r1_src_compile
 }
 
 src_install() {
-	linux-mod_src_install
+	linux-mod-r1_src_install
 
-	insinto /lib/modules/${KV_FULL}/
+	# Other modules (and the card-side build) link against SCIF, so publish the
+	# symbol versions and the kernel-side header alongside the module.
+	insinto /lib/modules/${KV_FULL}
 	newins Module.symvers scif.symvers
-	insinto ${KERNEL_DIR}/include/modules
+
+	insinto "${KV_DIR}"/include/modules
 	newins include/scif.h scif.h
 
 	insinto /lib/udev/rules.d
 	newins udev-mic.rules 50-udev-mic.rules
-}
-
-pkg_preinst() {
-	linux-mod_pkg_preinst
 }
