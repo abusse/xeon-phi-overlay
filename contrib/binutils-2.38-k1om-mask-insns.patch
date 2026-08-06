@@ -1,0 +1,147 @@
+--- a/opcodes/i386-gen.c	2022-01-22 13:14:09.000000000 +0100
++++ b/opcodes/i386-gen.c	2026-08-05 19:01:51.185906829 +0200
+@@ -248,7 +248,7 @@
+   { "CPU_L1OM_FLAGS",
+     "unknown" },
+   { "CPU_K1OM_FLAGS",
+-    "unknown" },
++    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu387|CpuClflush|CpuNop|CpuK1OM|CpuLM" },
+   { "CPU_IAMCU_FLAGS",
+     "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586" },
+   { "CPU_ADX_FLAGS",
+--- a/opcodes/i386-opc.tbl	2022-01-22 13:14:09.000000000 +0100
++++ b/opcodes/i386-opc.tbl	2026-08-05 19:01:51.189906881 +0200
+@@ -4110,3 +4110,39 @@
+ vsubsh, 0xf35c, None, CpuAVX512_FP16, Modrm|EVexLIG|Masking=3|EVexMap5|VexVVVV|VexW0|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf|StaticRounding|SAE, { Imm8, RegXMM, RegXMM, RegXMM }
+ 
+ // FP16 (HFNI) instructions end.
++// Intel K1OM (Knights Corner) mask-register instructions, forward-ported
++// from Intel MPSS binutils 2.22.52.  These are plain VEX encodings and
++// need none of the MVEX machinery.  Note KNC k-ops are the 2-operand L0
++// form, distinct from the AVX-512 3-operand L1 ops of the same name+w.
++kand, 0x41, None, CpuK1OM, Modrm|Vex=1|Space0F|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { RegMask, RegMask }
++kandn, 0x42, None, CpuK1OM, Modrm|Vex=1|Space0F|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { RegMask, RegMask }
++kandnr, 0x43, None, CpuK1OM, Modrm|Vex=1|Space0F|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { RegMask, RegMask }
++kconcath, 0x95, None, CpuK1OM|Cpu64, Modrm|Vex=1|Space0F|VexVVVV=1|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf|NoRex64, { RegMask, RegMask, Reg64 }
++kconcatl, 0x97, None, CpuK1OM|Cpu64, Modrm|Vex=1|Space0F|VexVVVV=1|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf|NoRex64, { RegMask, RegMask, Reg64 }
++kextract, 0x663e, None, CpuK1OM|Cpu64, Modrm|Vex=1|Space0F3A|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf|NoRex64, { Imm8, Reg64, RegMask }
++kmerge2l1h, 0x48, None, CpuK1OM, Modrm|Vex=1|Space0F|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { RegMask, RegMask }
++kmerge2l1l, 0x49, None, CpuK1OM, Modrm|Vex=1|Space0F|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { RegMask, RegMask }
++kmov, 0x90, None, CpuK1OM, Modrm|Vex=1|Space0F|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { RegMask, RegMask }
++kmov, 0x93, None, CpuK1OM|Cpu64, Modrm|Vex=1|Space0F|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf|NoRex64, { RegMask, Reg32 }
++kmov, 0x92, None, CpuK1OM|Cpu64, Modrm|Vex=1|Space0F|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf|NoRex64, { Reg32, RegMask }
++knot, 0x44, None, CpuK1OM, Modrm|Vex=1|Space0F|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { RegMask, RegMask }
++kor, 0x45, None, CpuK1OM, Modrm|Vex=1|Space0F|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { RegMask, RegMask }
++kortest, 0x98, None, CpuK1OM, Modrm|Vex=1|Space0F|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { RegMask, RegMask }
++kxnor, 0x46, None, CpuK1OM, Modrm|Vex=1|Space0F|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { RegMask, RegMask }
++kxor, 0x47, None, CpuK1OM, Modrm|Vex=1|Space0F|VexW=1|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { RegMask, RegMask }
++clevict0, 0xf2ae, 7, CpuK1OM, Modrm|Vex=3|Space0F|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { Byte|Unspecified|BaseIndex|Disp8|Disp16|Disp32|Disp32S }
++clevict1, 0xf3ae, 7, CpuK1OM, Modrm|Vex=3|Space0F|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { Byte|Unspecified|BaseIndex|Disp8|Disp16|Disp32|Disp32S }
++delay, 0xf3ae, 6, CpuK1OM, Modrm|Vex=3|Space0F|No_bSuf|No_wSuf|No_sSuf|No_ldSuf, { Reg32|Reg64 }
++popcnt, 0xf3b8, None, CpuK1OM, Modrm|CheckRegSize|Vex=3|Space0F|No_bSuf|No_wSuf|No_sSuf|No_ldSuf, { Reg32|Reg64, Reg32|Reg64 }
++lzcnt, 0xf3bd, None, CpuK1OM, Modrm|CheckRegSize|Vex=3|Space0F|No_bSuf|No_wSuf|No_sSuf|No_ldSuf, { Reg32|Reg64, Reg32|Reg64 }
++spflt, 0xf2ae, 6, CpuK1OM, Modrm|Vex=3|Space0F|No_bSuf|No_wSuf|No_sSuf|No_ldSuf, { Reg32|Reg64 }
++tzcnt, 0xf3bc, None, CpuK1OM, Modrm|CheckRegSize|Vex=3|Space0F|No_bSuf|No_wSuf|No_sSuf|No_ldSuf, { Reg32|Reg64, Reg32|Reg64 }
++tzcnti, 0xf2bc, None, CpuK1OM, Modrm|CheckRegSize|Vex=3|Space0F|No_bSuf|No_wSuf|No_sSuf|No_ldSuf, { Reg32|Reg64, Reg32|Reg64 }
++vprefetch0, 0x18, 1, CpuK1OM, Modrm|Vex=3|Space0F|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { Byte|Unspecified|BaseIndex|Disp8|Disp16|Disp32|Disp32S }
++vprefetch1, 0x18, 2, CpuK1OM, Modrm|Vex=3|Space0F|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { Byte|Unspecified|BaseIndex|Disp8|Disp16|Disp32|Disp32S }
++vprefetch2, 0x18, 3, CpuK1OM, Modrm|Vex=3|Space0F|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { Byte|Unspecified|BaseIndex|Disp8|Disp16|Disp32|Disp32S }
++vprefetche0, 0x18, 5, CpuK1OM, Modrm|Vex=3|Space0F|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { Byte|Unspecified|BaseIndex|Disp8|Disp16|Disp32|Disp32S }
++vprefetche1, 0x18, 6, CpuK1OM, Modrm|Vex=3|Space0F|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { Byte|Unspecified|BaseIndex|Disp8|Disp16|Disp32|Disp32S }
++vprefetche2, 0x18, 7, CpuK1OM, Modrm|Vex=3|Space0F|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { Byte|Unspecified|BaseIndex|Disp8|Disp16|Disp32|Disp32S }
++vprefetchenta, 0x18, 4, CpuK1OM, Modrm|Vex=3|Space0F|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { Byte|Unspecified|BaseIndex|Disp8|Disp16|Disp32|Disp32S }
++vprefetchnta, 0x18, 0, CpuK1OM, Modrm|Vex=3|Space0F|No_bSuf|No_wSuf|No_lSuf|No_sSuf|No_qSuf|No_ldSuf, { Byte|Unspecified|BaseIndex|Disp8|Disp16|Disp32|Disp32S }
+--- a/opcodes/i386-dis.c	2022-01-22 13:14:09.000000000 +0100
++++ b/opcodes/i386-dis.c	2026-08-05 20:04:35.985409580 +0200
+@@ -5870,14 +5870,14 @@
+     { Bad_Opcode },
+     { VEX_LEN_TABLE (VEX_LEN_0F41) },
+     { VEX_LEN_TABLE (VEX_LEN_0F42) },
+-    { Bad_Opcode },
++    { "kandnr",		{ MaskG, MaskE }, 0 },
+     { VEX_LEN_TABLE (VEX_LEN_0F44) },
+     { VEX_LEN_TABLE (VEX_LEN_0F45) },
+     { VEX_LEN_TABLE (VEX_LEN_0F46) },
+     { VEX_LEN_TABLE (VEX_LEN_0F47) },
+     /* 48 */
+-    { Bad_Opcode },
+-    { Bad_Opcode },
++    { "kmerge2l1h",	{ MaskG, MaskE }, 0 },
++    { "kmerge2l1l",	{ MaskG, MaskE }, 0 },
+     { VEX_LEN_TABLE (VEX_LEN_0F4A) },
+     { VEX_LEN_TABLE (VEX_LEN_0F4B) },
+     { Bad_Opcode },
+@@ -5962,9 +5962,9 @@
+     { VEX_LEN_TABLE (VEX_LEN_0F92) },
+     { VEX_LEN_TABLE (VEX_LEN_0F93) },
+     { Bad_Opcode },
++    { "kconcath",	{ MaskG, MaskE }, 0 },
+     { Bad_Opcode },
+-    { Bad_Opcode },
+-    { Bad_Opcode },
++    { "kconcatl",	{ MaskG, MaskE }, 0 },
+     /* 98 */
+     { VEX_LEN_TABLE (VEX_LEN_0F98) },
+     { VEX_LEN_TABLE (VEX_LEN_0F99) },
+@@ -6702,13 +6702,13 @@
+ 
+   /* VEX_LEN_0F41 */
+   {
+-    { Bad_Opcode },
++    { "kand",		{ MaskG, MaskE }, 0 },
+     { MOD_TABLE (MOD_VEX_0F41_L_1) },
+   },
+ 
+   /* VEX_LEN_0F42 */
+   {
+-    { Bad_Opcode },
++    { "kandn",		{ MaskG, MaskE }, 0 },
+     { MOD_TABLE (MOD_VEX_0F42_L_1) },
+   },
+ 
+@@ -6719,19 +6719,19 @@
+ 
+   /* VEX_LEN_0F45 */
+   {
+-    { Bad_Opcode },
++    { "kor",		{ MaskG, MaskE }, 0 },
+     { MOD_TABLE (MOD_VEX_0F45_L_1) },
+   },
+ 
+   /* VEX_LEN_0F46 */
+   {
+-    { Bad_Opcode },
++    { "kxnor",		{ MaskG, MaskE }, 0 },
+     { MOD_TABLE (MOD_VEX_0F46_L_1) },
+   },
+ 
+   /* VEX_LEN_0F47 */
+   {
+-    { Bad_Opcode },
++    { "kxor",		{ MaskG, MaskE }, 0 },
+     { MOD_TABLE (MOD_VEX_0F47_L_1) },
+   },
+ 
+--- a/gas/config/tc-i386.c	2022-01-22 13:14:08.000000000 +0100
++++ b/gas/config/tc-i386.c	2026-08-05 19:03:46.415389479 +0200
+@@ -12848,7 +12848,9 @@
+   if (r->reg_type.bitfield.class == RegMMX && !cpu_arch_flags.bitfield.cpummx)
+     return false;
+ 
+-  if (!cpu_arch_flags.bitfield.cpuavx512f)
++  /* Intel K1OM (Knights Corner) predates AVX-512 but has its own zmm and
++     mask registers, so it gates them too.  */
++  if (!cpu_arch_flags.bitfield.cpuavx512f && !cpu_arch_flags.bitfield.cpuk1om)
+     {
+       if (r->reg_type.bitfield.zmmword
+ 	  || r->reg_type.bitfield.class == RegMask)
+@@ -12880,7 +12882,8 @@
+      mode, and require EVEX encoding.  */
+   if (r->reg_flags & RegVRex)
+     {
+-      if (!cpu_arch_flags.bitfield.cpuavx512f
++      if ((!cpu_arch_flags.bitfield.cpuavx512f
++	   && !cpu_arch_flags.bitfield.cpuk1om)
+ 	  || flag_code != CODE_64BIT)
+ 	return false;
+ 
