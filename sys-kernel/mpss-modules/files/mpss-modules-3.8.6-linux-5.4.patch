@@ -1,0 +1,1180 @@
+diff --git a/dma/mic_dma_lib.c b/dma/mic_dma_lib.c
+index 80a4a0b..88e3f51 100644
+--- a/dma/mic_dma_lib.c
++++ b/dma/mic_dma_lib.c
+@@ -1496,6 +1496,7 @@ mic_dma_proc_reg_show(struct seq_file *m, void *data)
+ 				seq_printf(m," {Type: NOP, 0x%#llx"
+ 					" %#llx} ",  desc.qwords.qw0,
+ 						   desc.qwords.qw1);
++				break;
+ 			case MEMCOPY:
+ 				seq_printf(m," {Type: MEMCOPY, SAP:"
+ 					" 0x%#llx, DAP: %#llx, length: %#llx} ",
+diff --git a/host/linux.c b/host/linux.c
+index fd0411a..0018274 100644
+--- a/host/linux.c
++++ b/host/linux.c
+@@ -308,8 +309,11 @@ mic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	if (mic_msi_enable){
+ 		for (i = 0; i < MIC_NUM_MSIX_ENTRIES; i ++)
+ 			bd_info->bi_msix_entries[i].entry = i;
+-		err = pci_enable_msix(mic_ctx->bi_pdev, bd_info->bi_msix_entries,
+-				      MIC_NUM_MSIX_ENTRIES);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,8,0)
++        err = pci_enable_msix(mic_ctx->bi_pdev, bd_info->bi_msix_entries, MIC_NUM_MSIX_ENTRIES);
++#else
++        err = pci_enable_msix_exact(mic_ctx->bi_pdev, bd_info->bi_msix_entries, MIC_NUM_MSIX_ENTRIES);
++#endif
+ 		if (err == 0 ) {
+ 			// Only support 1 MSIx for now
+ 			err = request_irq(bd_info->bi_msix_entries[0].vector,
+@@ -351,22 +355,20 @@ mic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 			goto probe_unmapaper;
+ 		}
+ 
+ 	adapter_probe(&bd_info->bi_ctx);
+ 
+ 	if (mic_ctx->bi_psmi.enabled) {
+ 		err = sysfs_create_group(&mic_ctx->bd_info->bi_sysfsdev->kobj,
+ 						&psmi_attr_group);
+ 		err = device_create_bin_file(mic_ctx->bd_info->bi_sysfsdev,
+ 						&mic_psmi_ptes_attr);
+ 	}
+-
+ 	adapter_wait_reset(mic_ctx);
+ 
+-	// Adding a board instance so increment the total number of MICs in the system.
+ 	list_add_tail(&bd_info->bi_list, &mic_data.dd_bdlist);
+ 	mic_data.dd_numdevs++;
+ 	printk("mic_probe %d:%d:%d as board #%d\n", pdev->bus->number,
+ 	       PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn), brdnum);
+ 	return 0;
+ 
+ probe_unmapaper:
+@@ -735,7 +751,7 @@ mic_get_file_size(const char* fn, uint32_t* file_len)
+ 	uint32_t status = 0;
+ 	mm_segment_t fs = get_fs();
+ 
+-	set_fs(get_ds());
++	set_fs(KERNEL_DS);
+ 
+ 	if (!fn || IS_ERR(filp = filp_open(fn, 0, 0))) {
+ 		status = EINVAL;
+@@ -766,7 +782,7 @@ mic_load_file(const char* fn, uint8_t* buffer, uint32_t max_size)
+ 	loff_t filp_size, pos = 0;
+ 
+ 	mm_segment_t fs = get_fs();
+-	set_fs(get_ds());
++	set_fs(KERNEL_DS);
+ 
+ 	if (!fn || IS_ERR(filp = filp_open(fn, 0, 0))) {
+ 		status = EINVAL;
+diff --git a/host/linvcons.c b/host/linvcons.c
+index 556a9b5..16f8a8f 100644
+--- a/host/linvcons.c
++++ b/host/linvcons.c
+@@ -43,7 +43,11 @@ static int micvcons_write(struct tty_struct * tty, const unsigned char *buf,
+ 								int count);
+ static int micvcons_write_room(struct tty_struct *tty);
+ static void micvcons_set_termios(struct tty_struct *tty, struct ktermios * old);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,14,0)
+ static void micvcons_timeout(unsigned long);
++#else
++static void micvcons_timeout(struct timer_list *t);
++#endif
+ static void micvcons_throttle(struct tty_struct *tty);
+ static void micvcons_unthrottle(struct tty_struct *tty);
+ static void micvcons_wakeup_readbuf(struct work_struct *work);
+@@ -62,10 +66,16 @@ static struct tty_operations micvcons_tty_ops = {
+ static struct tty_driver *micvcons_tty = NULL;
+ static u16 extra_timeout = 0;
+ static u8 restart_timer_flag = MICVCONS_TIMER_RESTART;
+-static struct timer_list vcons_timer;
+-static struct list_head timer_list_head;
+ static spinlock_t timer_list_lock;
+ 
++struct vcons_timer_list {
++    struct timer_list timer;
++    struct list_head  timer_list_head;
++};
++
++static struct vcons_timer_list  vcons_timer;
++
++
+ int
+ micvcons_create(int num_bds)
+ {
+@@ -75,7 +85,7 @@ micvcons_create(int num_bds)
+ 	char wq_name[14];
+ 	struct device *dev;
+ 
+-	INIT_LIST_HEAD(&timer_list_head);
++	INIT_LIST_HEAD(&vcons_timer.timer_list_head);
+ 
+ 	if (micvcons_tty)
+ 		goto exit;
+@@ -145,9 +155,13 @@ micvcons_create(int num_bds)
+ 		}
+ 		INIT_WORK(&port->dp_wakeup_read_buf, micvcons_wakeup_readbuf);
+ 	}
+-	vcons_timer.function = micvcons_timeout;
+-	vcons_timer.data = (unsigned long)(&timer_list_head);
+-	init_timer(&vcons_timer);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,14,0)
++	vcons_timer.timer.function = micvcons_timeout;
++	vcons_timer.timer.data = (unsigned long)(&vcons_timer.timer_list_head);
++	init_timer(&vcons_timer.timer);
++#else
++    timer_setup(&vcons_timer.timer, micvcons_timeout, 0);
++#endif
+ exit:
+ 	return ret;
+ }
+@@ -215,10 +229,10 @@ micvcons_open(struct tty_struct * tty, struct file * filp)
+ 		if (ret != 0)
+ 			goto exit_locked;
+ 		spin_lock(&timer_list_lock);
+-		list_add_tail_rcu(&port->list_member, &timer_list_head);
+-		if (list_is_singular(&timer_list_head)) {
++		list_add_tail_rcu(&port->list_member, &vcons_timer.timer_list_head);
++		if (list_is_singular(&vcons_timer.timer_list_head)) {
+ 			restart_timer_flag = MICVCONS_TIMER_RESTART;
+-			mod_timer(&vcons_timer, jiffies + 
++			mod_timer(&vcons_timer.timer, jiffies + 
+ 				msecs_to_jiffies(MICVCONS_SHORT_TIMEOUT));
+ 		}
+ 		spin_unlock(&timer_list_lock);
+@@ -235,10 +249,10 @@ micvcons_del_timer_entry(micvcons_port_t *port)
+ {
+ 	spin_lock(&timer_list_lock);
+ 	list_del_rcu(&port->list_member);
+-	if (list_empty(&timer_list_head)) {
++	if (list_empty(&vcons_timer.timer_list_head)) {
+ 		restart_timer_flag = MICVCONS_TIMER_SHUTDOWN;
+ 		spin_unlock(&timer_list_lock);
+-		del_timer_sync(&vcons_timer);
++		del_timer_sync(&vcons_timer.timer);
+ 	} else {
+ 		spin_unlock(&timer_list_lock);
+ 	}
+@@ -498,10 +512,30 @@ micvcons_wakeup_readbuf(struct work_struct *work)
+ 		micvcons_del_timer_entry(port);
+ }
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,14,0)
+ static void
+ micvcons_timeout(unsigned long data)
+ {
++/* Analysis:
++   data points to a 'struct list_head' 
++   'struct timer_list' has a member 'struct list_head entry'
++
++   list_for_each_entry_rcu(pos, head, member)
++   @pos:    the type * to use as a loop cursor.
++   @head:   the head for your list.
++   @member: the name of the list_head within the struct.
++*/
+ 	struct list_head *timer_list_ptr = (struct list_head *)data;
++
++#else
++static void
++micvcons_timeout(struct timer_list *t)
++{
++	struct vcons_timer_list *my_vcons_timer = from_timer( my_vcons_timer, t, timer);
++	struct list_head *timer_list_ptr = &my_vcons_timer->timer_list_head;
++
++#endif
++
+ 	micvcons_port_t *port;
+ 	u8 console_active = 0;
+ 	int num_chars_read = 0;
+@@ -513,13 +547,12 @@ micvcons_timeout(unsigned long data)
+ 			console_active = 1;
+ 	}
+ 	rcu_read_unlock();
+-
+ 	spin_lock(&timer_list_lock);
+ 	if (restart_timer_flag == MICVCONS_TIMER_RESTART) {
+ 		extra_timeout = (console_active ? 0 :
+ 				extra_timeout + MICVCONS_SHORT_TIMEOUT);
+ 		extra_timeout = min(extra_timeout, (u16)MICVCONS_MAX_TIMEOUT);
+-		mod_timer(&vcons_timer, jiffies + 
++		mod_timer(&vcons_timer.timer, jiffies + 
+ 			msecs_to_jiffies(MICVCONS_SHORT_TIMEOUT+extra_timeout));
+ 	}
+ 	spin_unlock(&timer_list_lock);
+diff --git a/host/linvnet.c b/host/linvnet.c
+index 8082e41..4d10da0 100644
+--- a/host/linvnet.c
++++ b/host/linvnet.c
+@@ -221,7 +221,13 @@ micveth_setup(struct net_device *dev)
+ #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,28)
+ 	dev->netdev_ops = &veth_netdev_ops;
+ #endif
++
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4,11,9))
+ 	dev->destructor = free_netdev;
++#else
++	dev->needs_free_netdev = false;
++	dev->priv_destructor = free_netdev;
++#endif
+ 
+ 	/* Fill in device structure with ethernet-generic values. */
+ 	dev->mtu = (MICVETH_MAX_PACKET_SIZE);
+@@ -231,7 +237,7 @@ micveth_setup(struct net_device *dev)
+ }
+ 
+ static int
+-micveth_validate(struct nlattr *tb[], struct nlattr *data[])
++micveth_validate(struct nlattr *tb[], struct nlattr *data[], struct netlink_ext_ack *extack)
+ {
+ 	if (tb[IFLA_ADDRESS]) {
+ 		if (nla_len(tb[IFLA_ADDRESS]) != ETH_ALEN)
+diff --git a/host/tools_support.c b/host/tools_support.c
+index 93922f8..3d9abac 100644
+--- a/host/tools_support.c
++++ b/host/tools_support.c
+@@ -40,6 +40,10 @@
+ #include "mic/mic_dma_api.h"
+ #include <mic/micscif.h>
+ #include <mic/micscif_smpt.h>
++#include <linux/timekeeping.h>
++#include <linux/ktime.h>
++#include <linux/time.h>
++#include <linux/mm.h>
+ 
+ // constants defined for flash commands for setting PCI aperture
+ #define RASMM_DEFAULT_OFFSET 0x4000000
+@@ -55,6 +59,14 @@
+ #define MASK_MEMFREQ 0xfff
+ #define SHIFT_MEMFREQ 16
+ 
++void do_gettimeofday(struct timeval *tv)
++{
++struct timespec64 ts;
++ktime_get_real_ts64(&ts);
++tv->tv_sec = ts.tv_sec;
++tv->tv_usec = ts.tv_nsec;
++}
++
+ int
+ mic_unpin_user_pages(struct page **pages, uint32_t nf_pages)
+ {
+@@ -89,8 +101,8 @@ mic_pin_user_pages (void *data, struct page **pages, uint32_t len, int32_t *nf_p
+ 
+ 	// pin the user pages; use semaphores on linux for doing the same
+ 	down_read(&current->mm->mmap_sem);
+-	*nf_pages = (int32_t)get_user_pages(current, current->mm, (uint64_t)data,
+-			  nr_pages, PROT_WRITE, 1, pages, NULL);
++	*nf_pages = (int32_t)get_user_pages(current->mm, (uint64_t)data,
++			   PROT_WRITE, pages, NULL);
+ 	up_read(&current->mm->mmap_sem);
+ 
+ 	// compare if the no of final pages is equal to no of requested pages
+diff --git a/host/uos_download.c b/host/uos_download.c
+index 6a323c7..fdcae9e 100644
+--- a/host/uos_download.c
++++ b/host/uos_download.c
+@@ -43,7 +43,16 @@
+ #include "mic/mic_virtio.h"
+ #include <linux/proc_fs.h>
+ #include "mic/micveth.h"
+-
++/*
++ og ctp
++*/
++#include <linux/timekeeping.h>
++#include <linux/ktime.h>
++#include <linux/time64.h>
++#include <linux/time32.h>
++/*
++ og ctp
++*/
+ 
+ #define APERTURE_SEGMENT_SIZE   ((1) * 1024 * 1024 * 1024ULL)
+ 
+@@ -82,9 +91,11 @@ extern bool mic_watchdog_auto_reboot;
+ 
+ static int64_t etc_comp = 0;
+ 
++
++
+ static uint64_t
+ etc_read(uint8_t *mmio_va)
+ {
+ 	uint32_t low;
+ 	uint32_t hi1,hi2;
+ 
+@@ -96,12 +108,11 @@ etc_read(uint8_t *mmio_va)
+ 
+ 	return((uint64_t)((((uint64_t)hi1 << 32)  | low) >> 5));
+ }
+-
+ static int64_t
+ calc_deltaf(mic_ctx_t *mic_ctx)
+ {
+ 	const int64_t ETC_CLK_FREQ = 15625000;
+ 	const uint32_t TIME_DELAY_IN_SEC = 10;
+ 	const int64_t etc_cnt1 = ETC_CLK_FREQ * TIME_DELAY_IN_SEC;
+ 	int64_t etc_cnt2;
+ 
+@@ -120,27 +133,31 @@ calc_deltaf(mic_ctx_t *mic_ctx)
+ 	 * deltaf_in_ppm = ((etc_count2 - etc_count1) * 10 ^ 6) / etc_count1
+ 	 */
+ 	/* Need to implement the monotonic/irqsave logic for windows */
+ 	unsigned long flags;
+-	struct timespec ts1, ts2;
++	struct timespec64 ts1, ts2;
+ 	int64_t mono_ns;
+ 	int i = 0;
+ 	do {
+ 		local_irq_save(flags);
+ 		cnt1 = etc_read(mic_ctx->mmio.va);
+-		getrawmonotonic(&ts1);
++		ktime_get_raw_ts64(&ts1);
+ 		local_irq_restore(flags);
+ 		mdelay(TIME_DELAY_IN_SEC * 1000);
+ 		local_irq_save(flags);
+ 		cnt2 = etc_read(mic_ctx->mmio.va);
+-		getrawmonotonic(&ts2);
++		ktime_get_raw_ts64(&ts2);
+ 		local_irq_restore(flags);
+ 		etc_cnt2 = cnt2 - cnt1;
+-		ts2 = timespec_sub(ts2, ts1);
+-		mono_ns = timespec_to_ns(&ts2);
++
++		ts2 = timespec64_sub(ts2, ts1);
++		mono_ns = timespec64_to_ns(&ts2);
++
+ 		/* Recalculate etc_cnt2 based on getrawmonotonic */
+ 		etc_cnt2 = (etc_cnt2 * TIME_DELAY_IN_SEC * 1000 * 1000 * 1000) / mono_ns;
++
+ 		deltaf = ( ETC_CLK_FREQ * (etc_cnt2 - etc_cnt1)) / etc_cnt1;
++
+ 		deltaf_in_ppm = (1000 * 1000 * (etc_cnt2 - etc_cnt1)) / etc_cnt1;
+ 		i++;
+ 		/*
+ 		 * HSD #4844900
+@@ -181,10 +236,11 @@ calc_deltaf(mic_ctx_t *mic_ctx)
+ void
+ calculate_etc_compensation(mic_ctx_t *mic_ctx)
+ {
+ 	if (mic_ctx->bi_family == FAMILY_KNC) {
++		int64_t etc_comp = mic_ctx->etc_comp;
+ 		if (!etc_comp)
+ 			etc_comp = calc_deltaf(mic_ctx);
+ 		mic_ctx->etc_comp = etc_comp;
+ 	}
+ }
+ 
+@@ -811,20 +886,35 @@ exit:
+ }
+ 
+ /* Perform hardware reset of the device */
++/*
++	ctp og reset failed
++	broken check
++	if brokren
++*/
+ void
+-reset_timer(unsigned long arg)
++reset_timer(struct timer_list *arg)
+ {
+-	mic_ctx_t *mic_ctx = (mic_ctx_t *)arg;
++	mic_ctx_t *mic_ctx = from_timer(mic_ctx, arg, boot_timer);
++
+ 	uint32_t scratch2 = 0;
+ 	uint32_t postcode = mic_getpostcode(mic_ctx);
++	/*
++	return;
++	  PROB DUE TO MIC_CTX not being mic_ctx and issue there
++	  prob mic_ctx is timer arg
++	  need to check
++*/
++
++
++
+ 
+ 	printk("mic%d: Resetting (Post Code %c%c)\n", mic_ctx->bi_id, 
+ 		    postcode & 0xff, (postcode >> 8) & 0xff);
+-	mic_ctx->reset_count++;
+ 
++	mic_ctx->reset_count++;
+ 	/* Assuming that the bootstrap takes around 90 seconds to reset,
+ 	 * we fail after 300 seconds, thus allowing 3 attempts to reset
+ 	 */
+ 	if (mic_ctx->reset_count == RESET_FAIL_TIME ||
+ 		!postcode || 0xffffffff == postcode || mic_ctx->state == MIC_RESETFAIL) {
+ 		mic_ctx->reset_count = 0;
+@@ -865,31 +967,27 @@ reset_timer(unsigned long arg)
+ 		return;
+ 	}
+ 
+-	mic_ctx->boot_timer.function = reset_timer;
+-	mic_ctx->boot_timer.data = (unsigned long)mic_ctx;
+-	mic_ctx->boot_timer.expires = jiffies + HZ;
+ 
+-	add_timer(&mic_ctx->boot_timer);
++
++	timer_setup(&mic_ctx->boot_timer, reset_timer, 0);
++	mod_timer(&mic_ctx->boot_timer, jiffies + HZ);
+ }
+ 
+ void
+ adapter_wait_reset(mic_ctx_t *mic_ctx)
+ {
+-	mic_ctx->boot_timer.function = reset_timer;
+-	mic_ctx->boot_timer.data = (unsigned long)mic_ctx;
+-	mic_ctx->boot_timer.expires = jiffies + HZ;
+ 	mic_ctx->boot_start = jiffies;
+-
+-	add_timer(&mic_ctx->boot_timer);
++	timer_setup(&mic_ctx->boot_timer, reset_timer, 0);
++	mod_timer(&mic_ctx->boot_timer, jiffies + HZ);
+ }
+ 
+ void
+ adapter_reset(mic_ctx_t *mic_ctx, int wait_reset, int reattempt)
+ {
+ 	uint32_t resetReg;
+ 	mutex_lock(&mic_ctx->state_lock);
+ 	/* TODO: check state for lost node as well once design is done */
+ 	if ((mic_ctx->state == MIC_RESET || mic_ctx->state == MIC_READY) && (reattempt == 0)) {
+ 		if (wait_reset == 0) {
+ 			mic_setstate(mic_ctx, MIC_INVALID);
+ 			del_timer_sync(&mic_ctx->boot_timer);
+@@ -924,12 +1051,15 @@ adapter_reset(mic_ctx_t *mic_ctx, int wait_reset, int reattempt)
+ 	/* At least of KNF it seems we really want to delay at least 1 second */
+ 	/* after touching reset to prevent a lot of problems. */
+ 	msleep(1000);
++	msleep(1000);
++	msleep(1000);
++	msleep(1000);
++	msleep(1000);
+ 
+ 	if (!wait_reset) {
+ 		return;
+ 	}
+-
+ 	adapter_wait_reset(mic_ctx);
+ 
+ }
+ 
+@@ -1051,9 +1188,10 @@ adapter_remove(mic_ctx_t *mic_ctx)
+ #define MIC_MAX_BOOT_TIME 180	// Maximum number of seconds to wait for boot to complete
+ 
+ static void
+-online_timer(unsigned long arg)
++online_timer(struct timer_list *arg)
+ {
+-	mic_ctx_t *mic_ctx = (mic_ctx_t *)arg;
++
++	mic_ctx_t *mic_ctx = from_timer(mic_ctx, arg, boot_timer);
+ 	uint64_t delay = (jiffies - mic_ctx->boot_start) / HZ;
+ 
+ 	if (mic_ctx->state == MIC_ONLINE)
+@@ -1065,24 +1205,25 @@ online_timer(unsigned long arg)
+ 		return;
+ 	}
+ 
+-	mic_ctx->boot_timer.function = online_timer;
+-	mic_ctx->boot_timer.data = (unsigned long)mic_ctx;
+-	mic_ctx->boot_timer.expires = jiffies + HZ;
+-	add_timer(&mic_ctx->boot_timer);
+ 
++
++        timer_setup(&mic_ctx->boot_timer, online_timer, 0);
++	mod_timer(&mic_ctx->boot_timer, jiffies + HZ);
+ 	if (!(delay % 5))
+ 		printk("Waiting for MIC %d boot %lld\n", mic_ctx->bi_id, delay);
+ }
+ 
+ static void
+-boot_timer(unsigned long arg)
++boot_timer(struct timer_list *arg)
+ {
+-	mic_ctx_t *mic_ctx = (mic_ctx_t *)arg;
++	mic_ctx_t *mic_ctx = from_timer(mic_ctx, arg, boot_timer);
+ 	struct micvnet_info *vnet_info = (struct micvnet_info *) mic_ctx->bi_vethinfo;
++	uint32_t postcode = mic_getpostcode(mic_ctx);
+ 	uint64_t delay = (jiffies - mic_ctx->boot_start) / HZ;
+ 	bool timer_restart = false;
++        printk("mic%d: (Post Code %c%c)\n", mic_ctx->bi_id, postcode & 0xff, (postcode >> 8) & 0xff);
+ 
+ 	if ((mic_ctx->state != MIC_BOOT) && (mic_ctx->state != MIC_ONLINE)) {
+ 		return;
+ 	}
+ 
+@@ -1102,18 +1251,15 @@ boot_timer(unsigned long arg)
+ 		timer_restart = (mic_ctx->state != MIC_ONLINE)? true: false;
+ 
+ 	if (timer_restart) {
+-		mic_ctx->boot_timer.function = boot_timer;
+-		mic_ctx->boot_timer.data = (unsigned long)mic_ctx;
+-		mic_ctx->boot_timer.expires = jiffies + HZ;
+-
+-		add_timer(&mic_ctx->boot_timer);
++
++		timer_setup(&mic_ctx->boot_timer, boot_timer, 0);
++		mod_timer(&mic_ctx->boot_timer, jiffies + HZ);
+ 		return;
+ 	}
+ 
+-	mic_ctx->boot_timer.function = online_timer;
+-	mic_ctx->boot_timer.data = (unsigned long)mic_ctx;
+-	mic_ctx->boot_timer.expires = jiffies + HZ;
+-	add_timer(&mic_ctx->boot_timer);
++
++	timer_setup(&mic_ctx->boot_timer, online_timer,0);
++	mod_timer(&mic_ctx->boot_timer, jiffies + HZ);
+ 
+ 	printk("MIC %d Network link is up\n", mic_ctx->bi_id);
+ 	schedule_work(&mic_ctx->boot_ws);
+@@ -1166,18 +1326,16 @@ ioremap_work(struct work_struct *work)
+ int
+ adapter_post_boot_device(mic_ctx_t *mic_ctx)
+ {
+-	mic_ctx->boot_timer.function = boot_timer;
+-	mic_ctx->boot_timer.data = (unsigned long)mic_ctx;
+-	mic_ctx->boot_timer.expires = jiffies + HZ;
+ 	mic_ctx->boot_start = jiffies;
+ 
+-	add_timer(&mic_ctx->boot_timer);
++	timer_setup(&mic_ctx->boot_timer, boot_timer, 0);
++	mod_timer(&mic_ctx->boot_timer, jiffies + HZ);
+ 	return 0;
+ }
+ 
+ int
+ mic_shutdown_host_doorbell_intr_handler(mic_ctx_t *mic_ctx, int doorbell)
+ {
+ 	struct micscif_dev *dev = &scif_dev[mic_get_scifnode_id(mic_ctx)];
+ 	mic_ctx->sdbic1 = SBOX_READ(mic_ctx->mmio.va, SBOX_SDBIC1);
+ 	SBOX_WRITE(0x0, mic_ctx->mmio.va, SBOX_SDBIC1);
+@@ -1492,12 +1672,16 @@ adapter_init_device(mic_ctx_t *mic_ctx)
+ 
+ 	spin_lock_init(&mic_ctx->sysfs_lock);
+ 	mic_setstate(mic_ctx, MIC_RESET);
+ 	mic_ctx->mode = MODE_NONE;
+ 	mic_ctx->reset_count = 0;
+ 	mutex_init (&mic_ctx->state_lock);
+ 	init_waitqueue_head(&mic_ctx->resetwq);
+ 	init_waitqueue_head(&mic_ctx->ioremapwq);
+-	init_timer(&mic_ctx->boot_timer);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,15,0)
++		init_timer(&mic_ctx->boot_timer);
++#else
++		timer_setup(&mic_ctx->boot_timer, NULL, 0);
++#endif
+ 	if (!(mic_ctx->resetworkq = __mic_create_singlethread_workqueue("RESET WORK")))
+ 		return -ENOMEM;
+ 	if (!(mic_ctx->ioremapworkq = __mic_create_singlethread_workqueue("IOREMAP_WORK"))) {
+diff --git a/host/vhost/mic_blk.c b/host/vhost/mic_blk.c
+index 9ac2cb8..f230a65 100644
+--- a/host/vhost/mic_blk.c
++++ b/host/vhost/mic_blk.c
+@@ -31,6 +31,8 @@
+ #include <linux/workqueue.h>
+ #include <linux/rcupdate.h>
+ #include <linux/file.h>
++#include <linux/fs.h>
++#include <linux/path.h>
+ #include <linux/fdtable.h>
+ 
+ #ifndef VIRTIO_RING_F_EVENT_IDX  /* virtio_ring.h of rhel6.0 does not define */
+@@ -153,12 +155,12 @@ static void handle_io_work(struct work_struct *work)
+ 	  for (iov = vbio->iov; iov < &vbio->iov[vbio->nvecs]; iov++) {
+ 		iov->iov_base = mic_addr_in_host(aper_va, iov->iov_base);
+ 	  }
+-		ret = vfs_writev(vbio->file, vbio->iov, vbio->nvecs, &pos);
++		ret = vfs_write(vbio->file, (char *)vbio->iov, vbio->nvecs, &pos);
+ 	} else {
+ 	  for (iov = vbio->iov; iov < &vbio->iov[vbio->nvecs]; iov++) {
+ 		iov->iov_base = mic_addr_in_host(aper_va, iov->iov_base);
+ 	  }
+-		ret = vfs_readv(vbio->file, vbio->iov, vbio->nvecs, &pos);
++		ret = vfs_read(vbio->file, (char *)vbio->iov, vbio->nvecs, &pos);
+ 	}
+ 	status = (ret < 0) ? VIRTIO_BLK_S_IOERR : VIRTIO_BLK_S_OK;
+ 	if (vbio->head != -1) {
+@@ -476,7 +481,7 @@ static long vhost_blk_set_backend(struct vhost_blk *vblk)
+ 	writel(SECTOR_SIZE, &vb_shared->blk_config.blk_size);
+ 
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,9,0))
+-	ret = vfs_getattr(&vblk->virtblk_file->f_path, &stat);
++	ret = vfs_getattr(&vblk->virtblk_file->f_path, &stat, 0, 0);
+ #else
+ 	ret = vfs_getattr(vblk->virtblk_file->f_path.mnt,
+ 					  vblk->virtblk_file->f_path.dentry, &stat);
+diff --git a/host/vhost/mic_vhost.c b/host/vhost/mic_vhost.c
+index 1aa946b..d21e17f 100644
+--- a/host/vhost/mic_vhost.c
++++ b/host/vhost/mic_vhost.c
+@@ -24,6 +24,7 @@
+ #ifdef RHEL_RELEASE_CODE
+ #include <linux/vhost.h>
+ #else
++#include <linux/vhost.h>
+ #include "./linux/vhost.h"
+ #endif
+ #include <linux/virtio_net.h>
+@@ -72,7 +73,7 @@ static void vhost_poll_func(struct file *file, wait_queue_head_t *wqh,
+ 	add_wait_queue(wqh, &poll->wait);
+ }
+ 
+-static int vhost_poll_wakeup(wait_queue_t *wait, unsigned mode, int sync,
++static int vhost_poll_wakeup(wait_queue_entry_t *wait, unsigned mode, int sync,
+ 			     void *key)
+ {
+ 	struct vhost_poll *poll = container_of(wait, struct vhost_poll, wait);
+diff --git a/host/vhost/vhost.h b/host/vhost/vhost.h
+index 9bb1653..5b73a9b 100644
+--- a/host/vhost/vhost.h
++++ b/host/vhost/vhost.h
+@@ -45,7 +45,7 @@ struct vhost_work {
+ struct vhost_poll {
+ 	poll_table                table;
+ 	wait_queue_head_t        *wqh;
+-	wait_queue_t              wait;
++	wait_queue_entry_t              wait;
+ 	struct vhost_work	  work;
+ 	unsigned long		  mask;
+ 	struct vhost_dev	 *dev;
+@@ -219,7 +220,7 @@ int vhost_zerocopy_signal_used(struct vhost_virtqueue *vq);
+ #else
+ #define __rcu_dereference_index_check(p, c) \
+ 	({ \
+-	 typeof(p) _________p1 = ACCESS_ONCE(p); \
++	 typeof(p) _________p1 = READ_ONCE(p); \
+ 	 RCU_LOCKDEP_WARN(c, \
+ 		 "suspicious rcu_dereference_index_check()" \
+ 		 " usage"); \
+diff --git a/host/vmcore.c b/host/vmcore.c
+index fb5819d..46c347f 100644
+--- a/host/vmcore.c
++++ b/host/vmcore.c
+@@ -50,7 +50,7 @@
+ #include <linux/elfcore.h>
+ #include <linux/slab.h>
+ #include <linux/highmem.h>
+-#include <linux/bootmem.h>
++#include <linux/memblock.h>
+ #include <linux/init.h>
+ #include <linux/crash_dump.h>
+ #include <linux/list.h>
+@@ -161,7 +162,8 @@ ssize_t mic_copy_oldmem_page(mic_ctx_t *mic_ctx,
+ }
+ 
+ /* Reads a page from the oldmem device from given offset. */
+-static ssize_t read_from_oldmem(mic_ctx_t *mic_ctx,
++
++static ssize_t read_from_oldmem_sizet(mic_ctx_t *mic_ctx,
+ 				char *buf, size_t count,
+ 				u64 *ppos, int userbuf)
+ {
+@@ -170,7 +172,7 @@ static ssize_t read_from_oldmem(mic_ctx_t *mic_ctx,
+ 	ssize_t read = 0, tmp;
+ 
+ 	if (!count)
+-		return 0;
++		return (ssize_t) 0;
+ 
+ 	offset = (unsigned long)(*ppos % PAGE_SIZE);
+ 	pfn = (unsigned long)(*ppos / PAGE_SIZE);
+@@ -270,7 +272,7 @@ static ssize_t read_vmcore(struct file *file, char __user *buffer,
+ 		tsz = nr_bytes;
+ 
+ 	while (buflen) {
+-		tmp = read_from_oldmem(mic_ctx,buffer, tsz, &start, 1);
++		tmp = (int) read_from_oldmem_sizet(mic_ctx,buffer, tsz, &start, 1);
+ 		if (tmp < 0)
+ 			return tmp;
+ 		buflen -= tsz;
+@@ -364,7 +366,7 @@ static int merge_note_headers_elf64(mic_ctx_t *mic_ctx,
+ 		notes_section = kmalloc(max_sz, GFP_KERNEL);
+ 		if (!notes_section)
+ 			return -ENOMEM;
+-		rc = read_from_oldmem(mic_ctx, notes_section, max_sz, &offset, 0);
++		rc  = (int) read_from_oldmem_sizet(mic_ctx, notes_section, max_sz, &offset, 0);
+ 		if (rc < 0) {
+ 			kfree(notes_section);
+ 			return rc;
+@@ -446,7 +448,7 @@ static int merge_note_headers_elf32(mic_ctx_t *mic_ctx,
+ 		notes_section = kmalloc(max_sz, GFP_KERNEL);
+ 		if (!notes_section)
+ 			return -ENOMEM;
+-		rc = read_from_oldmem(mic_ctx, notes_section, max_sz, &offset, 0);
++		rc = (int) read_from_oldmem_sizet(mic_ctx, notes_section, max_sz, &offset, 0);
+ 		if (rc < 0) {
+ 			kfree(notes_section);
+ 			return rc;
+@@ -626,7 +628,7 @@ static int parse_crash_elf64_headers(mic_ctx_t *mic_ctx)
+ 	addr = elfcorehdr_addr;
+ 
+ 	/* Read Elf header */
+-	rc = read_from_oldmem(mic_ctx, (char*)&ehdr, sizeof(Elf64_Ehdr), &addr, 0);
++	rc = (int) read_from_oldmem_sizet(mic_ctx, (char*)&ehdr, sizeof(Elf64_Ehdr), &addr, 0);
+ 	if (rc < 0)
+ 		return rc;
+ 
+@@ -660,7 +662,7 @@ static int parse_crash_elf64_headers(mic_ctx_t *mic_ctx)
+ 	if (!mic_ctx->elfcorebuf)
+ 		return -ENOMEM;
+ 	addr = elfcorehdr_addr;
+-	rc = read_from_oldmem(mic_ctx, mic_ctx->elfcorebuf, mic_ctx->elfcorebuf_sz, &addr, 0);
++	rc = (int) read_from_oldmem_sizet(mic_ctx, mic_ctx->elfcorebuf, mic_ctx->elfcorebuf_sz, &addr, 0);
+ 	if (rc < 0) {
+ 		kfree(mic_ctx->elfcorebuf);
+ 		mic_ctx->elfcorebuf = NULL;
+@@ -694,7 +696,7 @@ static int parse_crash_elf32_headers(mic_ctx_t *mic_ctx)
+ 	addr = elfcorehdr_addr;
+ 
+ 	/* Read Elf header */
+-	rc = read_from_oldmem(mic_ctx, (char*)&ehdr, sizeof(Elf32_Ehdr), &addr, 0);
++	rc = (int) read_from_oldmem_sizet(mic_ctx, (char*)&ehdr, sizeof(Elf32_Ehdr), &addr, 0);
+ 	if (rc < 0)
+ 		return rc;
+ 
+@@ -720,7 +722,7 @@ static int parse_crash_elf32_headers(mic_ctx_t *mic_ctx)
+ 	if (!mic_ctx->elfcorebuf)
+ 		return -ENOMEM;
+ 	addr = elfcorehdr_addr;
+-	rc = read_from_oldmem(mic_ctx, mic_ctx->elfcorebuf, mic_ctx->elfcorebuf_sz, &addr, 0);
++	rc = (int) read_from_oldmem_sizet(mic_ctx, mic_ctx->elfcorebuf, mic_ctx->elfcorebuf_sz, &addr, 0);
+ 	if (rc < 0) {
+ 		kfree(mic_ctx->elfcorebuf);
+ 		mic_ctx->elfcorebuf = NULL;
+@@ -752,7 +754,7 @@ static int parse_crash_elf_headers(mic_ctx_t *mic_ctx)
+ 	int rc=0;
+ 
+ 	addr = elfcorehdr_addr;
+-	rc = read_from_oldmem(mic_ctx, e_ident, EI_NIDENT, &addr, 0);
++	rc = (int) read_from_oldmem_sizet(mic_ctx, e_ident, EI_NIDENT, &addr, 0);
+ 	if (rc < 0)
+ 		return rc;
+ 	if (memcmp(e_ident, ELFMAG, SELFMAG) != 0) {
+diff --git a/include/mic/micscif_nm.h b/include/mic/micscif_nm.h
+index 9f2ff48..acdd8b7 100644
+--- a/include/mic/micscif_nm.h
++++ b/include/mic/micscif_nm.h
+@@ -100,7 +100,7 @@ micscif_inc_node_refcnt(struct micscif_dev *dev, long cnt)
+ 			SCIFDEV_INIT == dev->sd_state)
+ 			goto bail_out;
+ 		if (test_bit(SCIF_NODE_MAGIC_BIT, 
+-			&dev->scif_ref_cnt.counter)) {
++			((unsigned long *)&dev->scif_ref_cnt.counter))) {
+ 			/* Notify host that the remote node must be woken */
+ 			struct nodemsg notif_msg;
+ 
+@@ -126,7 +126,7 @@ micscif_inc_node_refcnt(struct micscif_dev *dev, long cnt)
+ 			if (dev->sd_wait_status == OP_COMPLETED) {
+ 				dev->sd_state = SCIFDEV_RUNNING;
+ 				clear_bit(SCIF_NODE_MAGIC_BIT, 
+-					&dev->scif_ref_cnt.counter);
++					((unsigned long *)&dev->scif_ref_cnt.counter));
+ 			}
+ 		}
+ 		/* The ref count was not added if the node was idle. */
+diff --git a/include/mic/micscif_rma.h b/include/mic/micscif_rma.h
+index 275e086..081a2a4 100644
+--- a/include/mic/micscif_rma.h
++++ b/include/mic/micscif_rma.h
+@@ -66,6 +66,7 @@
+ #include <linux/semaphore.h>
+ #include <linux/kthread.h>
+ #include <linux/sched.h>
++#include <linux/sched/mm.h>
+ #include <linux/delay.h>
+ #include <linux/wait.h>
+ #include <asm/bug.h>
+@@ -922,7 +923,7 @@ static inline int __scif_dec_pinned_vm_lock(struct mm_struct *mm,
+ 			down_write(&mm->mmap_sem);
+ 		}
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 1, 0))
+-		mm->pinned_vm -= nr_pages;
++		atomic64_sub(nr_pages, &mm->pinned_vm);
+ #else
+ 		mm->locked_vm -= nr_pages;
+ #endif
+@@ -936,23 +937,18 @@ static inline int __scif_check_inc_pinned_vm(struct mm_struct *mm,
+ {
+ 	if (mm && mic_ulimit_check && nr_pages) {
+ 		unsigned long locked, lock_limit;
+-		locked = nr_pages;
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 1, 0))
+-		locked += mm->pinned_vm;
++		locked = atomic64_add_return(nr_pages, &mm->pinned_vm);
+ #else
++		locked = nr_pages;
+ 		locked += mm->locked_vm;
+ #endif
+ 		lock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
+ 		if ((locked > lock_limit) && !capable(CAP_IPC_LOCK)) {
++			atomic64_sub(nr_pages, &mm->pinned_vm);
+ 			pr_debug("locked(%lu) > lock_limit(%lu)\n", 
+ 				    locked, lock_limit);
+ 			return -ENOMEM;
+-		} else {
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 1, 0))
+-			mm->pinned_vm = locked;
+-#else
+-			mm->locked_vm = locked;
+-#endif
+ 		}
+ 	}
+ 	return 0;
+diff --git a/include/mic_common.h b/include/mic_common.h
+index 92554ad..ae409d4 100644
+--- a/include/mic_common.h
++++ b/include/mic_common.h
+@@ -51,18 +51,36 @@ extern "C" {
+ #include <asm/io.h>
+ #include <linux/kernel.h>
+ #include <linux/mm_types.h>
++#include <linux/mm.h>
++#include <linux/nmi.h>
+ #include <linux/jiffies.h>
+ #include <linux/timer.h>
+ #include <linux/irqflags.h>
+ #include <linux/time.h>
++/*
++	og ctp
++*/
++#include <linux/ktime.h>
++#include <linux/time32.h>
++#include <linux/time64.h>
++#include <linux/delay.h>
++/*
++	og ctp
++*/
+ #include <linux/spinlock.h>
+ #include <linux/mutex.h>
+ #include <linux/semaphore.h>
+ #include <linux/kthread.h>
+ #include <linux/sched.h>
++/*
++	og ctp
++*/
+ #include <linux/delay.h>
+ #include <linux/wait.h>
+ #include <asm/bug.h>
++/*
++	og ctp
++*/
+ #include <linux/pci.h>
+ #include <linux/device.h>
+ #include <linux/fs.h>
+@@ -252,6 +270,22 @@ extern "C" {
+ #define LINUX_INTERFACE_VERSION "1.0"
+ #define WINDOWS_INTERFACE_VERSION "1.0"
+ 
++/*
++typedef struct _timer_list_t {
++        struct hlist_node       entry;
++        unsigned long           expires;
++        void                    (*function)(struct timer_list *);
++        u32                     flags;
++
++        unsigned long           data;
++        timer_list;
++#ifdef CONFIG_LOCKDEP
++        struct lockdep_map      lockdep_map;
++#endif
++} timer_list;
++*/
++#define page_cache_get(page) get_page(page)
++#define page_cache_release(page) put_page(page)
+ typedef enum mic_modes
+ {
+ 	MODE_NONE,
+@@ -697,7 +735,7 @@ extern char *micstates[];
+ static __always_inline void
+ mic_setstate(mic_ctx_t *mic_ctx, enum mic_status newstate)
+ {
+-	printk("mic%d: Transition from state %s to %s\n", mic_ctx->bi_id, 
++	printk("mic%d: Transition from state %s to %s\n", mic_ctx->bi_id,
+ 		    micstates[mic_ctx->state], micstates[newstate]);
+ 	mic_ctx->state = newstate;
+ 	spin_lock_bh(&mic_ctx->sysfs_lock);
+diff --git a/micscif/micscif_api.c b/micscif/micscif_api.c
+index e13e59d..16d2946 100644
+--- a/micscif/micscif_api.c
++++ b/micscif/micscif_api.c
+@@ -1981,6 +1982,13 @@ retry:
+ 			}
+ 		}
+ 
++		pinned_pages->nr_pages = get_user_pages(
++				current,
++				nr_pages,
++				0,
++				pinned_pages->pages,
++				pinned_pages->vma);
++/*
+ 		pinned_pages->nr_pages = get_user_pages(
+ 				current,
+ 				mm,
+@@ -1990,6 +2000,7 @@ retry:
+ 				0,
+ 				pinned_pages->pages,
+ 				pinned_pages->vma);
++*/
+ 		up_write(&mm->mmap_sem);
+ 		if (nr_pages == pinned_pages->nr_pages) {
+ #ifdef RMA_DEBUG
+@@ -2436,13 +2447,13 @@ scif_put_pages(struct scif_range *pages)
+ 	int ret;
+ 	struct reg_range_t *window = pages->cookie;
+ 	struct endpt *ep = (struct endpt *)window->ep;
+-	if (atomic_read(&(&(ep->ref_count))->refcount) > 0) {
++	if (atomic_read((atomic_t *) &(&(ep->ref_count))->refcount) > 0) {
+ 		kref_get(&(ep->ref_count));
+ 	} else {
+ 		WARN_ON(1);
+ 	}
+ 	ret = __scif_put_pages(pages);
+-	if (atomic_read(&(&(ep->ref_count))->refcount) > 0) {
++	if (atomic_read((atomic_t *) &(&(ep->ref_count))->refcount) > 0) {
+ 		kref_put(&(ep->ref_count), scif_ref_rel);
+ 	} else {
+ 		//WARN_ON(1);
+diff --git a/micscif/micscif_rma.c b/micscif/micscif_rma.c
+index 9c6de2e..88c384f 100644
+--- a/micscif/micscif_rma.c
++++ b/micscif/micscif_rma.c
+@@ -57,20 +57,18 @@ void micscif_rma_destroy_tcw(struct rma_mmu_notifier *mmn,
+ #ifdef CONFIG_MMU_NOTIFIER
+ static void scif_mmu_notifier_release(struct mmu_notifier *mn,
+ 			struct mm_struct *mm);
+-static void scif_mmu_notifier_invalidate_page(struct mmu_notifier *mn,
++static void scif_mmu_notifier_invalidate_range(struct mmu_notifier *mn,
+ 				struct mm_struct *mm,
+-				unsigned long address);
+-static void scif_mmu_notifier_invalidate_range_start(struct mmu_notifier *mn,
+-				       struct mm_struct *mm,
+-				       unsigned long start, unsigned long end);
++				unsigned long start, unsigned long end);
++static int scif_mmu_notifier_invalidate_range_start(struct mmu_notifier *mn,
++				      const struct mmu_notifier_range *range);
+ static void scif_mmu_notifier_invalidate_range_end(struct mmu_notifier *mn,
+-				     struct mm_struct *mm,
+-				     unsigned long start, unsigned long end);
++				     const struct mmu_notifier_range *range);
+ static const struct mmu_notifier_ops scif_mmu_notifier_ops = {
+ 	.release = scif_mmu_notifier_release,
+ 	.clear_flush_young = NULL,
+ 	.change_pte = NULL,/*TODO*/
+-	.invalidate_page = scif_mmu_notifier_invalidate_page,
++	.invalidate_range = scif_mmu_notifier_invalidate_range,
+ 	.invalidate_range_start = scif_mmu_notifier_invalidate_range_start,
+ 	.invalidate_range_end = scif_mmu_notifier_invalidate_range_end};
+ 
+@@ -86,35 +85,37 @@ static void scif_mmu_notifier_release(struct mmu_notifier *mn,
+ 	return;
+ }
+ 
+-static void scif_mmu_notifier_invalidate_page(struct mmu_notifier *mn,
++static void scif_mmu_notifier_invalidate_range(struct mmu_notifier *mn,
+ 				struct mm_struct *mm,
+-				unsigned long address)
++				unsigned long start, unsigned long end)
+ {
+ 	struct endpt *ep;
+ 	struct rma_mmu_notifier	*mmn;
+ 	mmn = container_of(mn, struct rma_mmu_notifier, ep_mmu_notifier);
+ 	ep = mmn->ep;
+-	micscif_rma_destroy_tcw(mmn, ep, true, address, PAGE_SIZE);
+-	pr_debug("%s address 0x%lx\n", __func__, address);
++	micscif_rma_destroy_tcw(mmn, ep, true, start, PAGE_SIZE);
++	pr_debug("%s address 0x%lx\n", __func__, start);
+ 	return;
+ }
+ 
+-static void scif_mmu_notifier_invalidate_range_start(struct mmu_notifier *mn,
+-				       struct mm_struct *mm,
+-				       unsigned long start, unsigned long end)
++static int scif_mmu_notifier_invalidate_range_start(struct mmu_notifier *mn,
++				       const struct mmu_notifier_range *range)
+ {
+ 	struct endpt *ep;
++	unsigned long start, end;
++	start = range->start;
++	end = range->end;
++
+ 	struct rma_mmu_notifier	*mmn;
+ 	mmn = container_of(mn, struct rma_mmu_notifier, ep_mmu_notifier);
+ 	ep = mmn->ep;
+ 	micscif_rma_destroy_tcw(mmn, ep, true, (uint64_t)start, (uint64_t)(end - start));
+ 	pr_debug("%s start=%lx, end=%lx\n", __func__, start, end);
+-	return;
++	return 0;
+ }
+ 
+ static void scif_mmu_notifier_invalidate_range_end(struct mmu_notifier *mn,
+-				     struct mm_struct *mm,
+-				     unsigned long start, unsigned long end)
++				     const struct mmu_notifier_range *range)
+ {
+ 	/* Nothing to do here, everything needed was done in invalidate_range_start */
+ 	pr_debug("%s\n", __func__);
+diff --git a/micscif/micscif_rma_dma.c b/micscif/micscif_rma_dma.c
+index 9fafc4c..0b93313 100644
+--- a/micscif/micscif_rma_dma.c
++++ b/micscif/micscif_rma_dma.c
+@@ -823,9 +823,9 @@ error:
+ 
+ #if !defined(WINDOWS) && !defined(CONFIG_PREEMPT)
+ static int softlockup_threshold = 60;
+-static void avert_softlockup(unsigned long data)
++static void avert_softlockup(struct timer_list *timer)
+ {
+-	*(unsigned long*)data = 1;
++	*(struct timer_list *) timer = *(struct timer_list *) 1;
+ }
+ 
+ /*
+@@ -837,11 +839,9 @@ static void avert_softlockup(unsigned long data)
+  * timers are run at softirq context)
+  *
+  */
+-static inline void add_softlockup_timer(struct timer_list *timer, unsigned long *data)
++static inline void add_softlockup_timer(struct timer_list *timer)
+ {
+-	setup_timer(timer, avert_softlockup, (unsigned long) data);
+-	timer->expires = jiffies + usecs_to_jiffies(softlockup_threshold * 1000000 / 3);
+-	add_timer(timer);
++	timer_setup(timer, avert_softlockup, 0);
+ }
+ 
+ static inline void del_softlockup_timer(struct timer_list *timer)
+@@ -876,7 +880,7 @@ int micscif_rma_list_cpu_copy(struct mic_copy_work *work)
+ 	unsigned long timer_fired = 0;
+ 	struct timer_list timer;
+ 	int cpu = smp_processor_id();
+-	add_softlockup_timer(&timer, &timer_fired);
++	add_softlockup_timer(&timer);
+ #endif
+ 
+ 	remaining_len = work->len;
+@@ -894,7 +900,7 @@ int micscif_rma_list_cpu_copy(struct mic_copy_work *work)
+ 				touch_softlockup_watchdog();
+ 			else
+ 				cpu = smp_processor_id();
+-			add_softlockup_timer(&timer, &timer_fired);
++			add_softlockup_timer(&timer);
+ 		}
+ #endif
+ 		src_cache_off = src_offset & ~PAGE_MASK;
+diff --git a/micscif/micscif_select.c b/micscif/micscif_select.c
+index c6f125f..90f2835 100644
+--- a/micscif/micscif_select.c
++++ b/micscif/micscif_select.c
+@@ -43,6 +43,15 @@
+ #include <linux/file.h>
+ #include <linux/hrtimer.h>
+ #include <linux/module.h>
++/*
++	og ctp
++*/
++#include <linux/wait.h>
++#include <linux/time.h>
++#include <linux/time32.h>
++/*
++	og ctp
++*/
+ 
+ #include "mic/micscif.h"
+ 
+@@ -96,7 +105,8 @@ static long __estimate_accuracy(struct timespec *tv)
+ static long estimate_accuracy(struct timespec *tv)
+ {
+ 	unsigned long ret;
+-	struct timespec now;
++	struct timespec64 now64, tv64;
++	struct timespec now32;
+ 
+ 	/*
+ 	 * Realtime tasks get a slack of 0 for obvious reasons.
+@@ -105,9 +115,13 @@ static long estimate_accuracy(struct timespec *tv)
+ 	if (rt_task(current))
+ 		return 0;
+ 
+-	ktime_get_ts(&now);
+-	now = timespec_sub(*tv, now);
+-	ret = __estimate_accuracy(&now);
++	ktime_get_ts64(&now64);
++	tv64 = timespec_to_timespec64(*tv);
++
++	now64 = timespec64_sub(tv64, now64);
++	now32 = timespec64_to_timespec(now64);
++
++	ret = __estimate_accuracy(&now32);
+ 	if (ret < current->timer_slack_ns)
+ 		return current->timer_slack_ns;
+ 	return ret;
+@@ -191,7 +205,7 @@ static struct poll_table_entry *poll_get_entry(struct poll_wqueues *p)
+ 	return table->entry++;
+ }
+ 
+-static int __pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
++static int __pollwake(wait_queue_entry_t *wait, unsigned mode, int sync, void *key)
+ {
+ 	struct poll_wqueues *pwq = wait->private;
+ 	DECLARE_WAITQUEUE(dummy_wait, pwq->polling_task);
+@@ -217,7 +231,7 @@ static int __pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
+ 	return default_wake_function(&dummy_wait, mode, sync, key);
+ }
+ 
+-static int pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
++static int pollwake(wait_queue_entry_t *wait, unsigned mode, int sync, void *key)
+ {
+ 	struct poll_table_entry *entry;
+ 
+@@ -394,15 +408,20 @@ static int do_scif_poll(struct scif_pollepd *ufds, unsigned int nfds,
+ static struct timespec scif_timespec_add_safe(const struct timespec lhs,
+ 				  const struct timespec rhs)
+ {
+-	struct timespec res;
++	struct timespec64 res64, lhs64, rhs64;
++	struct timespec res32;
++
++	rhs64 = timespec_to_timespec64(rhs);
++	lhs64 = timespec_to_timespec64(lhs);
+ 
+-	set_normalized_timespec(&res, lhs.tv_sec + rhs.tv_sec,
+-				lhs.tv_nsec + rhs.tv_nsec);
++	set_normalized_timespec64(&res64, lhs64.tv_sec + rhs64.tv_sec,
++				lhs64.tv_nsec + rhs64.tv_nsec);
+ 
+-	if (res.tv_sec < lhs.tv_sec || res.tv_sec < rhs.tv_sec)
+-		res.tv_sec = TIME_T_MAX;
++	if (res64.tv_sec < lhs64.tv_sec || res64.tv_sec < rhs64.tv_sec)
++		res64.tv_sec = TIME_T_MAX;
+ 
+-	return res;
++	res32 = timespec64_to_timespec(res64);
++	return res32;
+ }
+ /**
+  * poll_select_set_timeout - helper function to setup the timeout value
+diff --git a/vnet/micveth_dma.c b/vnet/micveth_dma.c
+index c62675b..cf59431 100644
+--- a/vnet/micveth_dma.c
++++ b/vnet/micveth_dma.c
+@@ -920,7 +920,7 @@ micvnet_setup(struct net_device *dev)
+ 
+ 	/* Initialize the device structure. */
+ 	dev->netdev_ops = &micvnet_netdev_ops;
+-	dev->destructor = free_netdev;
++	dev->priv_destructor = free_netdev;
+ 
+ 	/* Fill in device structure with ethernet-generic values. */
+ 	dev->mtu = MICVNET_MAX_MTU;
+@@ -975,6 +978,7 @@ micvnet_init_interrupts(struct micvnet_info *vnet_info)
+ 	mic_ctx_t *mic_ctx = vnet_info->mic_ctx;
+ 	int ret = 0;
+ 
++
+ 	spin_lock_init(&vnet_info->vi_txlock);
+ 	spin_lock_init(&vnet_info->vi_rxlock);
+ 

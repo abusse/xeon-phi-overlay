@@ -8,18 +8,15 @@ if [[ ${MPSS_VER} =~ ^[0-9]+$ ]]; then
 fi
 
 case ${MPSS_VER} in
-	3.8.1)
-		MPSS_URI="https://software.intel.com/en-us/articles/intel-manycore-platform-software-stack-mpss";
-		MPSS_LINUX_SRC_URI="http://registrationcenter-download.intel.com/akdlm/irc_nas/11194/mpss-3.8.1-linux.tar";
-		MPSS_K1OM_SRC_URI="http://registrationcenter-download.intel.com/akdlm/irc_nas/11194/mpss-3.8.1-k1om.tar";
-		MPSS_SRC_SRC_URI="http://registrationcenter-download.intel.com/akdlm/irc_nas/11194/mpss-src-3.8.1.tar";
+	3.8.6)
+		# Intel retired the MPSS downloads along with the product line in
+		# 2019; registrationcenter-download.intel.com no longer serves the
+		# 3.8.x tarballs.  The Internet Archive carries the final release.
+		MPSS_URI="https://archive.org/details/intel-mpss-3.8.6";
+		MPSS_LINUX_SRC_URI="https://archive.org/download/intel-mpss-3.8.6/mpss-3.8.6-linux.tar";
+		MPSS_K1OM_SRC_URI="https://archive.org/download/intel-mpss-3.8.6/mpss-3.8.6-k1om.tar";
+		MPSS_SRC_SRC_URI="https://archive.org/download/intel-mpss-3.8.6/mpss-src-3.8.6.tar";
 		;;
-        3.8.2)
-		MPSS_URI="https://software.intel.com/en-us/articles/intel-manycore-platform-software-stack-mpss";
-              	MPSS_LINUX_SRC_URI="http://registrationcenter-download.intel.com/akdlm/irc_nas/11518/mpss-3.8.2-linux.tar";
-                MPSS_K1OM_SRC_URI="http://registrationcenter-download.intel.com/akdlm/irc_nas/11518/mpss-3.8.2-k1om.tar";
-                MPSS_SRC_SRC_URI="http://registrationcenter-download.intel.com/akdlm/irc_nas/11518/mpss-src-3.8.2.tar";
-                ;;
 	*)
 		die "No SRC_URI for MPSS version ${MPSS_VER}!"
 esac

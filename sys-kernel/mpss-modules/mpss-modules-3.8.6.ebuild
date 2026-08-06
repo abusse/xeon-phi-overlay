@@ -5,8 +5,8 @@ EAPI=6
 
 inherit eutils rpm linux-mod intel-mpss
 
-DESCRIPTION="Kernel modules for Intel(R) Xeon Phi(TM) coprocessor hosts"
-HOMEPAGE="https://software.intel.com/en-us/articles/intel-manycore-platform-software-stack-mpss"
+DESCRIPTION="Host driver for Intel Xeon Phi coprocessor cards"
+HOMEPAGE=${MPSS_URI}
 SRC_URI=${MPSS_LINUX_SRC_URI}
 
 LICENSE="GPL-2"
@@ -17,7 +17,15 @@ RDEPEND=""
 DEPEND="virtual/linux-sources"
 
 PATCHES=(
-	"${FILESDIR}/mic_blk.patch"
+	# Intel's last KNC release targets RHEL 7.4 (3.10).  This forward-ports it
+	# over the 4.15 timer conversion (timer_setup()/from_timer(), which dropped
+	# the .data member the vcons and boot timers relied on) up to 5.4.  Derived
+	# from github.com/charlieporth1/mpss-modules, with that fork's bring-up
+	# trace printks removed -- they included one in adapter_isr() and a "%s"
+	# passed an int, and one that had swallowed the body of a braceless
+	# "if (!etc_comp)" so calc_deltaf() re-ran its timed measurement loop on
+	# every init.
+	"${FILESDIR}/${P}-linux-5.4.patch"
 )
 
 MODULE_NAMES="mic(extra:)"
@@ -39,8 +47,13 @@ src_unpack() {
 }
 
 src_prepare() {
-	if kernel_is -ge 4 5 0 ; then
-		ewarn "The MIC kernel module is only provided for kernel version 4.4 and below."
+	if kernel_is -ge 5 10 0 ; then
+		ewarn "This driver still calls set_fs()/KERNEL_DS, which was removed from"
+		ewarn "x86 in 5.10, so it is not expected to build on kernel"
+		ewarn "${KV_MAJOR}.${KV_MINOR}.${KV_PATCH}. Use a 5.4 LTS kernel, or port the"
+		ewarn "remaining uaccess calls in host/ over to kernel_read()/kernel_write()."
+	elif kernel_is -gt 5 4 0 ; then
+		ewarn "The patched module is only tested up to kernel 5.4."
 		ewarn "It might fail to build for the current kernel version ${KV_MAJOR}.${KV_MINOR}.${KV_PATCH}"
 	fi
 

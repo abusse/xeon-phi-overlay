@@ -1,7 +1,7 @@
 # Copyright 1999-2017 Gentoo Foundation
 # Distributed under the terms of the GNU General Public License v2
 
-EAPI=6
+EAPI=8
 
 inherit rpm intel-mpss
 
@@ -13,7 +13,9 @@ LICENSE="Intel-MPSS"
 SLOT="0"
 KEYWORDS="~amd64"
 
-RDEPEND="sys-libs/ncurses:5"	# k1om-mpss-linux-gdb is linked to ncurses 5
+# k1om-mpss-linux-gdb is linked against libncurses.so.5; sys-libs/ncurses no
+# longer offers slot 5, so the compat package supplies it.
+RDEPEND="sys-libs/ncurses-compat:5"
 
 S=${WORKDIR}
 
@@ -24,7 +26,7 @@ src_unpack () {
 }
 
 src_install () {
-	cp -r * "${D}"
+	cp -r * "${D}" || die
 
 	cat "${FILESDIR}/36mpss-sdk-k1om" | sed "s/_MPSS_VER_/"${PV}"/g" > "36mpss-sdk-k1om-${PV}"
 	doenvd "36mpss-sdk-k1om-${PV}"
