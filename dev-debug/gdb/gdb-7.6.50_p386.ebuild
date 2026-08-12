@@ -1,10 +1,9 @@
 # Copyright 1999-2017 Gentoo Foundation
 # Distributed under the terms of the GNU General Public License v2
 
-EAPI=5
-PYTHON_COMPAT=( python{2_7,3_4} )
+EAPI=8
 
-inherit flag-o-matic eutils python-single-r1 intel-mpss
+inherit flag-o-matic strip-linguas intel-mpss
 
 export CTARGET=${CTARGET:-${CHOST}}
 if [[ ${CTARGET} == ${CHOST} ]] ; then
@@ -27,9 +26,8 @@ SLOT="0"
 if [[ ${PV} != 9999* ]] ; then
 	KEYWORDS="~amd64"
 fi
-IUSE="+client expat lzma multitarget nls +python +server test vanilla zlib"
+IUSE="+client expat lzma multitarget nls +server test +vanilla zlib"
 REQUIRED_USE="
-	python? ( ${PYTHON_REQUIRED_USE} )
 	|| ( client server )
 "
 
@@ -39,22 +37,17 @@ RDEPEND="server? ( !dev-util/gdbserver )
 		sys-libs/readline:0=
 		expat? ( dev-libs/expat )
 		lzma? ( app-arch/xz-utils )
-		python? ( ${PYTHON_DEPS} )
 		zlib? ( sys-libs/zlib )
 	)"
 DEPEND="${RDEPEND}
 	app-arch/xz-utils
 	client? (
-		virtual/yacc
+		app-alternatives/yacc
 		test? ( dev-util/dejagnu )
 		nls? ( sys-devel/gettext )
 	)"
 
 S=${WORKDIR}/${PN}-${MY_PV}
-
-pkg_setup() {
-	use python && python-single-r1_pkg_setup
-}
 
 src_unpack() {
 	use vanilla || die "Xeon Phi toolchain only supports a vanilla build!"
@@ -64,9 +57,7 @@ src_unpack() {
 }
 
 src_prepare() {
-	[[ -n ${RPM} ]] && rpm_spec_epatch "${WORKDIR}"/gdb.spec
-	! use vanilla && [[ -n ${PATCH_VER} ]] && EPATCH_SUFFIX="patch" epatch "${WORKDIR}"/patch
-	epatch_user
+	default
 	strip-linguas -u bfd/po opcodes/po
 }
 
@@ -82,6 +73,23 @@ gdb_branding() {
 src_configure() {
 	strip-unsupported-flags
 
+	# gdb 7.6.50 is from 2013: GCC >= 14 rejects implicit function
+	# declarations and implicit int, and >= 10 defaults to -fno-common.
+	append-cflags -std=gnu89 -fcommon
+	append-cflags $(test-flags-CC -Wno-error=implicit-function-declaration)
+	append-cflags $(test-flags-CC -Wno-error=implicit-int)
+
+	# texinfo >= 7 rejects this vintage's markup outright; --force still
+	# writes usable .info files and the wrapper keeps a non-zero exit from
+	# failing the build over documentation.
+	cat > "${T}"/makeinfo <<-EOF || die
+		#!/bin/sh
+		makeinfo --force --no-validate "\$@"
+		exit 0
+	EOF
+	chmod +x "${T}"/makeinfo || die
+	export MAKEINFO="${T}"/makeinfo
+
 	local myconf=(
 		--with-pkgversion="$(gdb_branding)"
 		--with-bugurl='https://bugs.gentoo.org/'
@@ -89,6 +97,13 @@ src_configure() {
 		# Disable modules that are in a combined binutils/gdb tree. #490566
 		--disable-{binutils,etc,gas,gold,gprof,ld}
 	)
+	# Intel ships two opcode trees under ops/: 'ia' (stock x86) and 'mic'
+	# (adds the k1om MVEX/KNC-512 vector ISA).  configure defaults to 'ia'
+	# and copies it over opcodes/ + include/opcode, so without this flag
+	# `disassemble` renders every 0x62-prefixed KNC vector instruction as
+	# "(bad)" -- the one thing a Xeon Phi debugger has to get right.
+	[[ ${CTARGET} == k1om-* ]] && myconf+=( --enable-mic_opcodes=yes )
+
 	local sysroot="${EPREFIX}/usr/${CTARGET}"
 	is_cross && myconf+=(
 		--with-sysroot="${sysroot}"
@@ -128,7 +143,7 @@ src_configure() {
 			$(use_with lzma)
 			$(use_enable nls)
 			$(use multitarget && echo --enable-targets=all)
-			$(use_with python python "${EPYTHON}")
+			--without-python
 			$(use_with zlib)
 		)
 	fi
@@ -187,11 +202,4 @@ pkg_postinst() {
 	# portage sucks and doesnt unmerge files in /etc
 	rm -vf "${EROOT}"/etc/skel/.gdbinit
 
-	if use prefix && [[ ${CHOST} == *-darwin* ]] ; then
-		ewarn "gdb is unable to get a mach task port when installed by Prefix"
-		ewarn "Portage, unprivileged.  To make gdb fully functional you'll"
-		ewarn "have to perform the following steps:"
-		ewarn "	 % sudo chgrp procmod ${EPREFIX}/usr/bin/gdb"
-		ewarn "	 % sudo chmod g+s ${EPREFIX}/usr/bin/gdb"
-	fi
 }

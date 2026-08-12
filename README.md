@@ -132,3 +132,24 @@ No `USE=` prefix is needed. `vanilla` is default-on for `sys-libs/glibc` (these 
 never apply Gentoo patchsets to Intel's sources), and `binutils`/`gcc` no longer carry
 the `vanilla`, `sanitize` or `vtv` flags at all.
 
+## Cross debugger
+
+The debugger is built after the toolchain stages:
+
+```
+crossdev --target k1om-mpss-linux-gnu --ex-only --ex-gdb --gdb 7.6.50_p386 \
+         -od /var/db/repos/xeon-phi-overlay
+```
+
+Pass `-od` explicitly. `crossdev` populates `cross-<target>/<pkg>` only once and then
+leaves the existing link alone, so a link left pointing at `::gentoo`'s `dev-debug/gdb`
+makes every version in this overlay appear masked. (The package lives in `dev-debug`
+because that is where Gentoo moved `gdb` and where crossdev looks for it.)
+
+The resulting `k1om-mpss-linux-gnu-gdb` disassembles the KNC vector ISA, not just
+scalar x86-64. It is built without Python support: this gdb's bindings use CPython APIs
+removed in 3.12/3.13, so no Python slot still in the tree can build them. Pretty-printers
+are the only loss.
+
+The card-side `gdbserver` is not built here — a k1om binary already ships in the SDK at
+`/opt/mpss/3.8.6/sysroots/k1om-mpss-linux/usr/bin/gdbserver`.
