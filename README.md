@@ -7,19 +7,19 @@ This readme will only give a brief introduction on how to use this overlay. Prio
 
 ## Installing the Overlay
 
-In order to [manage overlays](https://wiki.gentoo.org/wiki/Overlay), the
-package [**app-portage/layman**](https://wiki.gentoo.org/wiki/Layman) must be
-installed into your Gentoo environment:
+Overlays are [managed with
+`eselect repository`](https://wiki.gentoo.org/wiki/Eselect/Repository), which
+writes to `/etc/portage/repos.conf`:
 
 ```
-emerge -av app-portage/layman
+emerge -av app-eselect/eselect-repository
 ```
 
-If the installation of _layman_ was successfully completed, then you are ready
-to sync the content of this repository:
+This overlay is not in Gentoo's repository list, so add it by URL and sync it:
 
 ```
-layman -o https://raw.githubusercontent.com/abusse/xeon-phi-overlay/master/master/repositories.xml -f -a xeon-phi
+eselect repository add xeon-phi git https://github.com/abusse/xeon-phi-overlay.git
+emaint sync -r xeon-phi
 ```
 
 If you use [eix](https://wiki.gentoo.org/wiki/Eix) you may need to execute:
@@ -31,7 +31,8 @@ eix-update
 Few of the ebuilds of this overlay require the Intel C++ compiler (ICC). Even though it is part of the official Portage repository, a more recent version is available in the [Science](https://wiki.gentoo.org/wiki/Project:Science/Overlay). Installing this overlay is therefore highly recommended:
 
 ```
-layman -a science
+eselect repository enable science
+emaint sync -r science
 ```
 
 ## Installing the Xeon Phi Processor Software for Linux (XPPSL)
@@ -62,7 +63,7 @@ In order to run the Xeon Phi card, the MPSS daemon has to be installed:
 emerge -av sys-apps/mpss-daemon
 ```
 
-This package will pull in all other packages that necessary to run the Xeon Phi. It will install an init script that allows to start the card. However, you have to remember to configure it according to the [Intel Documentation](http://registrationcenter-download.intel.com/akdlm/irc_nas/11194/mpss_users_guide.pdf) before starting it:
+This package will pull in all other packages that necessary to run the Xeon Phi. It will install an init script that allows to start the card. However, you have to remember to configure it first. Intel's MPSS user's guide is no longer served by Intel; it ships as `doc/mpss_users_guide.pdf` inside the [MPSS 3.8.6 release](https://archive.org/details/intel-mpss-3.8.6) this overlay builds from. Once configured, start the card with:
 
 ```
 /etc/init.d/mpss start

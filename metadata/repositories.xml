@@ -9,7 +9,6 @@
             <email>anselm.busse@outlook.com</email>
             <name><![CDATA[Anselm Busse]]></name>
         </owner>
-        <source type="git">git://github.com/abusse/xeon-phi-overlay.git</source>
         <source type="git">https://github.com/abusse/xeon-phi-overlay.git</source>
         <source type="git">git@github.com:abusse/xeon-phi-overlay.git</source>
         <feed>https://github.com/abusse/xeon-phi-overlay/commits/master.atom</feed>
