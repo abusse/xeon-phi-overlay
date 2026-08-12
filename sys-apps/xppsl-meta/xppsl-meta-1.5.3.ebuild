@@ -19,4 +19,4 @@ RDEPEND="=sys-apps/xppsl-micperf-${PV}
 	 =sys-apps/xppsl-systools-sb-${PV}
 	 =sys-kernel/xppsl-zonesort-${PV}
 	 =sys-libs/xppsl-memkind-${PV}
-	 =sys-apps/xppsl-hwloc-1.11.5_p151"
+	 =sys-apps/xppsl-hwloc-1.11.5_p153"

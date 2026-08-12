@@ -8,9 +8,12 @@ if [[ ${XPPSL_VER} =~ ^[0-9]+$ ]]; then
 fi
 
 case ${XPPSL_VER} in
-	1.5.1)
-		XPPSL_SRC_URI="http://registrationcenter-download.intel.com/akdlm/irc_nas/11291/xppsl-1.5.1-centos7.3.tar";
-		XPPSL_HOMPAGE="https://software.intel.com/en-us/articles/xeon-phi-software"
+	1.5.3)
+		# 1.5.3 is the final XPPSL release.  Intel retired the downloads with
+		# the product line, and no copy is on the Internet Archive; this is a
+		# mirror of Intel's own download centre, product 27202.
+		XPPSL_SRC_URI="https://downloads.bl4ckb0x.de/downloadcenter.intel.com/27202/eng/xppsl-1.5.3-centos7.3.tar";
+		XPPSL_HOMPAGE="https://www.intel.com/content/www/us/en/download/19144/27202/intel-xeon-phi-processor-software-x200.html"
 		;;
 	*)
 		die "No SRC_URI for XPPSL version ${XPPSL_VER}!"
