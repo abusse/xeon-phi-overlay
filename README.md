@@ -95,7 +95,40 @@ emerge -av sys-devel/crossdev
 Using crossdev, it is possible to build a toolchain from the sources supplied by Intel:
 
 ```
-USE="vanilla -sanitize -vtv" crossdev -v --target cross-x86_64-k1om-linux-gnu --binutils 2.22_p382 --gcc 5.1.1_p382 --kernel 2.6.38_p382 --libc 2.14.1_p382
+crossdev --target k1om-mpss-linux-gnu --binutils 2.22_p386 --gcc 5.1.1_p386 --kernel 2.6.38_p386 --libc 2.14.1_p386
 ```
 
-Note that the patch level of the tools indicate the MPSS version. For example MPSS version 3.8.2 results in `*_p382`. Furthermore, it is important to use the **`vanilla`** flag as the gentoo patches will not apply to the Intel source. Finally, the GCC for the Xeon Phi does not support sanitizer functions (**-sanitize**) and the virtual table verification feature (**-vtv**).
+Note that the patch level of the tools indicate the MPSS version. For example MPSS version 3.8.6 results in `*_p386`.
+
+The target triplet must spell `k1om` in the **CPU** field. `x86_64-k1om-linux-gnu`
+looks plausible and even yields an `ld` whose default emulation is `elf_k1om`, but it
+produces an assembler that emits x86-64 objects; only `k1om-*-linux-*` selects the
+`elf64-k1om` default vector. Keep the `-gnu` suffix as well — that is what lets
+crossdev infer `libc=glibc`.
+
+`crossdev` warns `No ARCH is known for this target`. That is expected: k1om is not a
+Gentoo `ARCH`.
+
+Once built, GCC drives the assembler and linker for you. Calling `as` by hand needs
+`-march=k1om`, otherwise it silently produces x86-64 objects:
+
+```
+k1om-mpss-linux-gnu-as -march=k1om -o foo.o foo.s
+```
+
+Verify a build really targeted the card with `readelf -h`, which must report
+`Machine: Intel K1OM`.
+
+### Do not substitute a newer binutils
+
+Use the `2.22_p386` ebuild from this overlay. Upstream binutils carried k1om only from
+2.22 to 2.38 and dropped it in 2.39, and even within that window upstream never shipped
+a `k1om-*` target triplet or the KNC vector ISA — the assembler tables for it exist only
+in Intel's tree. A modern `sys-devel/binutils` cannot build this toolchain.
+
+### USE flags
+
+No `USE=` prefix is needed. `vanilla` is default-on for `sys-libs/glibc` (these ebuilds
+never apply Gentoo patchsets to Intel's sources), and `binutils`/`gcc` no longer carry
+the `vanilla`, `sanitize` or `vtv` flags at all.
+

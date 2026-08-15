@@ -116,18 +116,18 @@ setup_target_flags() {
 			sparc64-*)
 				case $(get-flag mcpu) in
 				niagara[234])
-					if version_is_at_least 2.8 ; then
+					if ver_test -ge 2.8 ; then
 						cpu="sparc64v2"
-					elif version_is_at_least 2.4 ; then
+					elif ver_test -ge 2.4 ; then
 						cpu="sparc64v"
-					elif version_is_at_least 2.2.3 ; then
+					elif ver_test -ge 2.2.3 ; then
 						cpu="sparc64b"
 					fi
 					;;
 				niagara)
-					if version_is_at_least 2.4 ; then
+					if ver_test -ge 2.4 ; then
 						cpu="sparc64v"
-					elif version_is_at_least 2.2.3 ; then
+					elif ver_test -ge 2.2.3 ; then
 						cpu="sparc64b"
 					fi
 					;;
@@ -145,20 +145,20 @@ setup_target_flags() {
 			sparc-*)
 				case $(get-flag mcpu) in
 				niagara[234])
-					if version_is_at_least 2.8 ; then
+					if ver_test -ge 2.8 ; then
 						cpu="sparcv9v2"
-					elif version_is_at_least 2.4 ; then
+					elif ver_test -ge 2.4 ; then
 						cpu="sparcv9v"
-					elif version_is_at_least 2.2.3 ; then
+					elif ver_test -ge 2.2.3 ; then
 						cpu="sparcv9b"
 					else
 						cpu="sparcv9"
 					fi
 					;;
 				niagara)
-					if version_is_at_least 2.4 ; then
+					if ver_test -ge 2.4 ; then
 						cpu="sparcv9v"
-					elif version_is_at_least 2.2.3 ; then
+					elif ver_test -ge 2.2.3 ; then
 						cpu="sparcv9b"
 					else
 						cpu="sparcv9"
@@ -226,7 +226,7 @@ setup_flags() {
 
 	# Can't build glibc itself with fortify code.  Newer versions add
 	# this flag for us, so no need to do it manually.
-	version_is_at_least 2.16 ${PV} || append-cppflags -U_FORTIFY_SOURCE
+	ver_test "${PV}" -ge 2.16 || append-cppflags -U_FORTIFY_SOURCE
 
 	# building glibc with SSP is fraught with difficulty, especially
 	# due to __stack_chk_fail_local which would mean significant changes
@@ -307,7 +307,8 @@ use_multiarch() {
 	sparc)     nver="2.21" ;;
 	*)         return 1 ;;
 	esac
-	version_is_at_least ${nver} ${bver}
+	[[ -n ${bver} ]] || return 1
+	ver_test "${bver}" -ge "${nver}"
 }
 
 # Setup toolchain variables that had historically
@@ -355,15 +356,15 @@ foreach_abi() {
 	else
 		abilist=${DEFAULT_ABI}
 	fi
-	evar_push ABI
-	export ABI
+	# Scoped and exported: setup_env and $1 both read ABI from the environment,
+	# and the caller's value is restored when this function returns.
+	local -x ABI
 	for ABI in ${abilist:-default} ; do
 		setup_env
 		einfo "Running $1 for ABI ${ABI}"
 		$1
 		: $(( ret |= $? ))
 	done
-	evar_pop
 	return ${ret}
 }
 

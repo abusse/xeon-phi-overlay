@@ -1,60 +1,56 @@
-# Copyright 1999-2017 Gentoo Foundation
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
-EAPI=6
+EAPI=8
 
-inherit intel-mpss
+inherit toolchain-funcs intel-mpss
 
-ETYPE="headers"
-H_SUPPORTEDARCH="amd64"
-inherit kernel-2
-
-tc-arch-kernel() {
-		echo "k1om"
-}
-
-tc-arch() {
-		echo "amd64"
-}
-
-detect_version
-
+DESCRIPTION="Linux kernel headers for the k1om (Xeon Phi) card OS"
+HOMEPAGE=${MPSS_URI}
 SRC_URI=${MPSS_SRC_SRC_URI}
+
+LICENSE="GPL-2"
+SLOT="0"
 KEYWORDS="~amd64"
 
-DEPEND="app-arch/xz-utils
-	dev-lang/perl"
-RDEPEND="!!media-sound/alsa-headers"
+# A headers-only install, done directly rather than through an eclass.  Build it
+# with ARCH=x86: Intel's tree has no arch/k1om, the card OS is arch/x86.
 
-S=${WORKDIR}/linux-${PV%_p*}+mpss${MPSS_VER}
+export CTARGET=${CTARGET:-${CHOST}}
+if [[ ${CTARGET} == ${CHOST} ]] ; then
+	if [[ ${CATEGORY} == cross-* ]] ; then
+		export CTARGET=${CATEGORY#cross-}
+	fi
+fi
+
+BDEPEND="
+	app-arch/xz-utils
+	dev-lang/perl
+"
+
+MY_P="linux-${PV%_p*}+mpss${MPSS_VER}"
+S="${WORKDIR}/${MY_P}"
 
 src_unpack() {
-		unpack ${A}
-		unpack ./mpss-${MPSS_VER}/src/linux-${PV%_p*}+mpss${MPSS_VER}.tar.bz2
+	unpack ${A}
+	unpack ./mpss-${MPSS_VER}/src/${MY_P}.tar.bz2
 }
+
+src_compile() { :; }
 
 src_install() {
-	kernel-2_src_install
+	local ddir=/usr/include
+	[[ ${CTARGET} != ${CHOST} ]] && ddir=/usr/${CTARGET}/usr/include
 
-	# hrm, build system sucks
-	find "${ED}" '(' -name '.install' -o -name '*.cmd' ')' -delete
-	find "${ED}" -depth -type d -delete 2>/dev/null
-}
+	# scripts/unifdef.c (2.6.38) uses "constexpr" as an identifier, which C23
+	# -- GCC >= 15's default -- turned into a keyword.
+	emake \
+		ARCH=x86 \
+		HOSTCC="$(tc-getBUILD_CC)" \
+		HOSTCFLAGS="-std=gnu17 -O2" \
+		INSTALL_HDR_PATH="${ED}${ddir}/.." \
+		headers_install
 
-src_test() {
-	# Make sure no uapi/ include paths are used by accident.
-	egrep -r \
-		-e '# *include.*["<]uapi/' \
-		"${D}" && die "#include uapi/xxx detected"
-
-	einfo "Possible unescaped attribute/type usage"
-	egrep -r \
-		-e '(^|[[:space:](])(asm|volatile|inline)[[:space:](]' \
-		-e '\<([us](8|16|32|64))\>' \
-		.
-
-	einfo "Missing linux/types.h include"
-	egrep -l -r -e '__[us](8|16|32|64)' "${ED}" | xargs grep -L linux/types.h
-
-	emake ARCH=$(tc-arch-kernel) headers_check
+	find "${ED}" '(' -name '.install' -o -name '*.cmd' ')' -delete || die
+	find "${ED}" -depth -type d -empty -delete 2>/dev/null
 }

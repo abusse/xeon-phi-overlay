@@ -62,7 +62,7 @@ glibc_do_configure() {
 		myconf+=( --enable-kernel=${LT_KER_VER} )
 	elif [[ $1 == "nptl" ]] ; then
 		# Newer versions require nptl, so there is no addon for it.
-		version_is_at_least 2.20 || addons="nptl${addons}"
+		ver_test -ge 2.20 || addons="nptl${addons}"
 		myconf+=( --enable-kernel=${NPTL_KERN_VER} )
 	else
 		die "invalid pthread option"
@@ -121,7 +121,7 @@ glibc_do_configure() {
 	)
 
 	# We rely on sys-libs/timezone-data for timezone tools normally.
-	if version_is_at_least 2.23 ; then
+	if ver_test -ge 2.23 ; then
 		myconf+=( $(use_enable vanilla timezone-tools) )
 	fi
 
@@ -142,7 +142,7 @@ glibc_do_configure() {
 	# Overtime, generating info pages can be painful.  So disable this for
 	# versions older than the latest stable to avoid the issue (this ver
 	# should be updated from time to time).  #464394 #465816
-	if ! version_is_at_least 2.17 ; then
+	if ! ver_test -ge 2.17 ; then
 		export ac_cv_prog_MAKEINFO=:
 	fi
 
@@ -225,7 +225,7 @@ toolchain-glibc_headers_configure() {
 		pushd "${S}"/sysdeps/mips >/dev/null
 		sed -i -e '/^CC +=/s:=.*:= -D_MIPS_SZPTR=32:' mips32/Makefile mips64/n32/Makefile || die
 		sed -i -e '/^CC +=/s:=.*:= -D_MIPS_SZPTR=64:' mips64/n64/Makefile || die
-		if version_is_at_least 2.21 ; then
+		if ver_test -ge 2.21 ; then
 			# Force the mips ABI to the default.  This is OK because the set of
 			# installed headers in this phase is the same between the 3 ABIs.
 			# If this ever changes, this hack will break, but that's unlikely
@@ -253,7 +253,7 @@ toolchain-glibc_headers_configure() {
 	local addons
 	[[ -d ${S}/ports ]] && addons+=",ports"
 	# Newer versions require nptl, so there is no addon for it.
-	#version_is_at_least 2.20 || addons+=",nptl"
+	#ver_test -ge 2.20 || addons+=",nptl"
 	myconf+=( --enable-add-ons="${addons#,}" )
 
 	# Nothing is compiled here which would affect the headers for the target.

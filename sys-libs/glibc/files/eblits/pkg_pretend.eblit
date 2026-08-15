@@ -65,7 +65,12 @@ check_devpts() {
 		eerror "Openrc should do this for you, so you should check /etc/fstab"
 		eerror "and make sure you do not have any invalid settings there."
 		# Do not die on older kernels as devpts did not export these settings #489520.
-		if version_is_at_least 2.6.25 $(uname -r) ; then
+		# uname -r is not a PMS version ("6.12.16-gentoo"), and ver_test dies
+		# on that, so compare only the leading dotted-numeric part.
+		local kv=$(uname -r)
+		kv=${kv%%[!0-9.]*}
+		kv=${kv%.}
+		if [[ -n ${kv} ]] && ver_test "${kv}" -ge 2.6.25 ; then
 			die "mount & fix your /dev/pts settings"
 		fi
 	fi

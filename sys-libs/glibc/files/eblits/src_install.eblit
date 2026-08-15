@@ -129,10 +129,10 @@ toolchain-glibc_src_install() {
 		# gcc likes to use relative paths to get to its multilibs like
 		# /usr/lib/../lib64/.  So while we don't install any files into
 		# /usr/lib/, we do need it to exist.
-		cd "${ED}"$(alt_libdir)/..
-		[[ -e lib ]] || mkdir lib
-		cd "${ED}"$(alt_usrlibdir)/..
-		[[ -e lib ]] || mkdir lib
+		# mkdir -p, since for a cross install nothing has created
+		# ${ED}/usr/${CTARGET}/lib yet -- not even the parent to work from.
+		mkdir -p "${ED}$(dirname "$(alt_libdir)")/lib" || die
+		mkdir -p "${ED}$(dirname "$(alt_usrlibdir)")/lib" || die
 
 		dosym usr/include $(alt_prefix)/sys-include
 		return 0
@@ -175,12 +175,12 @@ toolchain-glibc_src_install() {
 		local nscd_args=(
 			-e "s:@PIDFILE@:$(strings "${ED}"/usr/sbin/nscd | grep nscd.pid):"
 		)
-		version_is_at_least 2.16 || nscd_args+=( -e 's: --foreground : :' )
+		ver_test -ge 2.16 || nscd_args+=( -e 's: --foreground : :' )
 		sed -i "${nscd_args[@]}" "${ED}"/etc/init.d/nscd
 
 		# Newer versions of glibc include the nscd.service themselves.
 		# TODO: Drop the $FILESDIR copy once 2.19 goes stable.
-		if version_is_at_least 2.19 ; then
+		if ver_test -ge 2.19 ; then
 			systemd_dounit nscd/nscd.service || die
 			systemd_newtmpfilesd nscd/nscd.tmpfiles nscd.conf || die
 		else
@@ -208,7 +208,7 @@ toolchain-glibc_headers_install() {
 	local builddir=$(builddir "headers")
 	cd "${builddir}"
 	emake install_root="${D}$(alt_prefix)" install-headers || die
-	if ! version_is_at_least 2.16 ; then
+	if ! ver_test -ge 2.16 ; then
 		insinto $(alt_headers)/bits
 		doins bits/stdio_lim.h || die
 	fi
@@ -225,11 +225,14 @@ src_strip() {
 	# libpthread, so we need to strip it by hand.  libthread_db makes no
 	# sense stripped as it is only used when debugging.
 	local pthread=$(has splitdebug ${FEATURES} && echo "libthread_db" || echo "lib{pthread,thread_db}")
-	env \
-		-uRESTRICT \
-		CHOST=${CTARGET} \
-		STRIP_MASK="/*/{,tls/}${pthread}*" \
-		prepallstrip
+
+	# prepallstrip was banned from ebuild scope in EAPI 7, and the ebuild sets
+	# RESTRICT="strip" so portage will not strip either.  Leaving the target
+	# libc unstripped is harmless -- it only costs disk in the cross sysroot,
+	# and debugging symbols are actively useful when chasing something on the
+	# card, which is precisely why this function kept libpthread/libthread_db
+	# unstripped anyway.  Strip by hand with ${CTARGET}-strip if size matters.
+	einfo "Leaving ${CTARGET} libc unstripped (prepallstrip is banned in EAPI ${EAPI})"
 	# if user has stripping enabled and does not have split debug turned on,
 	# then leave the debugging sections in libpthread.
 	if ! has nostrip ${FEATURES} && ! has splitdebug ${FEATURES} ; then
