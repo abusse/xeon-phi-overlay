@@ -1,7 +1,7 @@
-# Copyright 1999-2017 Gentoo Foundation
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
-EAPI=6
+EAPI=8
 
 inherit flag-o-matic rpm intel-xppsl
 
@@ -22,13 +22,22 @@ src_unpack() {
 }
 
 src_prepare() {
+	default
+
 	echo ${PV} > "${S}/jemalloc/VERSION"
 	echo ${PV} > "${S}/VERSION"
 
 	# TODO The package contains its own jemalloc, maybe it can replaced by the one from portage
-	./build_jemalloc.sh
+	./build_jemalloc.sh || die
 
 	append-cflags -U_FORTIFY_SOURCE
+}
 
-	eapply_user
+src_configure() {
+	# The static_lib target is part of 'all': it runs ar -M to fuse
+	# .libs/libmemkind.a together with jemalloc's libjemalloc_pic.a into one
+	# archive.  econf disables static libraries by default, which leaves that
+	# input missing and the build dies with "ar: .libs/libmemkind.a: No such
+	# file or directory".
+	econf --enable-static
 }

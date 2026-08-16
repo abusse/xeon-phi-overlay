@@ -1,0 +1,232 @@
+Build the KNL benchmarks with GCC instead of icc.
+
+Intel's classic compiler was removed from ::gentoo, so the benchmarks have to
+build with GCC.  Rather than fight the makefiles from outside, route the
+icc-only spellings through variables.  Every default is unchanged, so an icc
+build behaves exactly as before:
+
+  OPENMP_CFLAGS            -qopenmp                -> -fopenmp
+  NO_OFFLOAD_CFLAGS        -qno-offload            -> (empty)
+  STREAMING_STORES_CFLAGS  -qopt-streaming-stores  -> (empty, no GCC equivalent)
+  KNL_ARCH_CFLAGS          -xMIC-AVX512            -> -march=knl
+  MKL_THREAD_LIB           mkl_intel_thread        -> mkl_gnu_thread
+  MPICC                    mpiicc                  -> mpicc
+  ICPC                     icpc                    -> g++
+  WERROR                   -Werror                 -> (empty)
+  MATH_LIBS                (empty)                 -> -lm -ldl
+  LIBXSMM_FC               ifort                   -> (empty)
+  LIBXSMM_ECFLAGS          (empty)                 -> -fcommon
+  CONV_TARGETS             mkl_conv libxsmm_conv   -> libxsmm_conv
+
+Overriding EXTRA_CFLAGS or CPU_CFLAGS from the command line instead does not
+work: gemm assigns them per target, and a command-line variable outranks a
+target-specific assignment, which drops the MKL include path.  The same is why
+CC cannot simply be set globally -- gemm picks CC per target.
+
+Notes on the less obvious ones:
+
+  - MATH_LIBS: the SNC targets call sqrt() but CPU_LIBS never listed a math
+    library.  icc links one implicitly, GCC does not.
+  - LIBXSMM_FC: LIBXSMM's Fortran probe emits a malformed link line against a
+    modern GCC -- a bare "/usr/lib/gcc/<tuple>/<ver>/" as an input file and a
+    stray "gfortran" -- so the link dies with "read: Is a directory".  micperf
+    does not use the Fortran bindings.
+  - LIBXSMM_ECFLAGS: LIBXSMM has tentative definitions that need -fcommon;
+    GCC 10 made -fno-common the default, so libxsmmnoblas.a and libxsmm.a
+    collide on libxsmm_scratch_malloc_fn and friends.
+  - CONV_TARGETS: mkl_conv includes mkl_dnn.h, i.e. MKL-DNN, which Intel split
+    out of MKL into oneDNN and no longer ships; its fallback path wants
+    mkldnn.hpp, and oneDNN is not in ::gentoo either.  There is no version of
+    MKL that can build it, so only the LIBXSMM convolution benchmark is built.
+
+Two symbols also have to go, because nothing outside Intel's toolchain provides
+them:
+
+  - kmp_get_affinity_max_proc() is Intel's OpenMP extension.  It is used only to
+    size the thread count, which omp_get_num_procs() reports.
+  - mkl_mic_get_device_count() counted attached Knights Corner coprocessors
+    through MKL's automatic offload, which oneAPI MKL no longer ships.  The call
+    sits in a diagnostic printf on the non-offload path, so report zero.
+
+diff -urN a/deepbench/code/intel/convolution/Makefile b/deepbench/code/intel/convolution/Makefile
+--- a/deepbench/code/intel/convolution/Makefile
++++ b/deepbench/code/intel/convolution/Makefile
+@@ -1,5 +1,12 @@
+ ICC ?= icc
+ TARGET_ICC ?= $(ICC)
++ICPC ?= icpc
++# Which convolution benchmarks to build, and how LIBXSMM is driven.  Defaults
++# are the original behaviour.
++CONV_TARGETS ?= mkl_conv libxsmm_conv
++CONV_INSTALL_TARGETS ?= mkl_conv_install libxsmm_conv_install
++LIBXSMM_FC ?= ifort
++LIBXSMM_ECFLAGS ?=
+ INSTALL ?= install
+ VERSION ?= 0.0.0
+ prefix ?= /usr
+@@ -9,15 +16,15 @@
+ docdir ?= $(datarootdir)/doc
+ srcinstalldir ?= $(prefix)/src/micperf
+ 
+-all: mkl_conv libxsmm_conv
+-install: mkl_conv_install libxsmm_conv_install
++all: $(CONV_TARGETS)
++install: $(CONV_INSTALL_TARGETS)
+ 
+ mkl_conv:
+ 	$(MAKE) -C mkl_conv all
+ 
+ libxsmm_conv:
+-	$(MAKE) -C libxsmm_conv/ libxsmm
+-	$(MAKE) -C libxsmm_conv/samples/dnn all
++	$(MAKE) -C libxsmm_conv/ libxsmm CC=$(ICC) CXX=$(ICPC) FC=$(LIBXSMM_FC) ECFLAGS=$(LIBXSMM_ECFLAGS)
++	$(MAKE) -C libxsmm_conv/samples/dnn all CC=$(ICC) CXX=$(ICPC) FC=$(LIBXSMM_FC) ECFLAGS=$(LIBXSMM_ECFLAGS)
+ 
+ clean:
+ 	$(MAKE) -C mkl_conv clean
+diff -urN a/gemm/Makefile b/gemm/Makefile
+--- a/gemm/Makefile
++++ b/gemm/Makefile
+@@ -27,6 +27,15 @@
+ ##******************************************************************************
+ 
+ ICC		?= icc
++MPICC		?= mpiicc
++# icc spellings, overridable so the benchmarks can be built with another
++# compiler.  Defaults are unchanged.
++OPENMP_CFLAGS	?= -qopenmp
++NO_OFFLOAD_CFLAGS ?= -qno-offload
++KNL_ARCH_CFLAGS	?= -xMIC-AVX512
++MKL_THREAD_LIB	?= mkl_intel_thread
++WERROR		?= -Werror
++MATH_LIBS	?=
+ TARGET_ICC	?= $(ICC)
+ INSTALL		?= install
+ VERSION		?= 0.0.0
+@@ -53,7 +62,7 @@
+ SOURCE          = bench.c bench.h main.c Makefile README.txt redist.txt utils.c utils.h cross_timer.h
+ 
+ # BASIC COMPILATION SETUP
+-MKL_CFLAGS	= -I$(MKLROOT)/include -qopenmp
++MKL_CFLAGS	= -I$(MKLROOT)/include $(OPENMP_CFLAGS)
+ 
+ # SETTING DYNAMIC=yes at make time forces dynamic linking with MKL
+ ifneq (yes,$(DYNAMIC))
+@@ -63,16 +72,16 @@
+ DYNAMIC		= -Bdynamic
+ endif
+ MKL_LIBS	= $(WLSTATIC) -lmkl_intel_lp64 -Wl,--start-group \
+-                  -lmkl_intel_thread -lmkl_core $(WLDYNAMIC) -Wl,--end-group
++                  -l$(MKL_THREAD_LIB) -lmkl_core $(WLDYNAMIC) -Wl,--end-group
+ MKL_LIBS_LINKER	= $(STATIC) -lmkl_intel_lp64 --start-group \
+-                  -lmkl_intel_thread -lmkl_core $(DYNAMIC) --end-group
++                  -l$(MKL_THREAD_LIB) -lmkl_core $(DYNAMIC) --end-group
+ 
+ K1OM_BIN_POSTFIX = /mic
+ 
+-MIC_CFLAGS	= $(MKL_CFLAGS) -qno-offload
++MIC_CFLAGS	= $(MKL_CFLAGS) $(NO_OFFLOAD_CFLAGS)
+ 
+-CPU_CFLAGS	= $(MKL_CFLAGS) -qno-offload
+-CPU_LIBS	= -L$(MKLROOT)/lib/intel64 $(MKL_LIBS)
++CPU_CFLAGS	= $(MKL_CFLAGS) $(NO_OFFLOAD_CFLAGS)
++CPU_LIBS	= -L$(MKLROOT)/lib/intel64 $(MKL_LIBS) $(MATH_LIBS)
+ 
+ knc: OFL_CFLAGS	= $(MKL_CFLAGS)
+ knc: OFL_LIBS	= $(CPU_LIBS) -offload-option,mic,ld,"-L$(MKLROOT)/lib/mic $(MKL_LIBS_LINKER) --no-undefined"
+@@ -82,7 +91,7 @@
+ knllb: OFL_LIBS = $(CPU_LIBS) -qoffload-option,mic,ld,"-L$(MKLROOT)/lib/intel64 $(MKL_LIBS_LINKER) -L$(card_libs) --no-undefined" -qoffload-option,mic,link,"-rpath-link=$(card_libs)"
+ knllb: MIC_LIBS	= -L$(MKLROOT)/lib/intel64 $(MKL_LIBS)
+ 
+-ALL_CFLAGS	= -O2 -Wall -Werror -g -std=c99
++ALL_CFLAGS	= -O2 -Wall $(WERROR) -g -std=c99
+ 
+ # PRECISION OPTIONS SELECTION
+ s%.x	: PREC	= -DSINGLE_PREC
+@@ -103,14 +112,14 @@
+ $(MCDRAM_CPU_TARGETS): CC        = $(ICC)
+ $(MCDRAM_CPU_TARGETS): EXTRA_CFLAGS  = $(CPU_CFLAGS) -DMCDRAM_KNLSB
+ $(MCDRAM_CPU_TARGETS): LIBS      = $(CPU_LIBS) -lmemkind
+-$(KNL_SNC_TARGETS): CC		= mpiicc
++$(KNL_SNC_TARGETS): CC		= $(MPICC)
+ $(KNL_SNC_TARGETS): EXTRA_CFLAGS  = $(CPU_CFLAGS) -DKNL_SNC_MODE
+ $(KNL_SNC_TARGETS): LIBS      = $(CPU_LIBS) -lnuma
+ 
+ # Optimize KNL binaries to use AVX512 and KNC card binaries for the k1om architecture
+ knc: MIC_CFLAGS += -mmic
+-knlsb: CPU_CFLAGS += -xMIC-AVX512
+-knllb: MIC_CFLAGS += -xMIC-AVX512
++knlsb: CPU_CFLAGS += $(KNL_ARCH_CFLAGS)
++knllb: MIC_CFLAGS += $(KNL_ARCH_CFLAGS)
+ 
+ knc: mkl-x86_64 mkl-k1om
+ 
+diff -urN a/gemm/bench.c b/gemm/bench.c
+--- a/gemm/bench.c
++++ b/gemm/bench.c
+@@ -85,7 +85,7 @@
+ 	in(C:length(elemsC) alloc_if(1) free_if(0))
+ #endif
+ 	{
+-		int max_threads = kmp_get_affinity_max_proc();
++		int max_threads = omp_get_num_procs();
+ 		int num_cores = max_threads / THREADS_PER_CORE;
+ 
+ 		if (getenv("OMP_NUM_THREADS") == NULL || num_threads > 0) {
+@@ -169,7 +169,7 @@
+ 	fill_matrix(B, elemsB);
+ 	fill_matrix(C, elemsC);
+ 
+-	max_threads = kmp_get_affinity_max_proc();
++	max_threads = omp_get_num_procs();
+ 	num_cores = max_threads / THREADS_PER_CORE;
+ 
+ 	if (getenv("KMP_HW_SUBSET") == NULL || num_threads > 0) {
+diff -urN a/gemm/main.c b/gemm/main.c
+--- a/gemm/main.c
++++ b/gemm/main.c
+@@ -239,7 +239,7 @@
+ #ifdef __INTEL_OFFLOAD
+ 			_Offload_number_of_devices()
+ #else
+-			mkl_mic_get_device_count()
++			0
+ #endif
+ 		);
+ #endif
+diff -urN a/stream/Makefile b/stream/Makefile
+--- a/stream/Makefile
++++ b/stream/Makefile
+@@ -22,6 +22,10 @@
+ #
+ 
+ ICC ?= icc
++# icc spellings, overridable; defaults unchanged.
++OPENMP_CFLAGS ?= -qopenmp
++STREAMING_STORES_CFLAGS ?= -qopt-streaming-stores always
++KNL_ARCH_CFLAGS ?= -xMIC-AVX512
+ TARGET_ICC ?= $(ICC)
+ INSTALL ?= install
+ VERSION ?= 0.0.0
+@@ -32,8 +36,8 @@
+ docdir ?= $(datarootdir)/doc
+ srcinstalldir ?= $(prefix)/src/micperf
+ 
+-EXTRA_CFLAGS = -O3 -qopenmp -DSTREAM_ARRAY_SIZE=64000000 -qopt-streaming-stores always
+-EXTRA_LDFLAGS = -qopenmp
++EXTRA_CFLAGS = -O3 $(OPENMP_CFLAGS) -DSTREAM_ARRAY_SIZE=64000000 $(STREAMING_STORES_CFLAGS)
++EXTRA_LDFLAGS = $(OPENMP_CFLAGS)
+ 
+ KNLSB_TARGETS = stream mcdram_stream
+ 
+@@ -50,8 +54,8 @@
+ 
+ # Optimize KNL binaries to use AVX512 and KNC card binaries for the k1om architecture
+ knc: MIC_CFLAGS = -mmic
+-knlsb: CPU_CFLAGS = -xMIC-AVX512
+-knllb: MIC_CFLAGS = -xMIC-AVX512
++knlsb: CPU_CFLAGS = $(KNL_ARCH_CFLAGS)
++knllb: MIC_CFLAGS = $(KNL_ARCH_CFLAGS)
+ 
+ install: install-knc
+ 
