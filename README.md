@@ -39,17 +39,60 @@ emaint sync -r science
 
 The XPPSL stack currently consists of the following packages:
 
-* xppsl-hwloc - a modified version of hwloc for the KNL architecture
 * xppsl-micperf - incorporates a variety of benchmarks into a simple user experience
 * xppsl-zonesort - the zonesort kernel module for the KNL
 * xppsl-memkind - a user-extensible heap manager for high bandwidth memory (MCDRAM)
 * xppsl-systools-sb - provides a variety of information and diagnostics for the processor
+
+(hwloc is no longer forked here: Intel's KNL work — MCDRAM, MemoryMode/ClusterMode
+— was upstreamed, so the meta package pulls Gentoo's `sys-apps/hwloc`.)
 
 Furthermore, there is a meta package available that merges the whole software stack. So in order to install all tools of the XPPSL simply run:
 
 ```
 emerge -av sys-apps/xppsl-meta
 ```
+
+### Building the benchmarks with icc (`xppsl-micperf[icc]`)
+
+Everything above builds with GCC and needs nothing extra — KNL is standard
+AVX-512, which GCC targets natively (`-march=knl`), so the default build already
+produces working Knights Landing code.
+
+For the Intel compiler the benchmarks were originally tuned with, `micperf`
+carries a `USE=icc` flag. Intel's classic `icc` is no longer sold, but the free
+oneAPI *classic* compiler still targets KNL (`-xMIC-AVX512`) up to release
+**2021.3** — later releases removed it. It is packaged, license-free, in the
+[natinst overlay](https://github.com/Nowa-Ammerlaan/natinst), which `USE=icc`
+depends on (both the 2021.3 compiler and the era-matched 2021.3 MKL — only that
+vintage still ships the KNL-tuned GEMM kernel `libmkl_avx512_mic` and the Intel
+threading layer).
+
+Enable the overlay and allow the packages:
+
+```
+eselect repository enable natinst
+emaint sync -r natinst
+echo 'intel-oneapi/* ~amd64' >> /etc/portage/package.accept_keywords/intel-oneapi
+```
+
+Two build-environment notes for the natinst packages:
+
+* Their `rpm-extended` eclass inherits `dkms`, whose `pkg_setup` insists on a
+  complete kernel source tree even for packages that ship no module. Set
+  `USE=-dkms` for them, and point `KERNEL_DIR` at a *prepared* kernel source
+  (one with a `Makefile`, i.e. `make modules_prepare` has been run) via
+  `/etc/portage/env` — the running kernel's `/usr/src/linux` is often only
+  half-configured.
+* The resulting benchmarks link Intel MKL and `libiomp5` from `/opt/intel/oneapi`,
+  which is not on the default library path. Source the oneAPI environment
+  (`. /opt/intel/oneapi/setvars.sh`) before running them, or the GCC-built ones,
+  which link the system MKL, will run without it.
+
+icc is worth it where you want the aggressive vectorisation and KNL tunings it
+was built for — on the STREAM kernel it emits noticeably more AVX-512 than GCC
+and adds streaming (non-temporal) stores — but it is strictly optional; the GCC
+path is the supported default.
 
 ## Installing the Manycore Platform Software Stack (MPSS)
 
