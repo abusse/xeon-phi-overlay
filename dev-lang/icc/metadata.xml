@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<longdescription lang="en">
+The classic (pre-oneAPI) Intel C/C++ Compiler.  These are the last icc
+generations able to target the Intel Xeon Phi: 17.0 is the final classic icc
+that can produce native Knights Corner (k1om) code with -mmic, and both 15.0
+and 17.0 target Knights Landing with -xMIC-AVX512.  Intel has retired these
+products, so the source tarballs must be supplied manually to DISTDIR, and a
+valid classic Intel license is required at runtime.
+	</longdescription>
+	<use>
+		<flag name="examples">Install the bundled sample programs</flag>
+	</use>
+</pkgmetadata>
