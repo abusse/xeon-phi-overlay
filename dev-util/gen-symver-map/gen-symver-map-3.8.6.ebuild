@@ -3,7 +3,7 @@
 
 EAPI=8
 
-PYTHON_COMPAT=( python3_{10..13} )
+PYTHON_COMPAT=( python3_{10..14} )
 
 inherit intel-mpss python-r1
 
@@ -21,8 +21,8 @@ LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="~amd64"
 
-# configparser is stdlib on python3
-RDEPEND=""
+# configparser is stdlib on python3; RDEPEND on an interpreter for the env-python3 shebang
+RDEPEND="${PYTHON_DEPS}"
 
 src_unpack() {
 	unpack ${A}
@@ -30,10 +30,8 @@ src_unpack() {
 }
 
 src_prepare() {
-	# The script is written for Python v2
-	sed -i -e 's/\(#!\/usr\/bin\/env python\)/\12/g' "${WORKDIR}/${P}/${PN}"
-
-	eapply_user
+	# Apply the Python 3 port (PATCHES); default also runs eapply_user.
+	default
 }
 
 src_install() {
