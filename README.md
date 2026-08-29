@@ -106,16 +106,91 @@ In order to run the Xeon Phi card, the MPSS daemon has to be installed:
 emerge -av sys-apps/mpss-daemon
 ```
 
-This package will pull in all other packages that necessary to run the Xeon Phi. It will install an init script that allows to start the card. However, you have to remember to configure it first. Intel's MPSS user's guide is no longer served by Intel; it ships as `doc/mpss_users_guide.pdf` inside the [MPSS 3.8.6 release](https://archive.org/details/intel-mpss-3.8.6) this overlay builds from. Once configured, start the card with:
+This package pulls in everything else needed to run a Knights Corner card — the `mic.ko` host driver (`sys-kernel/mpss-modules`), the SCIF and management libraries, the `micctrl`/`micinfo`/`micflash` tools, and the card's bootable Linux image (`sys-kernel/mic-image`). It also installs an OpenRC init script. Intel's MPSS user's guide is no longer served by Intel; it ships as `doc/mpss_users_guide.pdf` inside the [MPSS 3.8.6 release](https://archive.org/details/intel-mpss-3.8.6) this overlay builds from.
+
+The rest of this section walks through bringing a card all the way up.
+
+#### Host kernel requirement
+
+The `mic.ko` driver only builds against a **host kernel of 5.4 or older**. On 5.10+ it fails to compile — the KNC driver still uses `set_fs()`, which was removed from x86 in 5.10 — and on 4.19 and earlier it fails on the `mm->pinned_vm` reference counter, which only became an `atomic64_t` in 5.1. A **5.4 longterm** kernel hits both constraints. Build the module (and later any out-of-tree pieces) with the *same* compiler that built the kernel.
+
+#### First boot
+
+Load the driver and let `micctrl` generate a default configuration for every card it detects:
 
 ```
-/etc/init.d/mpss start
+modprobe mic
+micctrl --initdefaults
 ```
 
-The Xeon Phi can also be started during system boot:
+`--initdefaults` writes one `/etc/mpss/micN.conf` per card, composes each card's root filesystem under `/var/mpss/`, and copies the host's root SSH public key into the card so that `ssh micN` works without a password. The card's own root account stays locked — access is key-only.
+
+Start the stack. With the default `BootOnStart Enabled` in each card's config this also boots the cards:
+
+```
+rc-service mpss start
+```
+
+Watch them come up (`ready` → `booting` → `online`) and log in:
+
+```
+micctrl -s
+ssh mic0 uname -a          # -> Linux mic0.local ... k1om GNU/Linux
+```
+
+To boot the cards automatically at system start:
 
 ```
 rc-update add mpss default
+```
+
+> **Heads-up:** `rc-service mpss start` may print `failed` even though the cards boot fine. The init script's `micctrl -w` "wait for boot" helper can abort with a glibc *double free* on a modern toolchain. `mpssd` itself is unaffected — confirm with `micctrl -s`.
+
+#### Networking
+
+By default each card gets a private point-to-point link to the host (`StaticPair`: host `172.31.<n>.254`, card `172.31.<n>.1`), reachable only from the host. Networking is changed with `micctrl --network` while the daemon is stopped.
+
+To put the cards on your **real LAN** through an existing host bridge — here `br0`, already carrying the physical NIC and the host's own address — register the bridge and switch the cards to DHCP over it:
+
+```
+rc-service mpss stop
+micctrl --addbridge=br0 --type=external --ip=<host-ip> --netbits=<bits> --mtu=1500
+micctrl --network=dhcp --bridge=br0 mic0 mic1
+rc-service mpss start
+```
+
+**On Gentoo this is not enough on its own.** `micctrl` enslaves the card interfaces to the bridge by calling the RedHat/SUSE `ifup`/`ifdown` scripts, which Gentoo does not have — so `micN` never actually joins `br0`, and the card's DHCP request never leaves the host. Add the card interfaces to the bridge yourself with a udev rule that fires when the `mic` driver creates each interface:
+
+```
+# /etc/udev/rules.d/70-mic-bridge.rules
+SUBSYSTEM=="net", ACTION=="add", KERNEL=="mic[0-9]*", RUN+="/bin/ip link set %k mtu 1500 master br0 up"
+```
+
+Match the MTU to the bridge (**1500** for a normal LAN) at *both* ends: the rule sets it on the host side, and `micctrl` sets the card side from the bridge's `--mtu`. A mismatch silently drops every frame on the virtual PCIe link — the symptom is a card that is `online` but whose host-side `micN` shows `RX: packets 0`. Finally make the daemon start after the bridge exists, so the rule has something to enslave to:
+
+```
+# /etc/conf.d/mpss
+rc_need="net.br0"
+```
+
+Once bridged, each card requests a lease as `micN.local`; find the addresses on your DHCP server or with `ip neigh show dev br0`. Assign DHCP reservations if you want them to be stable.
+
+#### If a card comes up wrong after a config change
+
+The image generator runs `gzip` without `-f`, so an existing `/var/mpss/micN.image.gz` is **not** overwritten and the card can boot a stale root filesystem (old network settings, etc.). After changing a card's config, delete the composed images so they are regenerated on the next boot:
+
+```
+rc-service mpss stop
+rm -f /var/mpss/mic*.image /var/mpss/mic*.image.gz
+rc-service mpss start
+```
+
+A single misbehaving card can be recycled on its own without disturbing the others:
+
+```
+micctrl -r mic0                                   # reset to ready
+rm -f /var/mpss/mic0.image /var/mpss/mic0.image.gz
+micctrl -b mic0                                   # boot it again
 ```
 
 ### MPSS SDK
