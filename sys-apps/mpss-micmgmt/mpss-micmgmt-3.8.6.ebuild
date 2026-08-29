@@ -20,8 +20,12 @@ PATCHES=(
 	"${FILESDIR}/${P}-popen-pclose.patch"
 )
 
-DEPEND="app-text/asciidoc"
-RDEPEND="=sys-libs/libmicmgmt-${PV} =sys-firmware/mpss-flash-${PV}"
+# links -lscif -lmicmgmt against both libraries' headers
+DEPEND="app-text/asciidoc
+	=sys-libs/libscif-${PV}
+	=sys-libs/libmicmgmt-${PV}"
+RDEPEND="=sys-libs/libscif-${PV}
+	=sys-libs/libmicmgmt-${PV} =sys-firmware/mpss-flash-${PV}"
 
 src_unpack() {
 	unpack ${A}

@@ -21,8 +21,11 @@ PATCHES=(
 	"${FILESDIR}/${P}-uninit-ptrig.patch"
 )
 
-DEPEND="app-text/asciidoc"
-RDEPEND="=sys-kernel/mic-rasmm-kernel-${PV}"
+# miclib.h includes scif.h and the library links -lscif
+DEPEND="app-text/asciidoc
+	=sys-libs/libscif-${PV}"
+RDEPEND="=sys-kernel/mic-rasmm-kernel-${PV}
+	=sys-libs/libscif-${PV}"
 
 src_unpack() {
 	unpack ${A}
