@@ -13,26 +13,27 @@ LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="~amd64"
 
-# The driver calls set_fs()/KERNEL_DS, which x86 lost in 5.10, so 5.4 is a hard
-# ceiling rather than a warning.  Raising it means porting the remaining uaccess
-# calls in host/ to kernel_read()/kernel_write().
-MODULES_KERNEL_MAX=5.4
+# Forward-ported and RMA-tested on every kernel from 4.19 through 6.18.  Beyond
+# 6.18 is untested, so cap it here; bump after validating a newer kernel per
+# PORTING.md in the source git tree.
+MODULES_KERNEL_MAX=6.18
 
 PATCHES=(
-	# Intel's last KNC release targets RHEL 7.4 (3.10).  This forward-ports it
-	# over the 4.15 timer conversion (timer_setup()/from_timer(), which dropped
-	# the .data member the vcons and boot timers relied on) up to 5.4.  Derived
-	# from github.com/charlieporth1/mpss-modules, with that fork's bring-up
-	# trace printks removed -- they included one in adapter_isr() and a "%s"
-	# passed an int, and one that had swallowed the body of a braceless
-	# "if (!etc_comp)" so calc_deltaf() re-ran its timed measurement loop on
-	# every init.  Also corrects the get_user_pages() calls in scif_pin_pages()
-	# and mic_pin_user_pages(): the fork's collapse of the pre-4.6 8-arg form
-	# left current/current->mm as the start address and PROT_WRITE as gup flags,
-	# so SCIF RMA registration failed with EFAULT (bring-up was unaffected --
-	# only the memory-pinning/offload path pins user pages).  Maintained in a git
-	# tree (pristine -> patch); regenerate with `git diff pristine <branch>`.
-	"${FILESDIR}/${P}-linux-5.4.patch"
+	# Intel's last KNC release targets RHEL 7.4 (3.10).  This single patch
+	# carries the whole forward-port from there to Linux 6.18, every hunk
+	# version- or feature-guarded (see the added include/mic/mic_compat.h) so
+	# one source still builds -- warning-clean -- on 4.19 through 6.18.  It
+	# covers, among others: the 4.15 timer_setup() conversion; the timer rename
+	# (del_timer_sync/from_timer -> timer_delete_sync/timer_container_of);
+	# mm->mmap_sem -> mmap_lock; proc_ops; ioremap_nocache -> ioremap; the
+	# pci_*() -> dma_*() DMA API; get_user_pages() losing its vmas arg (and a
+	# corrected arg bug that made scif_pin_pages() fail with EFAULT); read-only
+	# vma->vm_flags; const dev_addr / bin_attribute / tty set_termios;
+	# MAX_ORDER -> MAX_PAGE_ORDER; struct file f_count -> f_ref; and a private
+	# struct mic_vmcore after the kernel's left the public headers.  Maintained
+	# in a git tree (tag `pristine` -> per-kernel `port-*` branches); regenerate
+	# with `git diff pristine <tag>` -- see PORTING.md there.
+	"${FILESDIR}/${P}-linux-5.4-6.18.patch"
 )
 
 MIC_ARCH=k1om
