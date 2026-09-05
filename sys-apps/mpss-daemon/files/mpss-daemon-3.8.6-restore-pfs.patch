@@ -1,0 +1,40 @@
+--- a/libmpssconfig/mpssconfig.c
++++ b/libmpssconfig/mpssconfig.c
+@@ -728,6 +728,15 @@
+ 				return 0;
+ 			strcpy(mic->config.rootdev.nfsusr, usrpath);
+ 		}
++	} else if (!strcasecmp(roottype, "pfs") || !strcasecmp(roottype, "persistentfs")) {
++		mic->config.rootdev.type = ROOT_TYPE_PFS;
++		if (rootpath == NULL) {
++			add_perr(perrs, PERROR, "%s: [Parse] RootDevice specifies PersistentFS but no backing file/device", mic->name);
++		} else {
++			if ((mic->config.rootdev.target = (char *) malloc(strlen(rootpath) + 1)) == NULL)
++				return 0;
++			strcpy(mic->config.rootdev.target, rootpath);
++		}
+ 	} else {
+ 		add_perr(perrs, PERROR, "%s: [Parse] RootDevice unknown type '%s'", mic->name, roottype);
+ 		mic->config.rootdev.type = NOTSET;
+--- a/mpssd/mpssd.c
++++ b/mpssd/mpssd.c
+@@ -666,6 +666,19 @@
+ 		mpsslog(PINFO, "%s: Booting %s initrd %s\n", mic->name, mic->config.boot.osimage, initrd);
+ 	}
+ 
++	/*
++	 * PersistentFS: assign the virtblk backing store now, after the boot
++	 * request has (re)initialized the card's virtblk state.  The card-side
++	 * init loads mic_virtblk and mounts /dev/vda as root.
++	 */
++	if (mic->config.rootdev.type == ROOT_TYPE_PFS && mic->config.rootdev.target != NULL) {
++		sleep(3);
++		if (mpss_setsysfs(mic->name, "virtblk_file", mic->config.rootdev.target) != 0)
++			mpsslog(PWARN, "%s: PFS: could not set virtblk_file %s\n", mic->name, mic->config.rootdev.target);
++		else
++			mpsslog(PINFO, "%s: PFS: virtblk_file = %s\n", mic->name, mic->config.rootdev.target);
++	}
++
+ bootmic_done:
+ 	while (pthread_mutex_lock(&mpssdi->pth_lock) != 0);
+ 	mpssdi->boot_pth = 0;

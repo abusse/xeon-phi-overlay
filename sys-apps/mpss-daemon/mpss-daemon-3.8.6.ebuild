@@ -28,6 +28,11 @@ PATCHES=(
 	# on anything else. Teach them about Gentoo so they work without
 	# MPSS_DIST= being set by hand.
 	"${FILESDIR}/${P}-gentoo-distro.patch"
+
+	# Restore PersistentFS (virtblk-backed root): re-add the RootDevice
+	# "PFS"/"PersistentFS" parser case dropped in 3.8.6, and have mpssd
+	# assign the virtblk_file backing store at boot for that root type.
+	"${FILESDIR}/${P}-restore-pfs.patch"
 )
 
 DEPEND="=sys-libs/mpss-headers-${PV}
