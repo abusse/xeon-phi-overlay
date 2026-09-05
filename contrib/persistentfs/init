@@ -1,0 +1,102 @@
+#!/bin/sh
+#
+# InitRamFs: mount a virtblk-backed persistent root (/dev/vda) and switch to it;
+# NFS and tmpfs paths preserved. Card modules are loaded here (persistent rootfs
+# has no /lib/modules). Markers logged at <0> (KERN_EMERG) so they print past
+# the "quiet" cmdline.
+#
+kl(){ echo "<0>GINIT: $*" > /dev/kmsg 2>/dev/null; }
+kl "===== custom init v3 START ====="
+
+(
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+export PATH
+umask 0022
+[ -d /sys ] || mkdir /sys
+[ -d /proc ] || mkdir /proc
+
+[ -d /etc/modules-load.d ] || mkdir -p /etc/modules-load.d
+[ -d /etc/modprobe.d ] || mkdir -p /etc/modprobe.d
+> /etc/modules-load.d/mic-modules.conf
+> /etc/modprobe.d/mic-modules.conf
+while read module args; do
+	eval args=\"`echo $args | sed -r \
+		-e 's/(\w+)=(\s|$)/${\1:+\1=}$\1 /g' \
+		-e 's/(\w+)=(\w+)/${\2:+\1=}$\2 /g'`\"
+	echo $module >> /etc/modules-load.d/mic-modules.conf
+	[ -n "$args" ] && echo options $module $args >> /etc/modprobe.d/mic-modules.conf
+done << "EOF"
+	michvc vcons_hdr_addr=
+	intel_micveth vnet= vnet_addr= vnet_num_buffers=
+	micscif p2p= p2p_proxy= p2p_proxy_thresh= numa_node= scif_id= scif_addr= reg_cache= ulimit= huge_page= \
+		pm_qos_cpu_dma_lat=
+	mic_virtblk virtio_addr=
+	ramoops mem_size=ramoops_size mem_address=ramoops_addr
+	micras
+EOF
+update-modules force 2>/dev/null
+
+mkdir /new_root
+mount -t proc none /proc
+mount -t sysfs none /sys   # needed to see /sys/block/vda and mknod its node
+
+for param in `cat /proc/cmdline`; do
+	case "$param" in
+	root=*|ip=*|hwaddr=*|netmask=*|mtu=*) eval ${param%%=*}=\"${param#*=}\" ;;
+	esac
+done
+kl "cmdline root=$root"
+
+if [ "`echo $root | cut -c1-3`" = "nfs" ]; then
+	nfs_server=`echo $root | cut -d: -f2`; nfs_dir=`echo $root | cut -d: -f3`
+	modprobe dma_module; modprobe intel_micveth
+	[ -n "$hwaddr" ] && ifconfig mic0 hw ether $hwaddr
+	[ -n "$netmask" ] && ifconfig mic0 mask $netmask
+	[ -n "$mtu" ] && ifconfig mic0 mtu $mtu
+	if [ "$ip" = "dhcp" ]; then udhcpc -i mic0; else ifconfig mic0 $ip up; fi
+	mount -t nfs $nfs_server:$nfs_dir /new_root/ -o nolock,soft,timeo=900,retrans=3
+else
+	kl "loading card modules"
+	modprobe dma_module; modprobe micscif; modprobe michvc
+	modprobe intel_micveth; modprobe micras; modprobe ramoops
+	kl "modules loaded; nets=$(ls /sys/class/net 2>/dev/null | tr '\n' ' '); polling for /dev/vda"
+	# The card kernel has no devtmpfs/udev, so /dev/vda is never auto-created
+	# even after mic_virtblk registers the disk. Watch sysfs and mknod it.
+	vdaok=0; i=0
+	while [ $i -lt 45 ]; do
+		modprobe mic_virtblk 2>/dev/null
+		if [ -e /sys/block/vda/dev ]; then
+			mm=$(cat /sys/block/vda/dev)
+			[ -e /dev/vda ] || mknod /dev/vda b ${mm%%:*} ${mm##*:}
+			vdaok=1; break
+		fi
+		rmmod mic_virtblk 2>/dev/null
+		i=$((i+1)); sleep 1
+	done
+	kl "poll done: vdaok=$vdaok after ${i}s dev=$(cat /sys/block/vda/dev 2>/dev/null)"
+	if [ "$vdaok" = "1" ] && { mount -t ext4 -o noatime /dev/vda /new_root || mount -o noatime /dev/vda /new_root; }; then
+		kl "MOUNTED /dev/vda as new root -> switching"
+		# Signal the host that the card is online (stock sysonline equivalent):
+		# clears mpssd's "boot failed"/reset and brings up the mic0 vnet link.
+		modprobe mpssboot 2>/dev/null
+		echo done > /sys/class/micnotify/notify/host_notified 2>/dev/null
+		kl "signaled online (host_notified)"
+		# Bring up mic0 and grab a DHCP lease now: the vnet link only comes up a
+		# few seconds after 'online', which the persistent rootfs's own net.mic0
+		# races and loses. The lease persists across switch_root.
+		ip link set mic0 up 2>/dev/null
+		w=0; while [ $w -lt 15 ]; do [ "$(cat /sys/class/net/mic0/carrier 2>/dev/null)" = 1 ] && break; sleep 1; w=$((w+1)); done
+		kl "mic0 carrier after ${w}s = $(cat /sys/class/net/mic0/carrier 2>/dev/null)"
+		udhcpc -i mic0 -t 8 -T 2 -n -q 2>&1 | while read l; do kl "dhcp: $l"; done
+		kl "mic0 addr = $(ip -o -4 addr show mic0 2>/dev/null | awk '{print $4}')"
+		[ -d /new_root/var/volatile/run ] && rm -fr /new_root/var/volatile/run
+	else
+		kl "vda unavailable -> tmpfs fallback"
+		mount -t tmpfs none /new_root -o mode=0755,size=85%
+		find -xdev ! -regex '\.\(/\(new_root\|RPMs-to-install\)\(/.*\)\?\)\?' | cpio -m -p /new_root
+	fi
+fi
+)
+
+kl "exec switch_root /new_root /sbin/init"
+exec /sbin/switch_root /new_root /sbin/init

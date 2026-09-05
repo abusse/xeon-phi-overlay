@@ -193,6 +193,61 @@ rm -f /var/mpss/mic0.image /var/mpss/mic0.image.gz
 micctrl -b mic0                                   # boot it again
 ```
 
+### Booting a card from a block device (PersistentFS)
+
+By default a card boots a RAM disk (`RootDevice Ramfs`), so any change is lost on
+reboot. This overlay restores MPSS's **PersistentFS** mode, which lets a card
+mount its root filesystem from a host file, an LVM volume, or a **ZFS zvol** over
+virtio-blk (it appears as `/dev/vda` on the card) — persistent like a real disk.
+Intel shipped this in earlier MPSS but dropped the config parser for it in 3.8.6;
+the `sys-apps/mpss-daemon` ebuild here patches it back in and has `mpssd` assign
+the backing store to `/sys/class/mic/micN/virtblk_file` automatically at boot.
+
+It needs three things beyond the stock setup:
+
+- A **card kernel** with virtio, ext4 and devtmpfs. The stock in-tree config has
+  none of these; a ready-made one is at
+  `sys-kernel/mic-sources/files/config-knc-persistentfs` (adds `VIRTIO`,
+  `VIRTIO_RING`, `EXT4_FS`, `DEVTMPFS`, `I2C_PXA`/`I2C_CHARDEV`, drops the
+  standalone `EXT2/3` drivers). Build it with the k1om cross toolchain and
+  install the resulting `bzImage`/`System.map` as the card's `OSimage`.
+- The **card-side modules** (`micscif`, `intel_micveth`, `michvc`, `mic_virtblk`,
+  …) built from the same `sys-kernel/mpss-modules` source but for the card — run
+  `make` with `MIC_CARD_ARCH` unset and `KERNEL_SRC=` pointing at that kernel —
+  and placed in the initramfs so they match its vermagic.
+- An **initramfs** whose `/init` loads those modules, mounts `/dev/vda` and
+  `switch_root`s into it. Since the persistent rootfs has no `/lib/modules` and
+  the initramfs has no udev, the init mknods `/dev/vda` from `/sys/block/vda`,
+  signals the host it is online
+  (`modprobe mpssboot; echo done > /sys/class/micnotify/notify/host_notified`),
+  and DHCPs `mic0` before switching. A working example is in
+  `contrib/persistentfs/init`.
+
+Prepare the backing store (a zvol here) with a k1om root filesystem:
+
+```
+zfs create -V 8G tank/mic0-root
+mkfs.ext4 -O ^64bit,^metadata_csum /dev/zvol/tank/mic0-root
+mount /dev/zvol/tank/mic0-root /mnt/root
+# unpack a k1om rootfs into /mnt/root, then:
+umount /mnt/root
+```
+
+Point the card at it in `/etc/mpss/micN.conf` and (re)start `mpss`:
+
+```
+RootDevice PersistentFS /dev/zvol/tank/mic0-root
+Base CPIO /usr/share/mpss/boot/<persistentfs-initramfs>.cpio.gz
+OSimage   /usr/share/mpss/boot/<card-bzImage> /usr/share/mpss/boot/<System.map>
+```
+
+`mpssd` builds a `root=/dev/vda` command line, assigns the backing store, and the
+card mounts its persistent root.
+
+> The stock card userland ships OpenSSH 6.4, whose `ssh-rsa`/SHA-1 a modern
+> client refuses by default. Reach the card with:
+> `ssh -o PubkeyAcceptedAlgorithms=+ssh-rsa -o HostKeyAlgorithms=+ssh-rsa root@<card>`
+
 ### MPSS SDK
 
 This overlay also includes an ebuild for the SDK supplied by Intel. It can be installed into your Gentoo environment by running:

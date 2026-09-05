@@ -17,4 +17,11 @@ src_unpack() {
 	unpack ${A}
 	unpack ./mpss-${MPSS_VER}/src/linux-${PV%_p*}+mpss${MPSS_VER}.tar.bz2
 	mv linux-${PV%_p*}+mpss${MPSS_VER} linux-${PV}-mic
+
+	# kernel/timeconst.pl uses the Perl-4 idiom defined(@array), removed in
+	# modern Perl (>=5.22); it aborts the build on a current host.  Patch it so
+	# the card kernel builds with today's host Perl.
+	pushd linux-${PV}-mic > /dev/null || die
+	eapply "${FILESDIR}/mic-sources-${PV}-timeconst-perl.patch"
+	popd > /dev/null || die
 }
