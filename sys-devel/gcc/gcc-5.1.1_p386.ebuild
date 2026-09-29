@@ -169,8 +169,8 @@ src_configure() {
 		use cxx && langs+=",c++"
 		use fortran && langs+=",fortran"
 
+		is_cross && confgcc+=( --with-sysroot="${EPREFIX}"/usr/${CTARGET} )
 		confgcc+=(
-			--with-sysroot="${EPREFIX}"/usr/${CTARGET}
 			--enable-shared
 			--enable-threads=posix
 			--enable-__cxa_atexit
@@ -251,6 +251,15 @@ src_install() {
 		emake DESTDIR="${D}" install-gcc install-target-libgcc
 	else
 		emake DESTDIR="${D}" install
+	fi
+
+	# A native compiler built on another machine ran fixincludes over the
+	# build machine's /usr/include; keep only GCC's own limits headers.
+	if ! is_cross && tc-is-cross-compiler ; then
+		local fixed
+		while IFS= read -r -d '' fixed ; do
+			find "${fixed}" -mindepth 1 ! -name limits.h ! -name syslimits.h ! -name README -delete || die
+		done < <(find "${ED}" -type d -name include-fixed -print0)
 	fi
 
 	# gcc-config expects the driver under BINPATH without the target prefix
