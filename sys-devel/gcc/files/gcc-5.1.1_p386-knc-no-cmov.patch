@@ -1,0 +1,15 @@
+KNC (P54C-derived) has no CMOV. "#pragma GCC target" processing, e.g. from
+<immintrin.h>, forced TARGET_CMOV on for SSE and it was never restored, so
+code after the include got cmov that the k1om assembler rejects.
+
+--- a/gcc/config/i386/i386.c	2026-09-28 22:05:24.768203200 +0200
++++ b/gcc/config/i386/i386.c	2026-09-28 22:05:24.791584875 +0200
+@@ -4257,7 +4257,7 @@
+   /* For sane SSE instruction set generation we need fcomi instruction.
+      It is safe to enable all CMOVE instructions.  Also, RDRAND intrinsic
+      expands to a sequence that includes conditional move. */
+-  if (TARGET_SSE || TARGET_RDRND)
++  if ((TARGET_SSE || TARGET_RDRND) && !TARGET_KNC)
+     TARGET_CMOV = 1;
+ 
+   /* Figure out what ASM_GENERATE_INTERNAL_LABEL builds as a prefix.  */

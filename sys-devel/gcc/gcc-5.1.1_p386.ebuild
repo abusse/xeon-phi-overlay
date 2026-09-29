@@ -56,6 +56,10 @@ BDEPEND="
 "
 
 PATCHES=(
+	# KNC has no CMOV; keep "#pragma GCC target" (e.g. <immintrin.h>) from
+	# switching it on.
+	"${FILESDIR}/${P}-knc-no-cmov.patch"
+
 	# GCC 5's wide-int.h puts a stray "template <>" in front of partial
 	# specialisations of binary_traits/int_traits.  That is ill-formed, and
 	# every compiler since GCC 6 rejects it outright with "too many
