@@ -17,6 +17,7 @@ eblit-glibc-src_prepare() {
 		fi
 	fi
 
+	eapply "${FILESDIR}"/${P}-ldconfig-k1om.patch
 	eapply_user
 
 	gnuconfig_update

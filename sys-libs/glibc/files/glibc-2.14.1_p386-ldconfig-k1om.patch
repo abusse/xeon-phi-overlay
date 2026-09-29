@@ -1,0 +1,15 @@
+ldconfig only classified EM_X86_64 libraries as 64-bit libc6 objects and
+skipped K1OM ones as "unknown machine 181", so no ld.so.cache could be built.
+
+--- a/sysdeps/unix/sysv/linux/i386/readelflib.c
++++ b/sysdeps/unix/sysv/linux/i386/readelflib.c
+@@ -37,6 +37,9 @@
+   switch (elf_header->e_machine)
+     {
+     case EM_X86_64:
++#ifdef EM_K1OM
++    case EM_K1OM:
++#endif
+       if (elf_header->e_ident[EI_CLASS] == ELFCLASS64)
+ 	/* X86-64 64bit libraries are always libc.so.6+.  */
+ 	file_flag = FLAG_X8664_LIB64|FLAG_ELF_LIBC6;
