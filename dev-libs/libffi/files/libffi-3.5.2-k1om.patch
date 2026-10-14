@@ -1,0 +1,381 @@
+KNC (k1om) has no SSE registers; its psABI passes float/double arguments
+and returns in the low lane of %zmm0-7 instead of %xmm0-7.
+
+--- a/src/x86/unix64.S
++++ b/src/x86/unix64.S
+@@ -28,6 +28,15 @@
+ 
+ #ifdef __x86_64__
+ #define LIBFFI_ASM	
++
++#ifdef __k1om__
++/* KNC has no SSE registers: float/double arguments and returns live in the
++   low lane of %zmm0-7.  Stores go through a masked packstore; K1OM_ZLO moves
++   the low 64 bits of a zmm register into a GPR via an 8-byte red-zone slot,
++   since the final destination is not always 8-byte aligned.  */
++# define K1OM_K1		movl $1, %r11d; kmov %r11d, %k1
++# define K1OM_ZLO(z, r)	K1OM_K1; vpackstorelpd z, -48(%rsp){%k1}; movq -48(%rsp), r
++#endif
+ #include <fficonfig.h>
+ #include <ffi.h>
+ #include "internal64.h"
+@@ -171,12 +180,20 @@
+ 	ret
+ E(L(store_table), UNIX64_RET_XMM32)
+ 	_CET_ENDBR
++#ifdef __k1om__
++	jmp	L(k1om_st_xmm32)
++#else
+ 	movd	%xmm0, (%rdi)
+ 	ret
++#endif
+ E(L(store_table), UNIX64_RET_XMM64)
+ 	_CET_ENDBR
++#ifdef __k1om__
++	jmp	L(k1om_st_xmm64)
++#else
+ 	movq	%xmm0, (%rdi)
+ 	ret
++#endif
+ E(L(store_table), UNIX64_RET_X87)
+ 	_CET_ENDBR
+ 	fstpt	(%rdi)
+@@ -192,12 +209,20 @@
+ 	jmp	L(s3)
+ E(L(store_table), UNIX64_RET_ST_RAX_XMM0)
+ 	_CET_ENDBR
++#ifdef __k1om__
++	jmp	L(k1om_st_rax_xmm0)
++#else
+ 	movq	%xmm0, 8(%rsi)
+ 	jmp	L(s2)
++#endif
+ E(L(store_table), UNIX64_RET_ST_XMM0_XMM1)
+ 	_CET_ENDBR
++#ifdef __k1om__
++	jmp	L(k1om_st_xmm0_xmm1)
++#else
+ 	movq	%xmm1, 8(%rsi)
+ 	jmp	L(s3)
++#endif
+ E(L(store_table), UNIX64_RET_ST_RAX_RDX)
+ 	_CET_ENDBR
+ 	movq	%rdx, 8(%rsi)
+@@ -208,10 +233,33 @@
+ 	ret
+ 	.balign 8
+ L(s3):
++#ifdef __k1om__
++	K1OM_ZLO(%zmm0, %r10)
++	movq	%r10, (%rsi)
++#else
+ 	movq	%xmm0, (%rsi)
++#endif
+ 	shrl	$UNIX64_SIZE_SHIFT, %ecx
+ 	rep movsb
+ 	ret
++#ifdef __k1om__
++L(k1om_st_xmm32):
++	K1OM_ZLO(%zmm0, %r10)
++	movl	%r10d, (%rdi)
++	ret
++L(k1om_st_xmm64):
++	K1OM_ZLO(%zmm0, %r10)
++	movq	%r10, (%rdi)
++	ret
++L(k1om_st_rax_xmm0):
++	K1OM_ZLO(%zmm0, %r10)
++	movq	%r10, 8(%rsi)
++	jmp	L(s2)
++L(k1om_st_xmm0_xmm1):
++	K1OM_ZLO(%zmm1, %r10)
++	movq	%r10, 8(%rsi)
++	jmp	L(s3)
++#endif
+ 
+ L(sa):	call	PLT(C(abort))
+ 
+@@ -222,6 +270,16 @@
+ L(UW3):
+ 	/* cfi_restore_state */
+ L(load_sse):
++#ifdef __k1om__
++	vbroadcastsd 0x30(%r10), %zmm0
++	vbroadcastsd 0x40(%r10), %zmm1
++	vbroadcastsd 0x50(%r10), %zmm2
++	vbroadcastsd 0x60(%r10), %zmm3
++	vbroadcastsd 0x70(%r10), %zmm4
++	vbroadcastsd 0x80(%r10), %zmm5
++	vbroadcastsd 0x90(%r10), %zmm6
++	vbroadcastsd 0xa0(%r10), %zmm7
++#else
+ 	movdqa	0x30(%r10), %xmm0
+ 	movdqa	0x40(%r10), %xmm1
+ 	movdqa	0x50(%r10), %xmm2
+@@ -230,6 +288,7 @@
+ 	movdqa	0x80(%r10), %xmm5
+ 	movdqa	0x90(%r10), %xmm6
+ 	movdqa	0xa0(%r10), %xmm7
++#endif
+ 	jmp	L(ret_from_load_sse)
+ 
+ L(UW4):
+@@ -256,6 +315,17 @@
+ L(UW6):
+ 	/* cfi_adjust_cfa_offset(ffi_closure_FS) */
+ 
++#ifdef __k1om__
++	K1OM_K1
++	vpackstorelpd %zmm0, ffi_closure_OFS_V+0x00(%rsp){%k1}
++	vpackstorelpd %zmm1, ffi_closure_OFS_V+0x10(%rsp){%k1}
++	vpackstorelpd %zmm2, ffi_closure_OFS_V+0x20(%rsp){%k1}
++	vpackstorelpd %zmm3, ffi_closure_OFS_V+0x30(%rsp){%k1}
++	vpackstorelpd %zmm4, ffi_closure_OFS_V+0x40(%rsp){%k1}
++	vpackstorelpd %zmm5, ffi_closure_OFS_V+0x50(%rsp){%k1}
++	vpackstorelpd %zmm6, ffi_closure_OFS_V+0x60(%rsp){%k1}
++	vpackstorelpd %zmm7, ffi_closure_OFS_V+0x70(%rsp){%k1}
++#else
+ 	movdqa	%xmm0, ffi_closure_OFS_V+0x00(%rsp)
+ 	movdqa	%xmm1, ffi_closure_OFS_V+0x10(%rsp)
+ 	movdqa	%xmm2, ffi_closure_OFS_V+0x20(%rsp)
+@@ -264,6 +334,7 @@
+ 	movdqa	%xmm5, ffi_closure_OFS_V+0x50(%rsp)
+ 	movdqa	%xmm6, ffi_closure_OFS_V+0x60(%rsp)
+ 	movdqa	%xmm7, ffi_closure_OFS_V+0x70(%rsp)
++#endif
+ 	jmp	L(sse_entry1)
+ 
+ L(UW7):
+@@ -356,12 +427,20 @@
+ 	ret
+ E(L(load_table), UNIX64_RET_XMM32)
+ 	_CET_ENDBR
++#ifdef __k1om__
++	jmp	L(k1om_ld_xmm32)
++#else
+ 	movd	(%rsi), %xmm0
+ 	ret
++#endif
+ E(L(load_table), UNIX64_RET_XMM64)
+ 	_CET_ENDBR
++#ifdef __k1om__
++	jmp	L(k1om_ld_xmm64)
++#else
+ 	movq	(%rsi), %xmm0
+ 	ret
++#endif
+ E(L(load_table), UNIX64_RET_X87)
+ 	_CET_ENDBR
+ 	fldt	(%rsi)
+@@ -377,12 +456,20 @@
+ 	jmp	L(l3)
+ E(L(load_table), UNIX64_RET_ST_RAX_XMM0)
+ 	_CET_ENDBR
++#ifdef __k1om__
++	jmp	L(k1om_ld_rax_xmm0)
++#else
+ 	movq	8(%rsi), %xmm0
+ 	jmp	L(l2)
++#endif
+ E(L(load_table), UNIX64_RET_ST_XMM0_XMM1)
+ 	_CET_ENDBR
++#ifdef __k1om__
++	jmp	L(k1om_ld_xmm0_xmm1)
++#else
+ 	movq	8(%rsi), %xmm1
+ 	jmp	L(l3)
++#endif
+ E(L(load_table), UNIX64_RET_ST_RAX_RDX)
+ 	_CET_ENDBR
+ 	movq	8(%rsi), %rdx
+@@ -391,8 +478,26 @@
+ 	ret
+ 	.balign	8
+ L(l3):
++#ifdef __k1om__
++	vbroadcastsd (%rsi), %zmm0
++#else
+ 	movq	(%rsi), %xmm0
+-	ret
++#endif
++	ret
++#ifdef __k1om__
++L(k1om_ld_xmm32):
++	vbroadcastss (%rsi), %zmm0
++	ret
++L(k1om_ld_xmm64):
++	vbroadcastsd (%rsi), %zmm0
++	ret
++L(k1om_ld_rax_xmm0):
++	vbroadcastsd 8(%rsi), %zmm0
++	jmp	L(l2)
++L(k1om_ld_xmm0_xmm1):
++	vbroadcastsd 8(%rsi), %zmm1
++	jmp	L(l3)
++#endif
+ 
+ L(la):	call	PLT(C(abort))
+ 
+@@ -410,6 +515,17 @@
+ L(UW13):
+ 	/* cfi_adjust_cfa_offset(ffi_closure_FS) */
+ 
++#ifdef __k1om__
++	K1OM_K1
++	vpackstorelpd %zmm0, ffi_closure_OFS_V+0x00(%rsp){%k1}
++	vpackstorelpd %zmm1, ffi_closure_OFS_V+0x10(%rsp){%k1}
++	vpackstorelpd %zmm2, ffi_closure_OFS_V+0x20(%rsp){%k1}
++	vpackstorelpd %zmm3, ffi_closure_OFS_V+0x30(%rsp){%k1}
++	vpackstorelpd %zmm4, ffi_closure_OFS_V+0x40(%rsp){%k1}
++	vpackstorelpd %zmm5, ffi_closure_OFS_V+0x50(%rsp){%k1}
++	vpackstorelpd %zmm6, ffi_closure_OFS_V+0x60(%rsp){%k1}
++	vpackstorelpd %zmm7, ffi_closure_OFS_V+0x70(%rsp){%k1}
++#else
+ 	movdqa	%xmm0, ffi_closure_OFS_V+0x00(%rsp)
+ 	movdqa	%xmm1, ffi_closure_OFS_V+0x10(%rsp)
+ 	movdqa	%xmm2, ffi_closure_OFS_V+0x20(%rsp)
+@@ -418,6 +534,7 @@
+ 	movdqa	%xmm5, ffi_closure_OFS_V+0x50(%rsp)
+ 	movdqa	%xmm6, ffi_closure_OFS_V+0x60(%rsp)
+ 	movdqa	%xmm7, ffi_closure_OFS_V+0x70(%rsp)
++#endif
+ 	jmp	L(sse_entry2)
+ 
+ L(UW14):
+@@ -564,8 +681,8 @@
+ #endif
+ 
+ /* Simplify advancing between labels.  Assume DW_CFA_advance_loc1 fits.  */
+-#ifdef __CET__
+-/* Use DW_CFA_advance_loc2 when IBT is enabled.  */
++#if defined(__CET__) || defined(__k1om__)
++/* Use DW_CFA_advance_loc2 when IBT is enabled or the k1om stubs grow the tables.  */
+ # define ADV(N, P)	.byte 3; .2byte L(N)-L(P)
+ #else
+ # define ADV(N, P)	.byte 2, L(N)-L(P)
+--- a/src/x86/ffi64.c
++++ b/src/x86/ffi64.c
+@@ -392,7 +392,7 @@
+ 
+ /* Perform machine dependent cif processing.  */
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(__k1om__)
+ extern ffi_status
+ ffi_prep_cif_machdep_efi64(ffi_cif *cif);
+ #endif
+@@ -406,7 +406,7 @@
+   size_t bytes, n, rtype_size;
+   ffi_type *rtype;
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(__k1om__)
+   if (cif->abi == FFI_EFI64 || cif->abi == FFI_GNUW64)
+     return ffi_prep_cif_machdep_efi64(cif);
+ #endif
+@@ -677,7 +677,7 @@
+ 		   flags, rvalue, fn);
+ }
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(__k1om__)
+ extern void
+ ffi_call_efi64(ffi_cif *cif, void (*fn)(void), void *rvalue, void **avalue);
+ #endif
+@@ -703,7 +703,7 @@
+         }
+     }
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(__k1om__)
+   if (cif->abi == FFI_EFI64 || cif->abi == FFI_GNUW64)
+     {
+       ffi_call_efi64(cif, fn, rvalue, avalue);
+@@ -715,7 +715,7 @@
+ 
+ #ifdef FFI_GO_CLOSURES
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(__k1om__)
+ extern void
+ ffi_call_go_efi64(ffi_cif *cif, void (*fn)(void), void *rvalue,
+ 		  void **avalue, void *closure);
+@@ -725,7 +725,7 @@
+ ffi_call_go (ffi_cif *cif, void (*fn)(void), void *rvalue,
+ 	     void **avalue, void *closure)
+ {
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(__k1om__)
+   if (cif->abi == FFI_EFI64 || cif->abi == FFI_GNUW64)
+     {
+       ffi_call_go_efi64(cif, fn, rvalue, avalue, closure);
+@@ -744,7 +744,7 @@
+ extern void ffi_closure_unix64_sse_alt(void) FFI_HIDDEN;
+ #endif
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(__k1om__)
+ extern ffi_status
+ ffi_prep_closure_loc_efi64(ffi_closure* closure,
+ 			   ffi_cif* cif,
+@@ -761,8 +761,13 @@
+ 		      void *codeloc)
+ {
+   static const unsigned char trampoline[24] = {
++#ifdef __k1om__
++    /* KNC has no endbr64 */
++    0x90, 0x90, 0x90, 0x90,
++#else
+     /* endbr64 */
+     0xf3, 0x0f, 0x1e, 0xfa,
++#endif
+     /* leaq  -0xb(%rip),%r10   # 0x0  */
+     0x4c, 0x8d, 0x15, 0xf5, 0xff, 0xff, 0xff,
+     /* jmpq  *0x7(%rip)        # 0x18 */
+@@ -773,7 +778,7 @@
+   void (*dest)(void);
+   char *tramp = closure->tramp;
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(__k1om__)
+   if (cif->abi == FFI_EFI64 || cif->abi == FFI_GNUW64)
+     return ffi_prep_closure_loc_efi64(closure, cif, fun, user_data, codeloc);
+ #endif
+@@ -910,7 +915,7 @@
+ extern void ffi_go_closure_unix64(void) FFI_HIDDEN;
+ extern void ffi_go_closure_unix64_sse(void) FFI_HIDDEN;
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(__k1om__)
+ extern ffi_status
+ ffi_prep_go_closure_efi64(ffi_go_closure* closure, ffi_cif* cif,
+ 			  void (*fun)(ffi_cif*, void*, void**, void*));
+@@ -920,7 +925,7 @@
+ ffi_prep_go_closure (ffi_go_closure* closure, ffi_cif* cif,
+ 		     void (*fun)(ffi_cif*, void*, void**, void*))
+ {
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(__k1om__)
+   if (cif->abi == FFI_EFI64 || cif->abi == FFI_GNUW64)
+     return ffi_prep_go_closure_efi64(closure, cif, fun);
+ #endif
+--- a/configure.host
++++ b/configure.host
+@@ -115,7 +115,7 @@
+ 	fi
+ 	;;
+ 
+-  i?86-*-* | x86_64-*-* | amd64-*)
++  i?86-*-* | x86_64-*-* | amd64-* | k1om-*-*)
+ 	TARGETDIR=x86
+ 	if test $ac_cv_sizeof_size_t = 4; then
+ 	  echo 'int foo (void) { return __x86_64__; }' > conftest.c
+@@ -316,7 +316,7 @@
+ 	fi
+ 	;;
+   X86_64)
+-	if test x"$TARGET_X32" = xyes; then
++	if test x"$TARGET_X32" = xyes || expr "$host" : 'k1om-' >/dev/null; then
+ 		SOURCES="ffi64.c unix64.S"
+ 	else
+ 		SOURCES="ffi64.c unix64.S ffiw64.c win64.S"

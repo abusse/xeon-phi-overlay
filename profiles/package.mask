@@ -1,0 +1,16 @@
+# Anselm Busse <anselm.busse@outlook.com> (2026-10-16)
+# Copies of ::gentoo packages that differ only for k1om (CHOST or CTARGET
+# k1om-*).  Masked so they do not shadow ::gentoo elsewhere; the k1om
+# profile unmasks them.  Crossdev (cross-k1om-*) is not affected.
+app-arch/zstd::xeon-phi
+dev-libs/gmp::xeon-phi
+dev-libs/libffi::xeon-phi
+dev-libs/libgcrypt::xeon-phi
+net-misc/openssh::xeon-phi
+sys-apps/busybox::xeon-phi
+sys-apps/kexec-tools::xeon-phi
+sys-devel/binutils::xeon-phi
+sys-devel/gcc::xeon-phi
+sys-kernel/linux-headers::xeon-phi
+sys-libs/glibc::xeon-phi
+sys-libs/libxcrypt::xeon-phi

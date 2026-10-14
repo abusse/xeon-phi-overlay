@@ -3,3 +3,13 @@ sys-devel/binutils::gentoo
 sys-devel/gcc::gentoo
 sys-kernel/linux-headers::gentoo
 sys-libs/glibc::gentoo
+
+# k1om-patched copies in this overlay
+app-arch/zstd::gentoo
+dev-libs/gmp::gentoo
+dev-libs/libffi::gentoo
+dev-libs/libgcrypt::gentoo
+net-misc/openssh::gentoo
+sys-apps/busybox::gentoo
+sys-apps/kexec-tools::gentoo
+sys-libs/libxcrypt::gentoo

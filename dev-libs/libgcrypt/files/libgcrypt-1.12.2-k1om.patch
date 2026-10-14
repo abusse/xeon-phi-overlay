@@ -1,0 +1,13 @@
+k1om: x86-64 without SSE2, keep keccak on the generic lane absorb
+
+--- a/cipher/keccak.c	2026-10-02 19:41:18.827534589 +0200
++++ b/cipher/keccak.c	2026-10-02 19:41:18.828429786 +0200
+@@ -354,7 +354,7 @@
+ /* Construct generic 64-bit implementation. */
+ #ifdef USE_64BIT
+ 
+-#if __GNUC__ >= 4 && defined(__x86_64__)
++#if __GNUC__ >= 4 && defined(__x86_64__) && !defined(__k1om__)
+ 
+ static inline void unaligned_absorb_lanes64_8(u64 *dst, const byte *in)
+ {

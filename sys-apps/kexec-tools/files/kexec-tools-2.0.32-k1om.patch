@@ -1,0 +1,97 @@
+k1om: x86_64 kexec (uname k1om, EM_K1OM purgatory) without the real-mode purgatory entry and without -march=x86-64 (cmov)
+
+diff -ruN a/configure b/configure
+--- a/configure	2025-10-16 10:17:04.000000000 +0200
++++ b/configure	2026-10-03 20:23:40.257589743 +0200
+@@ -3681,6 +3681,9 @@
+ 	cris|crisv32 )
+ 		ARCH="cris"
+ 		;;
++	k1om )
++		ARCH="x86_64"
++		;;
+ 	ia64|x86_64|alpha|m68k )
+ 		ARCH="$target_cpu"
+ 		;;
+@@ -3700,6 +3703,9 @@
+ 
+ if test "$ARCH" = "x86_64" ; then
+ 	case $target in
++		k1om-* )
++			SUBARCH="k1om"
++			;;
+ 		*x32 )
+ 			SUBARCH="x32"
+ 			;;
+diff -ruN a/configure.ac b/configure.ac
+--- a/configure.ac	2025-10-16 10:15:16.000000000 +0200
++++ b/configure.ac	2026-10-03 20:23:40.258043160 +0200
+@@ -52,6 +52,9 @@
+ 	cris|crisv32 )
+ 		ARCH="cris"
+ 		;;
++	k1om )
++		ARCH="x86_64"
++		;;
+ 	ia64|x86_64|alpha|m68k )
+ 		ARCH="$target_cpu"
+ 		;;
+@@ -71,6 +74,9 @@
+ 
+ if test "$ARCH" = "x86_64" ; then
+ 	case $target in
++		k1om-* )
++			SUBARCH="k1om"
++			;;
+ 		*x32 )
+ 			SUBARCH="x32"
+ 			;;
+diff -ruN a/kexec/arch/x86_64/kexec-elf-rel-x86_64.c b/kexec/arch/x86_64/kexec-elf-rel-x86_64.c
+--- a/kexec/arch/x86_64/kexec-elf-rel-x86_64.c	2023-05-24 13:47:18.000000000 +0200
++++ b/kexec/arch/x86_64/kexec-elf-rel-x86_64.c	2026-10-03 20:23:40.263918497 +0200
+@@ -12,7 +12,8 @@
+ 	    ehdr->ei_class != ELFCLASS32) {  /* x32 */
+ 		return 0;
+ 	}
+-	if (ehdr->e_machine != EM_X86_64) {
++	/* the purgatory is built by the k1om toolchain: EM_K1OM */
++	if (ehdr->e_machine != EM_X86_64 && ehdr->e_machine != 181) {
+ 		return 0;
+ 	}
+ 	return 1;
+diff -ruN a/kexec/arch/x86_64/kexec-x86_64.c b/kexec/arch/x86_64/kexec-x86_64.c
+--- a/kexec/arch/x86_64/kexec-x86_64.c	2024-12-02 14:30:08.000000000 +0100
++++ b/kexec/arch/x86_64/kexec-x86_64.c	2026-10-03 20:23:40.263868331 +0200
+@@ -154,6 +154,8 @@
+ 
+ const struct arch_map_entry arches[] = {
+ 	{ "x86_64", KEXEC_ARCH_X86_64 },
++	/* KNC kernels report uname -m k1om */
++	{ "k1om", KEXEC_ARCH_X86_64 },
+ 	{ NULL, 0 },
+ };
+ 
+diff -ruN a/purgatory/arch/x86_64/Makefile b/purgatory/arch/x86_64/Makefile
+--- a/purgatory/arch/x86_64/Makefile	2025-04-22 12:22:34.000000000 +0200
++++ b/purgatory/arch/x86_64/Makefile	2026-10-03 20:23:40.258083827 +0200
+@@ -16,13 +16,19 @@
+ 	purgatory/arch/x86_64/purgatory-x86_64.h
+ 
+ # Don't add sources in i386/ to dist, as i386/Makefile adds them
++# KNC: no real-mode entry (k1om gas has no i386/16-bit code)
++ifneq ($(SUBARCH),k1om)
+ x86_64_PURGATORY_SRCS += purgatory/arch/i386/entry32-16.S
+ x86_64_PURGATORY_SRCS += purgatory/arch/i386/entry32-16-debug.S
++endif
+ x86_64_PURGATORY_SRCS += purgatory/arch/i386/crashdump_backup.c
+ x86_64_PURGATORY_SRCS += purgatory/arch/i386/console-x86.c
+ x86_64_PURGATORY_SRCS += purgatory/arch/i386/vga.c
+ x86_64_PURGATORY_SRCS += purgatory/arch/i386/pic.c
+ 
+-ifneq ($(SUBARCH),x32)
++ifeq ($(SUBARCH),k1om)
++# keep the k1om default -march=knc: x86-64 allows cmov
++x86_64_PURGATORY_EXTRA_CFLAGS = -mcmodel=large
++else ifneq ($(SUBARCH),x32)
+ x86_64_PURGATORY_EXTRA_CFLAGS = -mcmodel=large -march=x86-64 -mno-mmx -mno-sse -mno-sse2 -mno-avx
+ endif

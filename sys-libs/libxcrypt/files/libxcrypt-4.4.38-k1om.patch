@@ -1,0 +1,12 @@
+k1om glibc uses the x86_64 base version GLIBC_2.2.5
+
+--- a/lib/libcrypt.minver	2026-10-02 19:41:18.823565564 +0200
++++ b/lib/libcrypt.minver	2026-10-02 19:41:18.825182036 +0200
+@@ -78,6 +78,7 @@
+ GLIBC_2.4    linux.*gnu      m68k          defined __mcoldfire__
+ GLIBC_2.3    linux.*gnu      powerpc64
+ GLIBC_2.2.5  linux.*gnu      x86_64        defined __x86_64__ && ULONG_MAX != UINT_MAX /* 64 */
++GLIBC_2.2.5  linux.*gnu      k1om
+ GLIBC_2.2    linux.*gnu      s390x
+ GLIBC_2.0    linux.*gnu      alpha
+ GLIBC_2.0    linux.*gnu      e2k

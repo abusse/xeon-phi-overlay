@@ -1,0 +1,706 @@
+k1om: no cmov, use the portable constant-time C
+
+--- a/sntrup761.c	2026-10-02 19:48:53.542258675 +0200
++++ b/sntrup761.c	2026-10-02 19:48:53.544223622 +0200
+@@ -60,7 +60,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_negative_mask(crypto_int16 crypto_int16_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("sarw $15,%0" : "+r"(crypto_int16_x) : : "cc");
+   return crypto_int16_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -78,7 +78,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16_unsigned crypto_int16_unsigned_topbit_01(crypto_int16_unsigned crypto_int16_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("shrw $15,%0" : "+r"(crypto_int16_x) : : "cc");
+   return crypto_int16_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -114,7 +114,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_bottombit_mask(crypto_int16 crypto_int16_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("andw $1,%0" : "+r"(crypto_int16_x) : : "cc");
+   return -crypto_int16_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -130,7 +130,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_bottombit_01(crypto_int16 crypto_int16_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("andw $1,%0" : "+r"(crypto_int16_x) : : "cc");
+   return crypto_int16_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -146,7 +146,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_bitinrangepublicpos_mask(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_s) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("sarw %%cl,%0" : "+r"(crypto_int16_x) : "c"(crypto_int16_s) : "cc");
+ #elif defined(__GNUC__) && defined(__aarch64__)
+   __asm__ ("sxth %w0,%w0\n asr %w0,%w0,%w1" : "+&r"(crypto_int16_x) : "r"(crypto_int16_s) : );
+@@ -159,7 +159,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_bitinrangepublicpos_01(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_s) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("sarw %%cl,%0" : "+r"(crypto_int16_x) : "c"(crypto_int16_s) : "cc");
+ #elif defined(__GNUC__) && defined(__aarch64__)
+   __asm__ ("sxth %w0,%w0\n asr %w0,%w0,%w1" : "+&r"(crypto_int16_x) : "r"(crypto_int16_s) : );
+@@ -172,7 +172,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_shlmod(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_s) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16_s &= 15;
+   __asm__ ("shlw %%cl,%0" : "+r"(crypto_int16_x) : "c"(crypto_int16_s) : "cc");
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -188,7 +188,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_shrmod(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_s) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16_s &= 15;
+   __asm__ ("sarw %%cl,%0" : "+r"(crypto_int16_x) : "c"(crypto_int16_s) : "cc");
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -218,7 +218,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_nonzero_mask(crypto_int16 crypto_int16_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $-1,%1\n testw %2,%2\n cmovnew %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x) : "cc");
+   return crypto_int16_z;
+@@ -235,7 +235,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_nonzero_01(crypto_int16 crypto_int16_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $1,%1\n testw %2,%2\n cmovnew %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x) : "cc");
+   return crypto_int16_z;
+@@ -252,7 +252,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_positive_mask(crypto_int16 crypto_int16_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $-1,%1\n testw %2,%2\n cmovgw %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x) : "cc");
+   return crypto_int16_z;
+@@ -270,7 +270,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_positive_01(crypto_int16 crypto_int16_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $1,%1\n testw %2,%2\n cmovgw %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x) : "cc");
+   return crypto_int16_z;
+@@ -288,7 +288,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_zero_mask(crypto_int16 crypto_int16_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $-1,%1\n testw %2,%2\n cmovew %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x) : "cc");
+   return crypto_int16_z;
+@@ -304,7 +304,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_zero_01(crypto_int16 crypto_int16_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $1,%1\n testw %2,%2\n cmovew %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x) : "cc");
+   return crypto_int16_z;
+@@ -320,7 +320,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_unequal_mask(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $-1,%1\n cmpw %3,%2\n cmovnew %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x), "r"(crypto_int16_y) : "cc");
+   return crypto_int16_z;
+@@ -336,7 +336,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_unequal_01(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $1,%1\n cmpw %3,%2\n cmovnew %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x), "r"(crypto_int16_y) : "cc");
+   return crypto_int16_z;
+@@ -352,7 +352,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_equal_mask(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $-1,%1\n cmpw %3,%2\n cmovew %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x), "r"(crypto_int16_y) : "cc");
+   return crypto_int16_z;
+@@ -368,7 +368,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_equal_01(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $1,%1\n cmpw %3,%2\n cmovew %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x), "r"(crypto_int16_y) : "cc");
+   return crypto_int16_z;
+@@ -384,7 +384,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_min(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("cmpw %1,%0\n cmovgw %1,%0" : "+r"(crypto_int16_x) : "r"(crypto_int16_y) : "cc");
+   return crypto_int16_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -403,7 +403,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_max(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("cmpw %1,%0\n cmovlw %1,%0" : "+r"(crypto_int16_x) : "r"(crypto_int16_y) : "cc");
+   return crypto_int16_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -424,7 +424,7 @@
+ void crypto_int16_minmax(crypto_int16 *crypto_int16_p,crypto_int16 *crypto_int16_q) {
+   crypto_int16 crypto_int16_x = *crypto_int16_p;
+   crypto_int16 crypto_int16_y = *crypto_int16_q;
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_z;
+   __asm__ ("cmpw %2,%1\n movw %1,%0\n cmovgw %2,%1\n cmovgw %0,%2" : "=&r"(crypto_int16_z), "+&r"(crypto_int16_x), "+r"(crypto_int16_y) : : "cc");
+   *crypto_int16_p = crypto_int16_x;
+@@ -450,7 +450,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_smaller_mask(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $-1,%1\n cmpw %3,%2\n cmovlw %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x), "r"(crypto_int16_y) : "cc");
+   return crypto_int16_z;
+@@ -469,7 +469,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_smaller_01(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $1,%1\n cmpw %3,%2\n cmovlw %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x), "r"(crypto_int16_y) : "cc");
+   return crypto_int16_z;
+@@ -488,7 +488,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_leq_mask(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $-1,%1\n cmpw %3,%2\n cmovlew %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x), "r"(crypto_int16_y) : "cc");
+   return crypto_int16_z;
+@@ -504,7 +504,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int16 crypto_int16_leq_01(crypto_int16 crypto_int16_x,crypto_int16 crypto_int16_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 crypto_int16_q,crypto_int16_z;
+   __asm__ ("xorw %0,%0\n movw $1,%1\n cmpw %3,%2\n cmovlew %1,%0" : "=&r"(crypto_int16_z), "=&r"(crypto_int16_q) : "r"(crypto_int16_x), "r"(crypto_int16_y) : "cc");
+   return crypto_int16_z;
+@@ -534,7 +534,7 @@
+ __attribute__((unused))
+ static inline
+ int crypto_int16_bottomzeros_num(crypto_int16 crypto_int16_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int16 fallback = 16;
+   __asm__ ("bsfw %0,%0\n cmovew %1,%0" : "+&r"(crypto_int16_x) : "r"(fallback) : "cc");
+   return crypto_int16_x;
+@@ -587,7 +587,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_negative_mask(crypto_int32 crypto_int32_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("sarl $31,%0" : "+r"(crypto_int32_x) : : "cc");
+   return crypto_int32_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -605,7 +605,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32_unsigned crypto_int32_unsigned_topbit_01(crypto_int32_unsigned crypto_int32_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("shrl $31,%0" : "+r"(crypto_int32_x) : : "cc");
+   return crypto_int32_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -641,7 +641,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_bottombit_mask(crypto_int32 crypto_int32_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("andl $1,%0" : "+r"(crypto_int32_x) : : "cc");
+   return -crypto_int32_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -657,7 +657,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_bottombit_01(crypto_int32 crypto_int32_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("andl $1,%0" : "+r"(crypto_int32_x) : : "cc");
+   return crypto_int32_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -673,7 +673,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_bitinrangepublicpos_mask(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_s) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("sarl %%cl,%0" : "+r"(crypto_int32_x) : "c"(crypto_int32_s) : "cc");
+ #elif defined(__GNUC__) && defined(__aarch64__)
+   __asm__ ("asr %w0,%w0,%w1" : "+r"(crypto_int32_x) : "r"(crypto_int32_s) : );
+@@ -686,7 +686,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_bitinrangepublicpos_01(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_s) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("sarl %%cl,%0" : "+r"(crypto_int32_x) : "c"(crypto_int32_s) : "cc");
+ #elif defined(__GNUC__) && defined(__aarch64__)
+   __asm__ ("asr %w0,%w0,%w1" : "+r"(crypto_int32_x) : "r"(crypto_int32_s) : );
+@@ -699,7 +699,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_shlmod(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_s) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("shll %%cl,%0" : "+r"(crypto_int32_x) : "c"(crypto_int32_s) : "cc");
+ #elif defined(__GNUC__) && defined(__aarch64__)
+   __asm__ ("lsl %w0,%w0,%w1" : "+r"(crypto_int32_x) : "r"(crypto_int32_s) : );
+@@ -714,7 +714,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_shrmod(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_s) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("sarl %%cl,%0" : "+r"(crypto_int32_x) : "c"(crypto_int32_s) : "cc");
+ #elif defined(__GNUC__) && defined(__aarch64__)
+   __asm__ ("asr %w0,%w0,%w1" : "+r"(crypto_int32_x) : "r"(crypto_int32_s) : );
+@@ -743,7 +743,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_nonzero_mask(crypto_int32 crypto_int32_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $-1,%1\n testl %2,%2\n cmovnel %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x) : "cc");
+   return crypto_int32_z;
+@@ -760,7 +760,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_nonzero_01(crypto_int32 crypto_int32_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $1,%1\n testl %2,%2\n cmovnel %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x) : "cc");
+   return crypto_int32_z;
+@@ -777,7 +777,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_positive_mask(crypto_int32 crypto_int32_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $-1,%1\n testl %2,%2\n cmovgl %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x) : "cc");
+   return crypto_int32_z;
+@@ -795,7 +795,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_positive_01(crypto_int32 crypto_int32_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $1,%1\n testl %2,%2\n cmovgl %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x) : "cc");
+   return crypto_int32_z;
+@@ -813,7 +813,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_zero_mask(crypto_int32 crypto_int32_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $-1,%1\n testl %2,%2\n cmovel %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x) : "cc");
+   return crypto_int32_z;
+@@ -829,7 +829,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_zero_01(crypto_int32 crypto_int32_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $1,%1\n testl %2,%2\n cmovel %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x) : "cc");
+   return crypto_int32_z;
+@@ -845,7 +845,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_unequal_mask(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $-1,%1\n cmpl %3,%2\n cmovnel %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x), "r"(crypto_int32_y) : "cc");
+   return crypto_int32_z;
+@@ -861,7 +861,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_unequal_01(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $1,%1\n cmpl %3,%2\n cmovnel %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x), "r"(crypto_int32_y) : "cc");
+   return crypto_int32_z;
+@@ -877,7 +877,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_equal_mask(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $-1,%1\n cmpl %3,%2\n cmovel %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x), "r"(crypto_int32_y) : "cc");
+   return crypto_int32_z;
+@@ -893,7 +893,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_equal_01(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $1,%1\n cmpl %3,%2\n cmovel %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x), "r"(crypto_int32_y) : "cc");
+   return crypto_int32_z;
+@@ -909,7 +909,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_min(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("cmpl %1,%0\n cmovgl %1,%0" : "+r"(crypto_int32_x) : "r"(crypto_int32_y) : "cc");
+   return crypto_int32_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -928,7 +928,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_max(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("cmpl %1,%0\n cmovll %1,%0" : "+r"(crypto_int32_x) : "r"(crypto_int32_y) : "cc");
+   return crypto_int32_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -949,7 +949,7 @@
+ void crypto_int32_minmax(crypto_int32 *crypto_int32_p,crypto_int32 *crypto_int32_q) {
+   crypto_int32 crypto_int32_x = *crypto_int32_p;
+   crypto_int32 crypto_int32_y = *crypto_int32_q;
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_z;
+   __asm__ ("cmpl %2,%1\n movl %1,%0\n cmovgl %2,%1\n cmovgl %0,%2" : "=&r"(crypto_int32_z), "+&r"(crypto_int32_x), "+r"(crypto_int32_y) : : "cc");
+   *crypto_int32_p = crypto_int32_x;
+@@ -975,7 +975,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_smaller_mask(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $-1,%1\n cmpl %3,%2\n cmovll %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x), "r"(crypto_int32_y) : "cc");
+   return crypto_int32_z;
+@@ -994,7 +994,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_smaller_01(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $1,%1\n cmpl %3,%2\n cmovll %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x), "r"(crypto_int32_y) : "cc");
+   return crypto_int32_z;
+@@ -1013,7 +1013,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_leq_mask(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $-1,%1\n cmpl %3,%2\n cmovlel %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x), "r"(crypto_int32_y) : "cc");
+   return crypto_int32_z;
+@@ -1029,7 +1029,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int32 crypto_int32_leq_01(crypto_int32 crypto_int32_x,crypto_int32 crypto_int32_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 crypto_int32_q,crypto_int32_z;
+   __asm__ ("xorl %0,%0\n movl $1,%1\n cmpl %3,%2\n cmovlel %1,%0" : "=&r"(crypto_int32_z), "=&r"(crypto_int32_q) : "r"(crypto_int32_x), "r"(crypto_int32_y) : "cc");
+   return crypto_int32_z;
+@@ -1060,7 +1060,7 @@
+ __attribute__((unused))
+ static inline
+ int crypto_int32_bottomzeros_num(crypto_int32 crypto_int32_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int32 fallback = 32;
+   __asm__ ("bsfl %0,%0\n cmovel %1,%0" : "+&r"(crypto_int32_x) : "r"(fallback) : "cc");
+   return crypto_int32_x;
+@@ -1121,7 +1121,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_negative_mask(crypto_int64 crypto_int64_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("sarq $63,%0" : "+r"(crypto_int64_x) : : "cc");
+   return crypto_int64_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -1139,7 +1139,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64_unsigned crypto_int64_unsigned_topbit_01(crypto_int64_unsigned crypto_int64_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("shrq $63,%0" : "+r"(crypto_int64_x) : : "cc");
+   return crypto_int64_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -1175,7 +1175,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_bottombit_mask(crypto_int64 crypto_int64_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("andq $1,%0" : "+r"(crypto_int64_x) : : "cc");
+   return -crypto_int64_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -1191,7 +1191,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_bottombit_01(crypto_int64 crypto_int64_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("andq $1,%0" : "+r"(crypto_int64_x) : : "cc");
+   return crypto_int64_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -1207,7 +1207,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_bitinrangepublicpos_mask(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_s) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("sarq %%cl,%0" : "+r"(crypto_int64_x) : "c"(crypto_int64_s) : "cc");
+ #elif defined(__GNUC__) && defined(__aarch64__)
+   __asm__ ("asr %0,%0,%1" : "+r"(crypto_int64_x) : "r"(crypto_int64_s) : );
+@@ -1220,7 +1220,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_bitinrangepublicpos_01(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_s) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("sarq %%cl,%0" : "+r"(crypto_int64_x) : "c"(crypto_int64_s) : "cc");
+ #elif defined(__GNUC__) && defined(__aarch64__)
+   __asm__ ("asr %0,%0,%1" : "+r"(crypto_int64_x) : "r"(crypto_int64_s) : );
+@@ -1233,7 +1233,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_shlmod(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_s) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("shlq %%cl,%0" : "+r"(crypto_int64_x) : "c"(crypto_int64_s) : "cc");
+ #elif defined(__GNUC__) && defined(__aarch64__)
+   __asm__ ("lsl %0,%0,%1" : "+r"(crypto_int64_x) : "r"(crypto_int64_s) : );
+@@ -1248,7 +1248,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_shrmod(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_s) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("sarq %%cl,%0" : "+r"(crypto_int64_x) : "c"(crypto_int64_s) : "cc");
+ #elif defined(__GNUC__) && defined(__aarch64__)
+   __asm__ ("asr %0,%0,%1" : "+r"(crypto_int64_x) : "r"(crypto_int64_s) : );
+@@ -1277,7 +1277,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_nonzero_mask(crypto_int64 crypto_int64_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $-1,%1\n testq %2,%2\n cmovneq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x) : "cc");
+   return crypto_int64_z;
+@@ -1294,7 +1294,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_nonzero_01(crypto_int64 crypto_int64_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $1,%1\n testq %2,%2\n cmovneq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x) : "cc");
+   return crypto_int64_z;
+@@ -1311,7 +1311,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_positive_mask(crypto_int64 crypto_int64_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $-1,%1\n testq %2,%2\n cmovgq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x) : "cc");
+   return crypto_int64_z;
+@@ -1329,7 +1329,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_positive_01(crypto_int64 crypto_int64_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $1,%1\n testq %2,%2\n cmovgq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x) : "cc");
+   return crypto_int64_z;
+@@ -1347,7 +1347,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_zero_mask(crypto_int64 crypto_int64_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $-1,%1\n testq %2,%2\n cmoveq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x) : "cc");
+   return crypto_int64_z;
+@@ -1363,7 +1363,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_zero_01(crypto_int64 crypto_int64_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $1,%1\n testq %2,%2\n cmoveq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x) : "cc");
+   return crypto_int64_z;
+@@ -1379,7 +1379,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_unequal_mask(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $-1,%1\n cmpq %3,%2\n cmovneq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x), "r"(crypto_int64_y) : "cc");
+   return crypto_int64_z;
+@@ -1395,7 +1395,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_unequal_01(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $1,%1\n cmpq %3,%2\n cmovneq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x), "r"(crypto_int64_y) : "cc");
+   return crypto_int64_z;
+@@ -1411,7 +1411,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_equal_mask(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $-1,%1\n cmpq %3,%2\n cmoveq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x), "r"(crypto_int64_y) : "cc");
+   return crypto_int64_z;
+@@ -1427,7 +1427,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_equal_01(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $1,%1\n cmpq %3,%2\n cmoveq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x), "r"(crypto_int64_y) : "cc");
+   return crypto_int64_z;
+@@ -1443,7 +1443,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_min(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("cmpq %1,%0\n cmovgq %1,%0" : "+r"(crypto_int64_x) : "r"(crypto_int64_y) : "cc");
+   return crypto_int64_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -1462,7 +1462,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_max(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   __asm__ ("cmpq %1,%0\n cmovlq %1,%0" : "+r"(crypto_int64_x) : "r"(crypto_int64_y) : "cc");
+   return crypto_int64_x;
+ #elif defined(__GNUC__) && defined(__aarch64__)
+@@ -1483,7 +1483,7 @@
+ void crypto_int64_minmax(crypto_int64 *crypto_int64_p,crypto_int64 *crypto_int64_q) {
+   crypto_int64 crypto_int64_x = *crypto_int64_p;
+   crypto_int64 crypto_int64_y = *crypto_int64_q;
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_z;
+   __asm__ ("cmpq %2,%1\n movq %1,%0\n cmovgq %2,%1\n cmovgq %0,%2" : "=&r"(crypto_int64_z), "+&r"(crypto_int64_x), "+r"(crypto_int64_y) : : "cc");
+   *crypto_int64_p = crypto_int64_x;
+@@ -1509,7 +1509,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_smaller_mask(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $-1,%1\n cmpq %3,%2\n cmovlq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x), "r"(crypto_int64_y) : "cc");
+   return crypto_int64_z;
+@@ -1528,7 +1528,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_smaller_01(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $1,%1\n cmpq %3,%2\n cmovlq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x), "r"(crypto_int64_y) : "cc");
+   return crypto_int64_z;
+@@ -1547,7 +1547,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_leq_mask(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $-1,%1\n cmpq %3,%2\n cmovleq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x), "r"(crypto_int64_y) : "cc");
+   return crypto_int64_z;
+@@ -1563,7 +1563,7 @@
+ __attribute__((unused))
+ static inline
+ crypto_int64 crypto_int64_leq_01(crypto_int64 crypto_int64_x,crypto_int64 crypto_int64_y) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 crypto_int64_q,crypto_int64_z;
+   __asm__ ("xorq %0,%0\n movq $1,%1\n cmpq %3,%2\n cmovleq %1,%0" : "=&r"(crypto_int64_z), "=&r"(crypto_int64_q) : "r"(crypto_int64_x), "r"(crypto_int64_y) : "cc");
+   return crypto_int64_z;
+@@ -1595,7 +1595,7 @@
+ __attribute__((unused))
+ static inline
+ int crypto_int64_bottomzeros_num(crypto_int64 crypto_int64_x) {
+-#if defined(__GNUC__) && defined(__x86_64__)
++#if defined(__GNUC__) && defined(__x86_64__) && !defined(__k1om__)
+   crypto_int64 fallback = 64;
+   __asm__ ("bsfq %0,%0\n cmoveq %1,%0" : "+&r"(crypto_int64_x) : "r"(fallback) : "cc");
+   return crypto_int64_x;
