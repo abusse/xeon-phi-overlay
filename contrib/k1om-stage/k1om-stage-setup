@@ -1,0 +1,53 @@
+#!/bin/sh
+# k1om-stage-setup DIR: prepare DIR for cross-building a k1om (Xeon Phi KNC) Gentoo root
+#   DIR/root  the root file system (ROOT = SYSROOT = PORTAGE_CONFIGROOT)
+#   DIR/bin   compiler wrappers with --sysroot=DIR/root, and kemerge
+# DIR must be readable by the portage user (not below /root).
+set -e
+[ $# = 1 ] || { echo "usage: ${0##*/} DIR" >&2; exit 2; }
+T=k1om-mpss-linux-gnu
+mkdir -p "$1"
+D=$(cd "$1" && pwd)
+R=${D}/root
+repo=$(portageq get_repo_path / xeon-phi)
+[ -n "${repo}" ] || { echo "the xeon-phi repository is not configured" >&2; exit 1; }
+command -v ${T}-gcc >/dev/null || { echo "no ${T} cross toolchain (see the overlay README)" >&2; exit 1; }
+
+mkdir -p "${D}"/bin "${R}"/etc/portage/repos.conf
+for t in gcc g++ cpp gfortran; do
+	cat > "${D}"/bin/${T}-${t} <<-W
+	#!/bin/sh
+	exec /usr/bin/${T}-${t} --sysroot=${R} "\$@"
+	W
+done
+cat > "${D}"/bin/kemerge <<-W
+#!/bin/sh
+# emerge into ${R}; the --sysroot wrappers must come first in PATH
+export SYSROOT=${R} PORTAGE_CONFIGROOT=${R} ROOT=${R}/
+export PATH=${D}/bin:\$PATH
+exec /usr/bin/${T}-emerge "\$@"
+W
+chmod 755 "${D}"/bin/*
+
+ln -sfn "${repo}"/profiles/k1om/23.0 "${R}"/etc/portage/make.profile
+cat > "${R}"/etc/portage/repos.conf/k1om.conf <<-C
+[DEFAULT]
+main-repo = gentoo
+
+[gentoo]
+location = $(portageq get_repo_path / gentoo)
+
+[xeon-phi]
+location = ${repo}
+C
+[ -e "${R}"/etc/portage/make.conf ] || cat > "${R}"/etc/portage/make.conf <<-M
+# cross build on $(hostname); drop CBUILD on the card
+CBUILD="$(portageq envvar CHOST)"
+CFLAGS="-O2 -pipe"
+CXXFLAGS="\${CFLAGS}"
+FCFLAGS="\${CFLAGS}"
+FFLAGS="\${CFLAGS}"
+FEATURES="buildpkg"
+PKGDIR="${D}/packages"
+M
+echo "stage prepared in ${D}; emerge with ${D}/bin/kemerge"
