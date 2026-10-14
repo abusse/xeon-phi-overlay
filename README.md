@@ -306,6 +306,46 @@ No `USE=` prefix is needed. `vanilla` is default-on for `sys-libs/glibc` (these 
 never apply Gentoo patchsets to Intel's sources), and `binutils`/`gcc` no longer carry
 the `vanilla`, `sanitize` or `vtv` flags at all.
 
+## Testing the cross toolchain on a card
+
+`dev-util/k1om-toolchain-tests` builds a set of test programs with the k1om cross
+compiler (C, C++, OpenMP, Fortran, libquadmath, libitm, IMCI inline assembly, shared
+libraries), runs them on a card over ssh and checks the results:
+
+```
+emerge -av dev-util/k1om-toolchain-tests
+k1om-toolchain-test --card root@<card>
+```
+
+The programs run through the glibc loader of the sysroot they were linked against,
+which is copied to the card together with the compiler's runtime libraries, so the
+card's own C library does not matter. Nothing is installed on the card; each run uses
+a temporary directory under `/tmp` and removes it afterwards. The card needs root ssh
+access by key from the machine running the test, or from the host given with `--via`:
+
+```
+k1om-toolchain-test --card root@<card> --via root@<mic-host>
+```
+
+Other options:
+
+* `--bindir DIR`, `--sysroot DIR`: test a compiler outside `PATH`, or link against
+  another sysroot (the default is the compiler's own).
+* `--build-only`: only build the programs and run the checks that need no card.
+* `--keep`, `--workdir DIR`: keep the binaries, the card output and the compiler
+  warnings.
+* `--ssh-opts OPTS`: ssh options for the card. The default enables the legacy
+  algorithms the card's OpenSSH 6.4 needs.
+
+Defaults for these can be set in `/etc/k1om-toolchain-test.conf`.
+
+The output is compared with a run built by Intel's MPSS gcc 5.1.1 and with fixed
+expected results. The run fails on any difference, on a binary that is not
+`Intel K1OM` (or not PIE when the compiler defaults to PIE), and if the compiler
+accepts `-msse2` or `target("avx2")`. Tests for libitm, libquadmath and Fortran are
+skipped when the compiler does not provide them. The exit status is 0 only if every
+check passed.
+
 ## Cross debugger
 
 The debugger is built after the toolchain stages:
