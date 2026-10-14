@@ -258,6 +258,9 @@ emerge -av sys-devel/mpss-sdk-k1om
 
 ## Installing a Xeon Phi cross toolchain
 
+This section builds Intel's MPSS 3.8.6 toolchain (gcc 5.1.1, glibc 2.21); for the current
+one see "A modern Gentoo on the card" below.
+
 If you prefer to compile your own toolchain and not relying on the binaries supplied by the Intel SDK (see above), you can do this with the ebuilds provided by this overlay.
 
 In order to [build a cross toolchain](https://wiki.gentoo.org/wiki/Cross_build_environment), the package [**sys-devel/crossdev**](https://gitweb.gentoo.org/proj/crossdev.git/) must be installed into your Gentoo environment:
@@ -299,12 +302,97 @@ Use the `2.22_p386` ebuild from this overlay. Upstream binutils carried k1om onl
 2.22 to 2.38 and dropped it in 2.39, and even within that window upstream never shipped
 a `k1om-*` target triplet or the KNC vector ISA — the assembler tables for it exist only
 in Intel's tree. A modern `sys-devel/binutils` cannot build this toolchain.
+(This overlay's `binutils-2.47` carries Intel's k1om support forward-ported; it belongs to
+the current toolchain described below.)
 
 ### USE flags
 
 No `USE=` prefix is needed. `vanilla` is default-on for `sys-libs/glibc` (these ebuilds
 never apply Gentoo patchsets to Intel's sources), and `binutils`/`gcc` no longer carry
 the `vanilla`, `sanitize` or `vtv` flags at all.
+
+## A modern Gentoo on the card
+
+The overlay also carries a current k1om toolchain (binutils 2.47, gcc 16.2, glibc 2.44,
+kernel headers 6.18), the card kernel `sys-kernel/mic-sources-6.18` with its drivers
+`sys-kernel/mic-modules`, and the profile `k1om/23.0` (amd64 23.0, merged-usr, without
+MMX/SSE/AVX/CMOV/CET). With them a current Gentoo is cross-built for the card and
+afterwards maintained on the card itself.
+
+### Cross toolchain
+
+Add `contrib/k1om-stage/crossdev.bashrc` to the build host's `/etc/portage/bashrc`
+(crossdev would put the k1om libraries in `lib` instead of `lib64`), then:
+
+```
+crossdev --target k1om-mpss-linux-gnu -oS /var/db/repos/xeon-phi-overlay \
+         --binutils 2.47 --gcc 16.2.0 --kernel 6.18 --libc 2.44-r1
+```
+
+`dev-util/k1om-toolchain-tests` (below) checks the result on a card.
+
+### Card root file system
+
+`contrib/k1om-stage/k1om-stage-setup DIR` prepares a build directory: `DIR/root` for the
+card's root (with `make.profile` pointing at `k1om/23.0`), compiler wrappers that pass
+`--sysroot=DIR/root`, and `DIR/bin/kemerge`, which runs the cross emerge into it. `DIR`
+must be readable by the portage user, so not below `/root`. Then:
+
+```
+USE=build DIR/bin/kemerge -1 --nodeps sys-apps/baselayout
+DIR/bin/kemerge -1 --nodeps sys-kernel/linux-headers sys-libs/glibc
+DIR/bin/kemerge @system
+DIR/bin/kemerge sys-apps/k1om-card-config net-misc/openssh net-misc/dhcpcd ...
+DIR/bin/kemerge --config sys-apps/k1om-card-config
+```
+
+baselayout has to come first and with `USE=build`: only then does it create the
+merged-usr symlinks, which the compiler needs to find the libraries in the new root.
+
+Cross-building rules:
+
+* Never set `CC` and friends in `make.conf`; perl, python and libtool record them. The
+  wrappers come first in `PATH` instead.
+* Perl XS modules cannot be cross-built (they use the build host's perl configuration).
+  Build `dev-vcs/git` with `-perl` and the like, and rebuild them on the card.
+* `profiles/package.mask` masks this overlay's copies of `app-arch/zstd`, `dev-libs/gmp`,
+  `dev-libs/libffi`, `dev-libs/libgcrypt`, `net-misc/openssh`, `sys-apps/busybox`,
+  `sys-apps/kexec-tools` and `sys-libs/libxcrypt` everywhere except in the k1om profile,
+  which in turn masks the `::gentoo` versions. They differ from `::gentoo` only by a k1om
+  patch (no SSE, no CMOV, the k1om target), so a `::gentoo` bump needs a matching copy here.
+
+`sys-apps/k1om-card-config` adds what the card needs beyond a stock root: the `net.mic0`
+interface and a sysctl default without the packet scheduler setting the card kernel lacks.
+Its `--config` step replaces the virtual terminals in `inittab` by a root autologin on the
+virtio console `hvc0` (the host's `/dev/ttyMICn`) and a getty on the I2C serial `ttyS0`,
+and switches the runlevels to `swclock`, `net.mic0` and `sshd`. Host keys, `authorized_keys`,
+the hostname and the network settings are site data and stay with you.
+
+### Booting the card from it
+
+Copy the root onto a block device of the host (a ZFS zvol, an LVM volume or a file), build
+the card kernel from `sys-kernel/mic-sources-6.18` (`ARCH=k1om
+CROSS_COMPILE=k1om-mpss-linux-gnu-`) and `sys-kernel/mic-modules` against it, and make the
+initramfs from the root and the modules:
+
+```
+contrib/persistentfs/mkinitramfs.sh DIR/root /path/to/lib/modules/<release> initramfs-k1om.cpio.gz
+```
+
+Then point the card at all three (see "Booting a card from a block device" above):
+
+```
+OSimage   /usr/share/mpss/boot/bzImage-k1om /usr/share/mpss/boot/System.map-k1om
+Base CPIO /usr/share/mpss/boot/initramfs-k1om.cpio.gz
+RootDevice PersistentFS /dev/zvol/tank/mic1-root
+```
+
+### On the card
+
+Once it runs, the card is a self-hosting Gentoo: remove `CBUILD` and `PKGDIR` from
+`make.conf` and emerge natively. The card has 7.6 GB of RAM for over 200 hardware threads, so
+start with `MAKEOPTS="-j32"` and `EMERGE_DEFAULT_OPTS="--jobs=4"` and lower `-j` for a
+package only after it ran out of memory (cmake's bootstrap needs `-j16`).
 
 ## Testing the cross toolchain on a card
 
@@ -346,12 +434,15 @@ accepts `-msse2` or `target("avx2")`. Tests for libitm, libquadmath and Fortran 
 skipped when the compiler does not provide them. The exit status is 0 only if every
 check passed.
 
-## Cross debugger
+## Debugger
 
-The debugger is built after the toolchain stages:
+`dev-debug/gdb-17.2` carries Intel's k1om support forward-ported from gdb 7.6.50: the
+k1om architecture with the KNC registers (`zmm0-31`, `k0-7`, `vxcsr`), the KNC
+disassembler, native debugging on the card and `gdbserver`. The cross gdb is built
+after the toolchain stages:
 
 ```
-crossdev --target k1om-mpss-linux-gnu --ex-only --ex-gdb --gdb 7.6.50_p386 \
+crossdev --target k1om-mpss-linux-gnu --ex-only --ex-gdb --gdb 17.2 \
          -od /var/db/repos/xeon-phi-overlay
 ```
 
@@ -360,10 +451,12 @@ leaves the existing link alone, so a link left pointing at `::gentoo`'s `dev-deb
 makes every version in this overlay appear masked. (The package lives in `dev-debug`
 because that is where Gentoo moved `gdb` and where crossdev looks for it.)
 
-The resulting `k1om-mpss-linux-gnu-gdb` disassembles the KNC vector ISA, not just
-scalar x86-64. It is built without Python support: this gdb's bindings use CPython APIs
-removed in 3.12/3.13, so no Python slot still in the tree can build them. Pretty-printers
-are the only loss.
+On a card root with the k1om profile, `emerge dev-debug/gdb` gives the native gdb and
+`gdbserver`. With the cross gdb and `gdbserver` on the card, use `set sysroot target:`.
 
-The card-side `gdbserver` is not built here — a k1om binary already ships in the SDK at
-`/opt/mpss/3.8.6/sysroots/k1om-mpss-linux/usr/bin/gdbserver`.
+The vector registers need a card kernel from `mic-sources-6.18` (its series exports the
+KNC vector state through `NT_X86_XSTATE`). On an older card kernel gdb shows `zmm`/`k`/`vxcsr`
+as unavailable and never writes them, since writing them there oopses the card.
+
+`gdb-7.6.50_p386` (Intel's) remains for the MPSS 3.8.6 toolchain; it is built without
+Python, whose bindings in that version use CPython APIs removed in 3.12/3.13.
