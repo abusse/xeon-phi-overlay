@@ -6,7 +6,7 @@ set -u
 DATADIR=${K1OM_TEST_DATADIR:-/usr/share/k1om-toolchain-tests}
 CONF=${K1OM_TEST_CONF:-/etc/k1om-toolchain-test.conf}
 
-CARD= VIA= TARGET=k1om-mpss-linux-gnu BINDIR= SYSROOT= WORKDIR= KEEP= BUILD_ONLY=
+CARD= VIA= LOCAL= TARGET=k1om-mpss-linux-gnu BINDIR= SYSROOT= WORKDIR= KEEP= BUILD_ONLY=
 SSH_OPTS="-oHostKeyAlgorithms=+ssh-rsa -oPubkeyAcceptedAlgorithms=+ssh-rsa -oKexAlgorithms=+diffie-hellman-group1-sha1 -oCiphers=+aes128-cbc -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null -oBatchMode=yes -oLogLevel=ERROR -oConnectTimeout=15"
 [[ -r ${CONF} ]] && . "${CONF}"
 
@@ -14,6 +14,7 @@ usage() {
 	cat <<-USAGE
 	usage: ${0##*/} [options]
 	  -c, --card HOST      card to run the tests on (user@host)
+	  -l, --local          run the tests here (with a native compiler on a card)
 	  -j, --via HOST       reach the card through HOST (runs "ssh HOST ssh CARD");
                        HOST may carry ssh options, e.g. "-p 2222 root@host"
 	  -t, --target TRIPLET compiler triplet (default ${TARGET})
@@ -33,6 +34,7 @@ while [[ $# -gt 0 ]]; do
 	case $1 in
 	-c|--card) CARD=$2; shift ;;
 	-j|--via) VIA=$2; shift ;;
+	-l|--local) LOCAL=1 ;;
 	-t|--target) TARGET=$2; shift ;;
 	-b|--bindir) BINDIR=$2; shift ;;
 	-s|--sysroot) SYSROOT=$2; shift ;;
@@ -45,7 +47,7 @@ while [[ $# -gt 0 ]]; do
 	esac
 	shift
 done
-[[ -n ${CARD} || -n ${BUILD_ONLY} ]] || { echo "no card given (--card or CARD= in ${CONF})" >&2; exit 2; }
+[[ -n ${CARD} || -n ${LOCAL} || -n ${BUILD_ONLY} ]] || { echo "no card given (--card or CARD= in ${CONF})" >&2; exit 2; }
 
 tool() { if [[ -n ${BINDIR} ]]; then echo "${BINDIR}/${TARGET}-$1"; else command -v "${TARGET}-$1"; fi; }
 GCC=$(tool gcc) || true
@@ -55,6 +57,7 @@ GXX=$(tool g++) || true
 GFC=$(tool gfortran) || true
 [[ -x ${GFC} ]] || GFC=
 SR=${SYSROOT:-$("${GCC}" -print-sysroot)}
+SR=${SR:-/}
 SRFLAG=${SYSROOT:+--sysroot=${SYSROOT}}
 CC="${GCC} ${SRFLAG}"
 CXX="${GXX} ${SRFLAG}"
@@ -164,7 +167,11 @@ fi
 cp "${DATADIR}/run-on-card.sh" .
 dir=/tmp/k1om-toolchain-test.$$
 cmd="rm -rf ${dir} && mkdir -p ${dir} && cd ${dir} && tar xzf - && sh ./run-on-card.sh; rc=\$?; cd /; rm -rf ${dir}; exit \$rc"
-if [[ -n ${VIA} ]]; then
+if [[ -n ${LOCAL} ]]; then
+	CARD=$(hostname)
+	cp -a . "${WORKDIR}"/run && sh "${WORKDIR}"/run/run-on-card.sh > "${WORKDIR}/card.out" 2>&1
+	rm -rf "${WORKDIR}"/run
+elif [[ -n ${VIA} ]]; then
 	tar czf - . | ssh -oBatchMode=yes ${VIA} "ssh ${SSH_OPTS} ${CARD} '${cmd}'" > "${WORKDIR}/card.out" 2>&1
 else
 	tar czf - . | ssh ${SSH_OPTS} "${CARD}" "${cmd}" > "${WORKDIR}/card.out" 2>&1
