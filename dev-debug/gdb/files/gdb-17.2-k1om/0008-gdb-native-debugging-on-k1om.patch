@@ -1,0 +1,152 @@
+From 03b2eaa02fd9e89978a9e808a5209d93533222df Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 14 Oct 2026 07:06:49 +0200
+Subject: [PATCH 8/9] gdb: native debugging on k1om
+
+Host configuration for k1om-*-linux* and the KNC register access: the
+x87 state through PTRACE_GETFPREGS, the vector unit through the fixed
+KNC NT_X86_XSTATE layout.
+
+VXCSR.DUE is always set on the hardware.  A kernel whose NT_X86_XSTATE
+does not export the vector unit returns zeros there; its
+PTRACE_SETREGSET walks xstate offsets KNC never sets up and oopses.  In
+that case the vector registers are unavailable and never written.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gdb/amd64-linux-nat.c     | 57 +++++++++++++++++++++++++++++++++++++++
+ gdb/configure.host        |  2 ++
+ gdb/nat/x86-linux-tdesc.c | 17 ++++++++++++
+ 3 files changed, 76 insertions(+)
+
+diff --git a/gdb/amd64-linux-nat.c b/gdb/amd64-linux-nat.c
+index e35527de2a6..d8cb21b627f 100644
+--- a/gdb/amd64-linux-nat.c
++++ b/gdb/amd64-linux-nat.c
+@@ -30,6 +30,7 @@
+ 
+ #include "amd64-nat.h"
+ #include "amd64-tdep.h"
++#include "i387-tdep.h"
+ #include "amd64-linux-tdep.h"
+ #include "i386-linux-tdep.h"
+ #include "x86-tdep.h"
+@@ -232,6 +233,26 @@ amd64_linux_nat_target::fetch_registers (struct regcache *regcache, int regnum)
+ 	return;
+     }
+ 
++  if (tdep->k1om_k0_regnum >= 0
++      && (regnum == -1 || !amd64_native_gregset_supplies_p (gdbarch, regnum)))
++    {
++      elf_fpregset_t fpregs;
++      gdb_byte xstateregs[K1OM_XSTATE_SIZE] = {};
++      struct iovec iov = { xstateregs, sizeof (xstateregs) };
++
++      if (ptrace (PTRACE_GETFPREGS, tid, 0, (long) &fpregs) < 0)
++	perror_with_name (_("Couldn't get floating point status"));
++      amd64_supply_fxsave (regcache, -1, &fpregs);
++
++      if (ptrace (PTRACE_GETREGSET, tid, (unsigned int) NT_X86_XSTATE,
++		  (long) &iov) < 0)
++	perror_with_name (_("Couldn't get vector unit state"));
++      i387_supply_k1om_vpu (regcache, -1,
++			    K1OM_XSTATE_VPU_VALID_P (xstateregs)
++			    ? xstateregs : NULL);
++      return;
++    }
++
+   if (regnum == -1 || !amd64_native_gregset_supplies_p (gdbarch, regnum))
+     {
+       elf_fpregset_t fpregs;
+@@ -304,6 +325,42 @@ amd64_linux_nat_target::store_registers (struct regcache *regcache, int regnum)
+ 	return;
+     }
+ 
++  if (tdep->k1om_k0_regnum >= 0
++      && (regnum == -1 || !amd64_native_gregset_supplies_p (gdbarch, regnum)))
++    {
++      if (regnum == -1 || regnum < tdep->k1om_k0_regnum)
++	{
++	  elf_fpregset_t fpregs;
++
++	  if (ptrace (PTRACE_GETFPREGS, tid, 0, (long) &fpregs) < 0)
++	    perror_with_name (_("Couldn't get floating point status"));
++	  amd64_collect_fxsave (regcache, regnum, &fpregs);
++	  if (ptrace (PTRACE_SETFPREGS, tid, 0, (long) &fpregs) < 0)
++	    perror_with_name (_("Couldn't write floating point status"));
++	}
++      if (regnum == -1 || regnum >= tdep->k1om_k0_regnum)
++	{
++	  gdb_byte xstateregs[K1OM_XSTATE_SIZE] = {};
++	  struct iovec iov = { xstateregs, sizeof (xstateregs) };
++
++	  if (ptrace (PTRACE_GETREGSET, tid, (unsigned int) NT_X86_XSTATE,
++		      (long) &iov) < 0)
++	    perror_with_name (_("Couldn't get vector unit state"));
++	  if (!K1OM_XSTATE_VPU_VALID_P (xstateregs))
++	    {
++	      if (regnum != -1)
++		error (_("The kernel does not support writing the vector "
++			 "unit registers."));
++	      return;
++	    }
++	  i387_collect_k1om_vpu (regcache, regnum, xstateregs);
++	  if (ptrace (PTRACE_SETREGSET, tid, (unsigned int) NT_X86_XSTATE,
++		      (long) &iov) < 0)
++	    perror_with_name (_("Couldn't write vector unit state"));
++	}
++      return;
++    }
++
+   if (regnum == -1 || !amd64_native_gregset_supplies_p (gdbarch, regnum))
+     {
+       elf_fpregset_t fpregs;
+diff --git a/gdb/configure.host b/gdb/configure.host
+index fdd651987e3..6b963532465 100644
+--- a/gdb/configure.host
++++ b/gdb/configure.host
+@@ -67,6 +67,7 @@ s390*)			gdb_host_cpu=s390 ;;
+ sh*)			gdb_host_cpu=sh ;;
+ tilegx*)		gdb_host_cpu=tilegx ;;
+ x86_64*)		gdb_host_cpu=i386 ;;
++k1om*)			gdb_host_cpu=i386 ;;
+ m32r*)			gdb_host_cpu=m32r ;;
+ xtensa*)		gdb_host_cpu=xtensa ;;
+ *)			gdb_host_cpu=$host_cpu ;;
+@@ -174,6 +175,7 @@ vax-*-netbsd* | vax-*-knetbsd*-gnu)
+ vax-*-openbsd*)		gdb_host=obsd ;;
+ 
+ x86_64-*-linux*)	gdb_host=linux64 ;;
++k1om-*-linux*)		gdb_host=linux64 ;;
+ x86_64-*-freebsd* | x86_64-*-kfreebsd*-gnu)
+ 			gdb_host=fbsd64 ;;
+ x86_64-*-netbsd* | x86_64-*-knetbsd*-gnu)
+diff --git a/gdb/nat/x86-linux-tdesc.c b/gdb/nat/x86-linux-tdesc.c
+index 5bc36b6bef2..5de16fae787 100644
+--- a/gdb/nat/x86-linux-tdesc.c
++++ b/gdb/nat/x86-linux-tdesc.c
+@@ -46,6 +46,23 @@ const target_desc *
+ x86_linux_tdesc_for_tid (int tid, uint64_t *xstate_bv_storage,
+ 			 x86_xsave_layout *xsave_layout_storage)
+ {
++#ifdef __KNC__
++  /* Knights Corner has no XSAVE; NT_X86_XSTATE carries the fxsave area
++     and the vector unit in a fixed layout.  */
++  if (have_ptrace_getregset == TRIBOOL_UNKNOWN)
++    {
++      uint64_t xstateregs[X86_XSTATE_SSE_SIZE / sizeof (uint64_t)];
++      struct iovec iov = { xstateregs, sizeof (xstateregs) };
++
++      have_ptrace_getregset
++	= (ptrace (PTRACE_GETREGSET, tid, (unsigned int) NT_X86_XSTATE,
++		   &iov) < 0
++	   ? TRIBOOL_FALSE : TRIBOOL_TRUE);
++    }
++  *xstate_bv_storage = X86_XSTATE_X87_MASK;
++  return k1om_linux_read_description ();
++#endif
++
+ #ifdef __x86_64__
+   x86_linux_arch_size arch_size = x86_linux_ptrace_get_arch_size (tid);
+   bool is_64bit = arch_size.is_64bit ();

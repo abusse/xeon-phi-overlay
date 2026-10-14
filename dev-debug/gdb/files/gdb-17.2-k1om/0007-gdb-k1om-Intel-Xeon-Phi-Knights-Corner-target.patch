@@ -1,0 +1,849 @@
+From 2188690f1434fb6fdfa793f36a106dd66738f4eb Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 14 Oct 2026 07:06:49 +0200
+Subject: [PATCH 7/9] gdb: k1om (Intel Xeon Phi Knights Corner) target
+
+KNC is x86-64 without MMX/SSE/AVX: the vector unit has 32 512-bit zmm
+registers, 8 16-bit mask registers k0-k7 and VXCSR.  Following the k1om
+support in Intel's MPSS gdb 7.6.50:
+
+- target description feature org.gnu.gdb.i386.k1om (k0-7, zmm0-31,
+  vxcsr) and a k1om tdesc: amd64 core + k1om + segments (+ orig_rax);
+- the registers are raw, numbered after the GNU/Linux orig_rax;
+- k1om GNU/Linux osabi on top of amd64-linux: SSE-class arguments and
+  return values live in the low lanes of zmm0-7, DWARF numbers of the k1om
+  GCC (zmm0-15 at 17-32, zmm16-31 at 67-82, k at 118, vxcsr at 126);
+- fxsave without SSE registers, and the vector unit block of the KNC
+  NT_X86_XSTATE layout (fxsave area, xsave header, zmm, k, vxcsr), also
+  for core files;
+- report return values as unavailable and refuse to pass arguments in
+  vector registers whose value is not available.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gdb/amd64-linux-tdep.c           |  70 +++++++++++++++++++-
+ gdb/amd64-tdep.c                 |  48 ++++++++++++--
+ gdb/amd64-tdep.h                 |  11 ++++
+ gdb/arch/amd64-linux-tdesc.c     |  15 +++++
+ gdb/arch/amd64-linux-tdesc.h     |   4 ++
+ gdb/arch/amd64.c                 |  30 +++++++++
+ gdb/arch/amd64.h                 |   5 ++
+ gdb/configure.tgt                |   6 +-
+ gdb/features/i386/64bit-k1om.c   | 107 +++++++++++++++++++++++++++++++
+ gdb/features/i386/64bit-k1om.xml |  81 +++++++++++++++++++++++
+ gdb/features/i386/k1om-linux.xml |  20 ++++++
+ gdb/i386-tdep.c                  |  31 +++++++++
+ gdb/i386-tdep.h                  |   4 ++
+ gdb/i387-tdep.c                  |  67 +++++++++++++++++--
+ gdb/i387-tdep.h                  |  21 ++++++
+ 15 files changed, 503 insertions(+), 17 deletions(-)
+ create mode 100644 gdb/features/i386/64bit-k1om.c
+ create mode 100644 gdb/features/i386/64bit-k1om.xml
+ create mode 100644 gdb/features/i386/k1om-linux.xml
+
+diff --git a/gdb/amd64-linux-tdep.c b/gdb/amd64-linux-tdep.c
+index a21f8a9a5ce..dc008f62fc8 100644
+--- a/gdb/amd64-linux-tdep.c
++++ b/gdb/amd64-linux-tdep.c
+@@ -39,6 +39,7 @@
+ #include "inferior.h"
+ 
+ #include "amd64-tdep.h"
++#include "i387-tdep.h"
+ #include "solib-svr4.h"
+ #include "xml-syscall.h"
+ #include "glibc-tdep.h"
+@@ -2143,6 +2144,51 @@ amd64_linux_init_abi_common (struct gdbarch_info info, struct gdbarch *gdbarch,
+   dwarf2_frame_set_init_reg (gdbarch, amd64_init_reg);
+ }
+ 
++/* The k1om vector unit block of the NT_X86_XSTATE note; the x87 state
++   comes from .reg2.  */
++
++static void
++k1om_linux_supply_xstateregset (const struct regset *regset,
++				struct regcache *regcache, int regnum,
++				const void *xstateregs, size_t len)
++{
++  i387_supply_k1om_vpu (regcache, regnum, xstateregs);
++}
++
++static void
++k1om_linux_collect_xstateregset (const struct regset *regset,
++				 const struct regcache *regcache,
++				 int regnum, void *xstateregs, size_t len)
++{
++  i387_collect_k1om_vpu (regcache, regnum, xstateregs);
++}
++
++static const struct regset k1om_linux_xstateregset =
++  {
++    NULL,
++    k1om_linux_supply_xstateregset,
++    k1om_linux_collect_xstateregset
++  };
++
++static void
++k1om_linux_iterate_over_regset_sections (struct gdbarch *gdbarch,
++					 iterate_over_regset_sections_cb *cb,
++					 void *cb_data,
++					 const struct regcache *regcache)
++{
++  cb (".reg", 27 * 8, 27 * 8, &i386_gregset, NULL, cb_data);
++  cb (".reg2", 512, 512, &amd64_fpregset, NULL, cb_data);
++  cb (".reg-xstate", K1OM_XSTATE_SIZE, K1OM_XSTATE_SIZE,
++      &k1om_linux_xstateregset, "KNC vector state", cb_data);
++}
++
++static const struct target_desc *
++k1om_linux_core_read_description (struct gdbarch *gdbarch,
++				  struct target_ops *target, bfd *abfd)
++{
++  return k1om_linux_read_description ();
++}
++
+ static void
+ amd64_linux_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
+ {
+@@ -2157,13 +2203,18 @@ amd64_linux_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
+   tdep->gregset_num_regs = ARRAY_SIZE (amd64_linux_gregset_reg_offset);
+   tdep->sizeof_gregset = 27 * 8;
+ 
++  bool k1om = info.bfd_arch_info->arch == bfd_arch_k1om;
++  if (k1om)
++    tdep->k1om_k0_regnum = K1OM_K0_REGNUM;
++
+   amd64_init_abi (info, gdbarch,
+-		  amd64_linux_read_description (X86_XSTATE_SSE_MASK, false));
++		  k1om ? k1om_linux_read_description ()
++		  : amd64_linux_read_description (X86_XSTATE_SSE_MASK, false));
+ 
+   const target_desc *tdesc = tdep->tdesc;
+ 
+-  /* Reserve a number for orig_rax.  */
+-  set_gdbarch_num_regs (gdbarch, AMD64_LINUX_NUM_REGS);
++  /* Reserve a number for orig_rax, and the k1om vector unit after it.  */
++  set_gdbarch_num_regs (gdbarch, k1om ? K1OM_NUM_REGS : AMD64_LINUX_NUM_REGS);
+ 
+   feature = tdesc_find_feature (tdesc, "org.gnu.gdb.i386.linux");
+   if (feature == NULL)
+@@ -2177,6 +2228,17 @@ amd64_linux_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
+ 
+   amd64_linux_init_abi_common (info, gdbarch, 2);
+ 
++  if (k1om)
++    {
++      set_gdbarch_dwarf2_reg_to_regnum (gdbarch, k1om_dwarf_reg_to_regnum);
++      set_gdbarch_stab_reg_to_regnum (gdbarch, k1om_dwarf_reg_to_regnum);
++      set_gdbarch_core_read_x86_xsave_layout (gdbarch, nullptr);
++      set_gdbarch_iterate_over_regset_sections
++	(gdbarch, k1om_linux_iterate_over_regset_sections);
++      set_gdbarch_core_read_description (gdbarch,
++					 k1om_linux_core_read_description);
++    }
++
+   /* Initialize the amd64_linux_record_tdep.  */
+   /* These values are the size of the type that will be used in a system
+      call.  They are obtained from Linux Kernel source.  */
+@@ -2569,4 +2631,6 @@ INIT_GDB_FILE (amd64_linux_tdep)
+ 			  GDB_OSABI_LINUX, amd64_linux_init_abi);
+   gdbarch_register_osabi (bfd_arch_i386, bfd_mach_x64_32,
+ 			  GDB_OSABI_LINUX, amd64_x32_linux_init_abi);
++  gdbarch_register_osabi (bfd_arch_k1om, bfd_mach_k1om,
++			  GDB_OSABI_LINUX, amd64_linux_init_abi);
+ }
+diff --git a/gdb/amd64-tdep.c b/gdb/amd64-tdep.c
+index 9245889210b..2b68cc84483 100755
+--- a/gdb/amd64-tdep.c
++++ b/gdb/amd64-tdep.c
+@@ -757,6 +757,7 @@ amd64_return_value (struct gdbarch *gdbarch, struct value *function,
+   int len = type->length ();
+   static int integer_regnum[] = { AMD64_RAX_REGNUM, AMD64_RDX_REGNUM };
+   static int sse_regnum[] = { AMD64_XMM0_REGNUM, AMD64_XMM1_REGNUM };
++  i386_gdbarch_tdep *tdep = gdbarch_tdep<i386_gdbarch_tdep> (gdbarch);
+   int integer_reg = 0;
+   int sse_reg = 0;
+   int i;
+@@ -840,14 +841,17 @@ amd64_return_value (struct gdbarch *gdbarch, struct value *function,
+ 	case AMD64_SSE:
+ 	  /* 4. If the class is SSE, the next available SSE register
+ 	     of the sequence %xmm0, %xmm1 is used.  */
+-	  regnum = sse_regnum[sse_reg++];
++	  regnum = (tdep->k1om_k0_regnum >= 0
++		    ? K1OM_ZMM0_REGNUM + sse_reg : sse_regnum[sse_reg]);
++	  sse_reg++;
+ 	  break;
+ 
+ 	case AMD64_SSEUP:
+ 	  /* 5. If the class is SSEUP, the eightbyte is passed in the
+ 	     upper half of the last used SSE register.  */
+ 	  gdb_assert (sse_reg > 0);
+-	  regnum = sse_regnum[sse_reg - 1];
++	  regnum = (tdep->k1om_k0_regnum >= 0
++		    ? K1OM_ZMM0_REGNUM + sse_reg - 1 : sse_regnum[sse_reg - 1]);
+ 	  offset = 8;
+ 	  break;
+ 
+@@ -877,9 +881,10 @@ amd64_return_value (struct gdbarch *gdbarch, struct value *function,
+ 
+       gdb_assert (regnum != -1);
+ 
+-      if (readbuf)
+-	regcache->raw_read_part (regnum, offset, std::min (len, 8),
+-				 readbuf + i * 8);
++      if (readbuf
++	  && regcache->raw_read_part (regnum, offset, std::min (len, 8),
++				      readbuf + i * 8) == REG_UNAVAILABLE)
++	(*read_value)->mark_bytes_unavailable (i * 8, std::min (len, 8));
+       if (writebuf)
+ 	regcache->raw_write_part (regnum, offset, std::min (len, 8),
+ 				  writebuf + i * 8);
+@@ -911,6 +916,8 @@ amd64_push_arguments (struct regcache *regcache, int nargs, struct value **args,
+     AMD64_XMM0_REGNUM + 6, AMD64_XMM0_REGNUM + 7,
+   };
+   struct value **stack_args = XALLOCAVEC (struct value *, nargs);
++  i386_gdbarch_tdep *tdep
++    = gdbarch_tdep<i386_gdbarch_tdep> (regcache->arch ());
+   int num_stack_args = 0;
+   int num_elements = 0;
+   int element = 0;
+@@ -974,12 +981,16 @@ if (return_method == return_method_struct)
+ 		  break;
+ 
+ 		case AMD64_SSE:
+-		  regnum = sse_regnum[sse_reg++];
++		  regnum = (tdep->k1om_k0_regnum >= 0
++			    ? K1OM_ZMM0_REGNUM + sse_reg : sse_regnum[sse_reg]);
++		  sse_reg++;
+ 		  break;
+ 
+ 		case AMD64_SSEUP:
+ 		  gdb_assert (sse_reg > 0);
+-		  regnum = sse_regnum[sse_reg - 1];
++		  regnum = (tdep->k1om_k0_regnum >= 0
++			    ? K1OM_ZMM0_REGNUM + sse_reg - 1
++			    : sse_regnum[sse_reg - 1]);
+ 		  offset = 8;
+ 		  break;
+ 
+@@ -991,6 +1002,10 @@ if (return_method == return_method_struct)
+ 		}
+ 
+ 	      gdb_assert (regnum != -1);
++	      if (regcache->get_register_status (regnum) == REG_UNAVAILABLE)
++		error (_("Cannot pass the argument in register %s: its value "
++			 "is not available."),
++		       gdbarch_register_name (regcache->arch (), regnum));
+ 	      memset (buf, 0, sizeof buf);
+ 	      memcpy (buf, valbuf + j * 8, std::min (len, 8));
+ 	      regcache->raw_write_part (regnum, offset, 8, buf);
+@@ -3472,6 +3487,25 @@ amd64_get_longjmp_target (const frame_info_ptr &frame, CORE_ADDR *pc)
+   return 1;
+ }
+ 
++/* Convert a DWARF register number of the k1om GCC (zmm0-15 and zmm16-31
++   in the xmm slots, k0-7 at 118, vxcsr at 126) to a GDB register number.  */
++
++int
++k1om_dwarf_reg_to_regnum (struct gdbarch *gdbarch, int reg)
++{
++  if (reg >= 17 && reg <= 32)
++    return K1OM_ZMM0_REGNUM + reg - 17;
++  if (reg >= 67 && reg <= 82)
++    return K1OM_ZMM0_REGNUM + 16 + reg - 67;
++  if (reg >= 118 && reg <= 125)
++    return K1OM_K0_REGNUM + reg - 118;
++  if (reg == 126)
++    return K1OM_VXCSR_REGNUM;
++  if (reg == 64)
++    return -1;
++  return amd64_dwarf_reg_to_regnum (gdbarch, reg);
++}
++
+ static const int amd64_record_regmap[] =
+ {
+   AMD64_RAX_REGNUM, AMD64_RCX_REGNUM, AMD64_RDX_REGNUM, AMD64_RBX_REGNUM,
+diff --git a/gdb/amd64-tdep.h b/gdb/amd64-tdep.h
+index e663288c608..f7b5afeb364 100644
+--- a/gdb/amd64-tdep.h
++++ b/gdb/amd64-tdep.h
+@@ -91,6 +91,14 @@ enum amd64_regnum
+ 
+ #define AMD64_NUM_REGS		(AMD64_GSBASE_REGNUM + 1)
+ 
++/* Knights Corner (k1om): no SSE/AVX; the vector unit has 32 512-bit
++   registers, 8 16-bit masks and VXCSR.  Numbered after the GNU/Linux
++   orig_rax.  */
++#define K1OM_K0_REGNUM		(AMD64_GSBASE_REGNUM + 2)
++#define K1OM_ZMM0_REGNUM	(K1OM_K0_REGNUM + 8)
++#define K1OM_VXCSR_REGNUM	(K1OM_ZMM0_REGNUM + 32)
++#define K1OM_NUM_REGS		(K1OM_VXCSR_REGNUM + 1)
++
+ extern displaced_step_copy_insn_closure_up amd64_displaced_step_copy_insn
+   (struct gdbarch *gdbarch, CORE_ADDR from, CORE_ADDR to,
+    struct regcache *regs);
+@@ -100,6 +108,9 @@ extern void amd64_displaced_step_fixup
+ 
+ /* Initialize the ABI for amd64.  Uses DEFAULT_TDESC as fallback
+    tdesc, if INFO does not specify one.  */
++/* DWARF register mapping for k1om.  */
++extern int k1om_dwarf_reg_to_regnum (struct gdbarch *gdbarch, int reg);
++
+ extern void amd64_init_abi (struct gdbarch_info info,
+ 			    struct gdbarch *gdbarch,
+ 			    const target_desc *default_tdesc);
+diff --git a/gdb/arch/amd64-linux-tdesc.c b/gdb/arch/amd64-linux-tdesc.c
+index 879666274e0..fdbba5a7e18 100644
+--- a/gdb/arch/amd64-linux-tdesc.c
++++ b/gdb/arch/amd64-linux-tdesc.c
+@@ -65,3 +65,18 @@ amd64_linux_read_description (uint64_t xstate_bv, bool is_x32)
+   tdesc_cache.emplace (xstate_bv, std::move (tdesc));
+   return ptr;
+ }
++
++/* See arch/amd64-linux-tdesc.h.  */
++
++const struct target_desc *
++k1om_linux_read_description ()
++{
++  static target_desc *tdesc;
++
++  if (tdesc == nullptr)
++    {
++      tdesc = k1om_create_target_description (true);
++      x86_linux_post_init_tdesc (tdesc, true);
++    }
++  return tdesc;
++}
+diff --git a/gdb/arch/amd64-linux-tdesc.h b/gdb/arch/amd64-linux-tdesc.h
+index 4c0c591f5bf..13a05be2380 100644
+--- a/gdb/arch/amd64-linux-tdesc.h
++++ b/gdb/arch/amd64-linux-tdesc.h
+@@ -28,4 +28,8 @@ struct target_desc;
+ extern const target_desc *amd64_linux_read_description
+   (uint64_t xstate_bv, bool is_x32);
+ 
++/* Return the target description for GNU/Linux on k1om (Knights Corner).  */
++
++extern const target_desc *k1om_linux_read_description ();
++
+ #endif /* GDB_ARCH_AMD64_LINUX_TDESC_H */
+diff --git a/gdb/arch/amd64.c b/gdb/arch/amd64.c
+index 9fbe8026600..4b21cf7ce45 100644
+--- a/gdb/arch/amd64.c
++++ b/gdb/arch/amd64.c
+@@ -23,6 +23,7 @@
+ #include "../features/i386/64bit-avx.c"
+ #include "../features/i386/64bit-avx512.c"
+ #include "../features/i386/64bit-core.c"
++#include "../features/i386/64bit-k1om.c"
+ #include "../features/i386/64bit-linux.c"
+ #include "../features/i386/64bit-segments.c"
+ #include "../features/i386/64bit-sse.c"
+@@ -80,3 +81,32 @@ amd64_create_target_description (uint64_t xstate_bv, bool is_x32,
+ 
+   return tdesc.release ();
+ }
++
++/* See arch/amd64.h.  */
++
++target_desc *
++k1om_create_target_description (bool is_linux)
++{
++  target_desc_up tdesc = allocate_target_description ();
++
++#ifndef IN_PROCESS_AGENT
++  set_tdesc_architecture (tdesc.get (), "k1om");
++
++  if (is_linux)
++    set_tdesc_osabi (tdesc.get (), GDB_OSABI_LINUX);
++#endif
++
++  long regnum = 0;
++
++  regnum = create_feature_i386_64bit_core (tdesc.get (), regnum);
++  regnum = create_feature_i386_64bit_k1om (tdesc.get (), regnum);
++  regnum = create_feature_i386_64bit_segments (tdesc.get (), regnum);
++  if (is_linux)
++    {
++      tdesc_feature *feature
++	= tdesc_create_feature (tdesc.get (), "org.gnu.gdb.i386.linux");
++      tdesc_create_reg (feature, "orig_rax", regnum++, 1, NULL, 64, "int");
++    }
++
++  return tdesc.release ();
++}
+diff --git a/gdb/arch/amd64.h b/gdb/arch/amd64.h
+index 60c17ebc42d..423ff489a5e 100644
+--- a/gdb/arch/amd64.h
++++ b/gdb/arch/amd64.h
+@@ -30,4 +30,9 @@ target_desc *amd64_create_target_description (uint64_t xstate_bv,
+ 					      bool is_x32, bool is_linux,
+ 					      bool segments);
+ 
++/* Create a target description for k1om (Intel Xeon Phi Knights Corner):
++   the amd64 core registers and the KNC vector unit, without SSE.  */
++
++target_desc *k1om_create_target_description (bool is_linux);
++
+ #endif /* GDB_ARCH_AMD64_H */
+diff --git a/gdb/configure.tgt b/gdb/configure.tgt
+index f969c9e097b..00d5dc17d6a 100644
+--- a/gdb/configure.tgt
++++ b/gdb/configure.tgt
+@@ -109,7 +109,7 @@ riscv*-*-*)
+ 	cpu_obs="riscv-tdep.o riscv-none-tdep.o arch/riscv.o \
+ 	         ravenscar-thread.o riscv-ravenscar-thread.o";;
+ 
+-x86_64-*-*)
++x86_64-*-* | k1om-*-*)
+ 	cpu_obs="${i386_tobjs} ${amd64_tobjs}";;
+ 
+ xtensa*)
+@@ -719,8 +719,8 @@ x86_64-*-dicos*)
+ x86_64-*-elf*)
+ 	gdb_target_obs="${i386_tobjs}"
+ 	;;
+-x86_64-*-linux*)
+-	# Target: GNU/Linux x86-64
++x86_64-*-linux* | k1om-*-linux*)
++	# Target: GNU/Linux x86-64, Xeon Phi Knights Corner
+ 	gdb_target_obs="amd64-linux-tdep.o ${i386_tobjs}  \
+ 			i386-linux-tdep.o glibc-tdep.o svr4-tls-tdep.o \
+ 			solib-svr4.o solib-svr4-linux.o symfile-mem.o \
+diff --git a/gdb/features/i386/64bit-k1om.c b/gdb/features/i386/64bit-k1om.c
+new file mode 100644
+index 00000000000..133f58aa469
+--- /dev/null
++++ b/gdb/features/i386/64bit-k1om.c
+@@ -0,0 +1,107 @@
++/* THIS FILE IS GENERATED.  -*- buffer-read-only: t -*- vi:set ro:
++  Original: 64bit-k1om.xml */
++
++#include "gdbsupport/tdesc.h"
++
++static int
++create_feature_i386_64bit_k1om (struct target_desc *result, long regnum)
++{
++  struct tdesc_feature *feature;
++
++  feature = tdesc_create_feature (result, "org.gnu.gdb.i386.k1om");
++  tdesc_type *element_type;
++  element_type = tdesc_named_type (feature, "ieee_single");
++  tdesc_create_vector (feature, "v16f", element_type, 16);
++
++  element_type = tdesc_named_type (feature, "ieee_double");
++  tdesc_create_vector (feature, "v8d", element_type, 8);
++
++  element_type = tdesc_named_type (feature, "int8");
++  tdesc_create_vector (feature, "v64i8", element_type, 64);
++
++  element_type = tdesc_named_type (feature, "int16");
++  tdesc_create_vector (feature, "v32i16", element_type, 32);
++
++  element_type = tdesc_named_type (feature, "int32");
++  tdesc_create_vector (feature, "v16i32", element_type, 16);
++
++  element_type = tdesc_named_type (feature, "int64");
++  tdesc_create_vector (feature, "v8i64", element_type, 8);
++
++  element_type = tdesc_named_type (feature, "uint128");
++  tdesc_create_vector (feature, "v4ui128", element_type, 4);
++
++  tdesc_type_with_fields *type_with_fields;
++  type_with_fields = tdesc_create_union (feature, "vec512");
++  tdesc_type *field_type;
++  field_type = tdesc_named_type (feature, "v16f");
++  tdesc_add_field (type_with_fields, "v16_float", field_type);
++  field_type = tdesc_named_type (feature, "v8d");
++  tdesc_add_field (type_with_fields, "v8_double", field_type);
++  field_type = tdesc_named_type (feature, "v64i8");
++  tdesc_add_field (type_with_fields, "v64_int8", field_type);
++  field_type = tdesc_named_type (feature, "v32i16");
++  tdesc_add_field (type_with_fields, "v32_int16", field_type);
++  field_type = tdesc_named_type (feature, "v16i32");
++  tdesc_add_field (type_with_fields, "v16_int32", field_type);
++  field_type = tdesc_named_type (feature, "v8i64");
++  tdesc_add_field (type_with_fields, "v8_int64", field_type);
++  field_type = tdesc_named_type (feature, "v4ui128");
++  tdesc_add_field (type_with_fields, "v4_uint128", field_type);
++
++  type_with_fields = tdesc_create_flags (feature, "k1om_vxcsr", 4);
++  tdesc_add_flag (type_with_fields, 0, "IE");
++  tdesc_add_flag (type_with_fields, 1, "DE");
++  tdesc_add_flag (type_with_fields, 2, "ZE");
++  tdesc_add_flag (type_with_fields, 3, "OE");
++  tdesc_add_flag (type_with_fields, 4, "UE");
++  tdesc_add_flag (type_with_fields, 5, "PE");
++  tdesc_add_flag (type_with_fields, 6, "DAZ");
++  tdesc_add_bitfield (type_with_fields, "RC", 13, 14);
++  tdesc_add_flag (type_with_fields, 15, "FZ");
++  tdesc_add_flag (type_with_fields, 21, "DUE");
++
++  regnum = 40;
++  tdesc_create_reg (feature, "k0", regnum++, 1, NULL, 16, "uint16");
++  tdesc_create_reg (feature, "k1", regnum++, 1, NULL, 16, "uint16");
++  tdesc_create_reg (feature, "k2", regnum++, 1, NULL, 16, "uint16");
++  tdesc_create_reg (feature, "k3", regnum++, 1, NULL, 16, "uint16");
++  tdesc_create_reg (feature, "k4", regnum++, 1, NULL, 16, "uint16");
++  tdesc_create_reg (feature, "k5", regnum++, 1, NULL, 16, "uint16");
++  tdesc_create_reg (feature, "k6", regnum++, 1, NULL, 16, "uint16");
++  tdesc_create_reg (feature, "k7", regnum++, 1, NULL, 16, "uint16");
++  tdesc_create_reg (feature, "zmm0", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm1", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm2", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm3", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm4", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm5", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm6", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm7", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm8", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm9", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm10", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm11", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm12", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm13", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm14", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm15", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm16", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm17", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm18", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm19", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm20", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm21", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm22", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm23", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm24", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm25", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm26", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm27", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm28", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm29", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm30", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "zmm31", regnum++, 1, NULL, 512, "vec512");
++  tdesc_create_reg (feature, "vxcsr", regnum++, 1, "vector", 32, "k1om_vxcsr");
++  return regnum;
++}
+diff --git a/gdb/features/i386/64bit-k1om.xml b/gdb/features/i386/64bit-k1om.xml
+new file mode 100644
+index 00000000000..8197a3203b7
+--- /dev/null
++++ b/gdb/features/i386/64bit-k1om.xml
+@@ -0,0 +1,81 @@
++<?xml version="1.0"?>
++<!-- Copyright (C) 2012-2026 Free Software Foundation, Inc.
++
++     Copying and distribution of this file, with or without modification,
++     are permitted in any medium without royalty provided the copyright
++     notice and this notice are preserved.  -->
++
++<!-- Intel Xeon Phi (Knights Corner) vector unit: 32 512-bit vector
++     registers, 8 16-bit mask registers and the vector control register.  -->
++<!DOCTYPE feature SYSTEM "gdb-target.dtd">
++<feature name="org.gnu.gdb.i386.k1om">
++  <vector id="v16f" type="ieee_single" count="16"/>
++  <vector id="v8d" type="ieee_double" count="8"/>
++  <vector id="v64i8" type="int8" count="64"/>
++  <vector id="v32i16" type="int16" count="32"/>
++  <vector id="v16i32" type="int32" count="16"/>
++  <vector id="v8i64" type="int64" count="8"/>
++  <vector id="v4ui128" type="uint128" count="4"/>
++  <union id="vec512">
++    <field name="v16_float" type="v16f"/>
++    <field name="v8_double" type="v8d"/>
++    <field name="v64_int8" type="v64i8"/>
++    <field name="v32_int16" type="v32i16"/>
++    <field name="v16_int32" type="v16i32"/>
++    <field name="v8_int64" type="v8i64"/>
++    <field name="v4_uint128" type="v4ui128"/>
++  </union>
++  <flags id="k1om_vxcsr" size="4">
++    <field name="IE" start="0" end="0"/>
++    <field name="DE" start="1" end="1"/>
++    <field name="ZE" start="2" end="2"/>
++    <field name="OE" start="3" end="3"/>
++    <field name="UE" start="4" end="4"/>
++    <field name="PE" start="5" end="5"/>
++    <field name="DAZ" start="6" end="6"/>
++    <field name="RC" start="13" end="14"/>
++    <field name="FZ" start="15" end="15"/>
++    <field name="DUE" start="21" end="21"/>
++  </flags>
++  <reg name="k0" bitsize="16" type="uint16" regnum="40"/>
++  <reg name="k1" bitsize="16" type="uint16" regnum="41"/>
++  <reg name="k2" bitsize="16" type="uint16" regnum="42"/>
++  <reg name="k3" bitsize="16" type="uint16" regnum="43"/>
++  <reg name="k4" bitsize="16" type="uint16" regnum="44"/>
++  <reg name="k5" bitsize="16" type="uint16" regnum="45"/>
++  <reg name="k6" bitsize="16" type="uint16" regnum="46"/>
++  <reg name="k7" bitsize="16" type="uint16" regnum="47"/>
++  <reg name="zmm0" bitsize="512" type="vec512"/>
++  <reg name="zmm1" bitsize="512" type="vec512"/>
++  <reg name="zmm2" bitsize="512" type="vec512"/>
++  <reg name="zmm3" bitsize="512" type="vec512"/>
++  <reg name="zmm4" bitsize="512" type="vec512"/>
++  <reg name="zmm5" bitsize="512" type="vec512"/>
++  <reg name="zmm6" bitsize="512" type="vec512"/>
++  <reg name="zmm7" bitsize="512" type="vec512"/>
++  <reg name="zmm8" bitsize="512" type="vec512"/>
++  <reg name="zmm9" bitsize="512" type="vec512"/>
++  <reg name="zmm10" bitsize="512" type="vec512"/>
++  <reg name="zmm11" bitsize="512" type="vec512"/>
++  <reg name="zmm12" bitsize="512" type="vec512"/>
++  <reg name="zmm13" bitsize="512" type="vec512"/>
++  <reg name="zmm14" bitsize="512" type="vec512"/>
++  <reg name="zmm15" bitsize="512" type="vec512"/>
++  <reg name="zmm16" bitsize="512" type="vec512"/>
++  <reg name="zmm17" bitsize="512" type="vec512"/>
++  <reg name="zmm18" bitsize="512" type="vec512"/>
++  <reg name="zmm19" bitsize="512" type="vec512"/>
++  <reg name="zmm20" bitsize="512" type="vec512"/>
++  <reg name="zmm21" bitsize="512" type="vec512"/>
++  <reg name="zmm22" bitsize="512" type="vec512"/>
++  <reg name="zmm23" bitsize="512" type="vec512"/>
++  <reg name="zmm24" bitsize="512" type="vec512"/>
++  <reg name="zmm25" bitsize="512" type="vec512"/>
++  <reg name="zmm26" bitsize="512" type="vec512"/>
++  <reg name="zmm27" bitsize="512" type="vec512"/>
++  <reg name="zmm28" bitsize="512" type="vec512"/>
++  <reg name="zmm29" bitsize="512" type="vec512"/>
++  <reg name="zmm30" bitsize="512" type="vec512"/>
++  <reg name="zmm31" bitsize="512" type="vec512"/>
++  <reg name="vxcsr" bitsize="32" type="k1om_vxcsr" group="vector"/>
++</feature>
+diff --git a/gdb/features/i386/k1om-linux.xml b/gdb/features/i386/k1om-linux.xml
+new file mode 100644
+index 00000000000..ed4e387e594
+--- /dev/null
++++ b/gdb/features/i386/k1om-linux.xml
+@@ -0,0 +1,20 @@
++<?xml version="1.0"?>
++<!-- Copyright (C) 2012-2026 Free Software Foundation, Inc.
++
++     Copying and distribution of this file, with or without modification,
++     are permitted in any medium without royalty provided the copyright
++     notice and this notice are preserved.  -->
++
++<!-- K1OM - Includes Linux-only special "register".  -->
++
++<!DOCTYPE target SYSTEM "gdb-target.dtd">
++<target>
++  <architecture>k1om</architecture>
++  <osabi>GNU/Linux</osabi>
++  <xi:include href="64bit-core.xml"/>
++  <xi:include href="64bit-k1om.xml"/>
++  <xi:include href="64bit-segments.xml"/>
++  <feature name="org.gnu.gdb.i386.linux">
++    <reg name="orig_rax" bitsize="64" type="int" regnum="83"/>
++  </feature>
++</target>
+diff --git a/gdb/i386-tdep.c b/gdb/i386-tdep.c
+index f75745a3ecf..551908aadba 100644
+--- a/gdb/i386-tdep.c
++++ b/gdb/i386-tdep.c
+@@ -4336,6 +4336,12 @@ i386_register_reggroup_p (struct gdbarch *gdbarch, int regnum,
+   if (i386_byte_regnum_p (gdbarch, regnum))
+     return 0;
+ 
++  if (tdep->k1om_k0_regnum >= 0
++      && regnum >= tdep->k1om_k0_regnum
++      && regnum < tdep->k1om_k0_regnum + 41)
++    return (group == vector_reggroup || group == all_reggroup
++	    || group == save_reggroup || group == restore_reggroup);
++
+   if (i386_word_regnum_p (gdbarch, regnum))
+     return 0;
+ 
+@@ -8628,6 +8634,30 @@ i386_validate_tdesc_p (i386_gdbarch_tdep *tdep,
+ 
+   valid_p = 1;
+ 
++  /* Knights Corner vector unit.  */
++  const tdesc_feature *feature_k1om
++    = tdesc_find_feature (tdesc, "org.gnu.gdb.i386.k1om");
++  if (feature_k1om != nullptr)
++    {
++      static const char *const k1om_names[] = {
++	"k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7",
++	"zmm0", "zmm1", "zmm2", "zmm3", "zmm4", "zmm5", "zmm6", "zmm7",
++	"zmm8", "zmm9", "zmm10", "zmm11", "zmm12", "zmm13", "zmm14", "zmm15",
++	"zmm16", "zmm17", "zmm18", "zmm19", "zmm20", "zmm21", "zmm22", "zmm23",
++	"zmm24", "zmm25", "zmm26", "zmm27", "zmm28", "zmm29", "zmm30", "zmm31",
++	"vxcsr"
++      };
++
++      if (tdep->k1om_k0_regnum < 0 || feature_sse != nullptr)
++	return 0;
++      for (i = 0; i < ARRAY_SIZE (k1om_names); i++)
++	valid_p &= tdesc_numbered_register (feature_k1om, tdesc_data,
++					    tdep->k1om_k0_regnum + i,
++					    k1om_names[i]);
++    }
++  else
++    tdep->k1om_k0_regnum = -1;
++
+   /* The XCR0 bits.  */
+   if (feature_avx512)
+     {
+@@ -9152,6 +9182,7 @@ i386_target_description (uint64_t xstate_bv, bool segments)
+ INIT_GDB_FILE (i386_tdep)
+ {
+   gdbarch_register (bfd_arch_i386, i386_gdbarch_init);
++  gdbarch_register (bfd_arch_k1om, i386_gdbarch_init);
+ 
+   /* Add the variable that controls the disassembly flavor.  */
+   add_setshow_enum_cmd ("disassembly-flavor", no_class, valid_flavors,
+diff --git a/gdb/i386-tdep.h b/gdb/i386-tdep.h
+index 84f1bbde007..8a50405fd32 100644
+--- a/gdb/i386-tdep.h
++++ b/gdb/i386-tdep.h
+@@ -94,6 +94,10 @@ struct i386_gdbarch_tdep : gdbarch_tdep_base
+      is supported.  */
+   int k0_regnum = -1;
+ 
++  /* Register number of k0 of the k1om (Knights Corner) vector unit, or
++     -1 if this is not k1om.  zmm0-31 and vxcsr follow.  */
++  int k1om_k0_regnum = -1;
++
+   /* Number of pseudo ZMM registers ($zmm0-$zmm31).  */
+   int num_zmm_regs = 0;
+ 
+diff --git a/gdb/i387-tdep.c b/gdb/i387-tdep.c
+index 977edeb57dd..41d788b3ec5 100644
+--- a/gdb/i387-tdep.c
++++ b/gdb/i387-tdep.c
+@@ -596,7 +596,7 @@ i387_supply_fxsave (struct regcache *regcache, int regnum, const void *fxsave)
+   int i;
+ 
+   gdb_assert (tdep->st0_regnum >= I386_ST0_REGNUM);
+-  gdb_assert (tdep->num_xmm_regs > 0);
++  gdb_assert (tdep->num_xmm_regs > 0 || tdep->k1om_k0_regnum >= 0);
+ 
+   for (i = I387_ST0_REGNUM (tdep); i < I387_MXCSR_REGNUM (tdep); i++)
+     if (regnum == -1 || regnum == i)
+@@ -656,7 +656,8 @@ i387_supply_fxsave (struct regcache *regcache, int regnum, const void *fxsave)
+ 	  regcache->raw_supply (i, FXSAVE_ADDR (tdep, regs, i));
+       }
+ 
+-  if (regnum == I387_MXCSR_REGNUM (tdep) || regnum == -1)
++  if (tdep->num_xmm_regs > 0
++      && (regnum == I387_MXCSR_REGNUM (tdep) || regnum == -1))
+     {
+       if (regs == NULL)
+ 	regcache->raw_supply (I387_MXCSR_REGNUM (tdep), NULL);
+@@ -680,7 +681,7 @@ i387_collect_fxsave (const struct regcache *regcache, int regnum, void *fxsave)
+   int i;
+ 
+   gdb_assert (tdep->st0_regnum >= I386_ST0_REGNUM);
+-  gdb_assert (tdep->num_xmm_regs > 0);
++  gdb_assert (tdep->num_xmm_regs > 0 || tdep->k1om_k0_regnum >= 0);
+ 
+   for (i = I387_ST0_REGNUM (tdep); i < I387_MXCSR_REGNUM (tdep); i++)
+     if (regnum == -1 || regnum == i)
+@@ -726,7 +727,8 @@ i387_collect_fxsave (const struct regcache *regcache, int regnum, void *fxsave)
+ 	  regcache->raw_collect (i, FXSAVE_ADDR (tdep, regs, i));
+       }
+ 
+-  if (regnum == I387_MXCSR_REGNUM (tdep) || regnum == -1)
++  if (tdep->num_xmm_regs > 0
++      && (regnum == I387_MXCSR_REGNUM (tdep) || regnum == -1))
+     regcache->raw_collect (I387_MXCSR_REGNUM (tdep),
+ 			  FXSAVE_MXCSR_ADDR (regs));
+ }
+@@ -1013,6 +1015,63 @@ i387_xsave_get_clear_bv (struct gdbarch *gdbarch, const void *xsave)
+   return clear_bv;
+ }
+ 
++/* The k1om vector unit block follows the fxsave area and the 64-byte
++   xsave header: zmm0-31, k0-7 (16 bits each), then vxcsr.  */
++
++#define K1OM_VPU_OFFSET 576
++
++static int
++k1om_vpu_offset (int i)
++{
++  if (i < 8)
++    return K1OM_VPU_OFFSET + 32 * 64 + 2 * i;
++  if (i < 40)
++    return K1OM_VPU_OFFSET + 64 * (i - 8);
++  return K1OM_VPU_OFFSET + 32 * 64 + 16;
++}
++
++/* See i387-tdep.h.  */
++
++void
++i387_supply_k1om_vpu (struct regcache *regcache, int regnum,
++		      const void *xsave)
++{
++  i386_gdbarch_tdep *tdep
++    = gdbarch_tdep<i386_gdbarch_tdep> (regcache->arch ());
++  const gdb_byte *regs = (const gdb_byte *) xsave;
++
++  gdb_assert (tdep->k1om_k0_regnum >= 0);
++  for (int i = 0; i < 41; i++)
++    {
++      int r = tdep->k1om_k0_regnum + i;
++
++      if (regnum != -1 && regnum != r)
++	continue;
++      regcache->raw_supply (r, regs == NULL ? NULL
++			       : regs + k1om_vpu_offset (i));
++    }
++}
++
++/* See i387-tdep.h.  */
++
++void
++i387_collect_k1om_vpu (const struct regcache *regcache, int regnum,
++		       void *xsave)
++{
++  i386_gdbarch_tdep *tdep
++    = gdbarch_tdep<i386_gdbarch_tdep> (regcache->arch ());
++  gdb_byte *regs = (gdb_byte *) xsave;
++
++  gdb_assert (tdep->k1om_k0_regnum >= 0);
++  for (int i = 0; i < 41; i++)
++    {
++      int r = tdep->k1om_k0_regnum + i;
++
++      if (regnum == -1 || regnum == r)
++	regcache->raw_collect (r, regs + k1om_vpu_offset (i));
++    }
++}
++
+ /* Similar to i387_supply_fxsave, but use XSAVE extended state.  */
+ 
+ void
+diff --git a/gdb/i387-tdep.h b/gdb/i387-tdep.h
+index ed4df1d2458..fcd2d26f6ee 100644
+--- a/gdb/i387-tdep.h
++++ b/gdb/i387-tdep.h
+@@ -146,6 +146,27 @@ extern x86_xsave_layout i387_fallback_xsave_layout (uint64_t xcr0);
+ 
+ /* Similar to i387_supply_fxsave, but use XSAVE extended state.  */
+ 
++/* Size of the k1om (Knights Corner) NT_X86_XSTATE regset: fxsave area,
++   xsave header and the vector unit block.  */
++#define K1OM_XSTATE_SIZE 2752
++
++/* Whether the k1om xstate buffer XSAVE holds the vector unit state.
++   VXCSR.DUE is always set on the hardware; kernels whose NT_X86_XSTATE
++   does not export the vector unit return zeros there (and must not be
++   written to with PTRACE_SETREGSET).  */
++#define K1OM_XSTATE_VPU_VALID_P(xsave) \
++  ((((const unsigned char *) (xsave))[576 + 32 * 64 + 16 + 2] & 0x20) != 0)
++
++/* Fill register REGNUM (or all k1om vector unit registers if -1) in
++   REGCACHE from the k1om xstate buffer XSAVE.  */
++extern void i387_supply_k1om_vpu (struct regcache *regcache, int regnum,
++				  const void *xsave);
++
++/* Store register REGNUM (or all if -1) from REGCACHE into the k1om
++   xstate buffer XSAVE.  */
++extern void i387_collect_k1om_vpu (const struct regcache *regcache,
++				   int regnum, void *xsave);
++
+ extern void i387_supply_xsave (struct regcache *regcache, int regnum,
+ 			       const void *xsave);
+ 

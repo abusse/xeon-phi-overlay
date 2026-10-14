@@ -3,6 +3,7 @@
 # k1om-*).  Masked so they do not shadow ::gentoo elsewhere; the k1om
 # profile unmasks them.  Crossdev (cross-k1om-*) is not affected.
 app-arch/zstd::xeon-phi
+dev-debug/gdb::xeon-phi
 dev-libs/gmp::xeon-phi
 dev-libs/libffi::xeon-phi
 dev-libs/libgcrypt::xeon-phi

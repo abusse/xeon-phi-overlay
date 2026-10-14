@@ -1,0 +1,47 @@
+From 2341fc3ed8be7350d14abbfb995dfdd623d81a7e Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 10:50:29 +0200
+Subject: [PATCH 5/9] opcodes: print (bad) for KNC mask register numbers above
+ 7
+
+VEX.vvvv, ModRM.reg/rm with REX, and the MVEX V' bit can name a mask
+register beyond k7; OP_VEX, OP_G and OP_E_register indexed the 8-entry
+names_mask[] with it and printed whatever followed the array, or
+crashed.  Print (bad), as later AVX-512 support does.
+
+The bfd, opcodes and include parts of binutils knc-2.45 2e2d9df57ed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ opcodes/i386-dis.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/opcodes/i386-dis.c b/opcodes/i386-dis.c
+index bc0e772b859..3af4dc210e3 100644
+--- a/opcodes/i386-dis.c
++++ b/opcodes/i386-dis.c
+@@ -15908,6 +15908,11 @@ OP_MVEX_VEX (instr_info *ins, int bytemode, int sizeflag ATTRIBUTE_UNUSED)
+ 	    names = att_names32;
+ 	  break;
+ 	case mask_mode:
++	  if (reg > 0x7)
++	    {
++	      oappend (ins, "(bad)");
++	      return true;
++	    }
+ 	  names = att_names_mask;
+ 	  break;
+ 	default:
+@@ -15935,6 +15940,11 @@ OP_MVEX_VEX (instr_info *ins, int bytemode, int sizeflag ATTRIBUTE_UNUSED)
+ 	switch (bytemode)
+ 	  {
+ 	  case mask_zmm_mode:
++	    if (reg > 0x7)
++	      {
++		oappend (ins, "(bad)");
++		return true;
++	      }
+ 	    names = att_names_mask;
+ 	    break;
+ 	  case x_mode:

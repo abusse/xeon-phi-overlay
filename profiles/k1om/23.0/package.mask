@@ -6,6 +6,7 @@ sys-libs/glibc::gentoo
 
 # k1om-patched copies in this overlay
 app-arch/zstd::gentoo
+dev-debug/gdb::gentoo
 dev-libs/gmp::gentoo
 dev-libs/libffi::gentoo
 dev-libs/libgcrypt::gentoo

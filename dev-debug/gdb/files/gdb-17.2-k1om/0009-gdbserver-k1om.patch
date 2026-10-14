@@ -1,0 +1,284 @@
+From c97f93a02e8b842356408f65b4dbbb43276853dc Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 14 Oct 2026 07:06:49 +0200
+Subject: [PATCH 9/9] gdbserver: k1om
+
+The k1om tdesc numbers the vector unit where amd64 has orig_rax and the
+segment bases, so the general registers are mapped by name past the core
+ones; fxsave without SSE registers; the vector unit through the fixed
+KNC NT_X86_XSTATE layout, disabled when the kernel does not export it
+(VXCSR.DUE clear, see the native gdb).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gdbserver/configure.srv    |  3 +-
+ gdbserver/i387-fp.cc       | 58 +++++++++++++++++++++++++++++++--
+ gdbserver/i387-fp.h        |  8 +++++
+ gdbserver/linux-x86-low.cc | 66 +++++++++++++++++++++++++++++++++++++-
+ 4 files changed, 131 insertions(+), 4 deletions(-)
+
+diff --git a/gdbserver/configure.srv b/gdbserver/configure.srv
+index 6281cdadc2a..0c614f8bcc6 100644
+--- a/gdbserver/configure.srv
++++ b/gdbserver/configure.srv
+@@ -372,7 +372,8 @@ case "${gdbserver_host}" in
+ 			srv_linux_usrregs=yes
+ 			srv_linux_thread_db=yes
+ 			;;
+-  x86_64-*-linux*)	srv_tgtobj="$srv_linux_obj linux-x86-low.o x86-low.o"
++  x86_64-*-linux* | k1om-*-linux*)
++			srv_tgtobj="$srv_linux_obj linux-x86-low.o x86-low.o"
+ 			srv_tgtobj="${srv_tgtobj} nat/x86-dregs.o"
+ 			srv_tgtobj="${srv_tgtobj} nat/x86-xstate.o i387-fp.o"
+ 			srv_tgtobj="${srv_tgtobj} arch/i386.o arch/amd64.o"
+diff --git a/gdbserver/i387-fp.cc b/gdbserver/i387-fp.cc
+index 90824bdaee5..24078e227f4 100644
+--- a/gdbserver/i387-fp.cc
++++ b/gdbserver/i387-fp.cc
+@@ -206,10 +206,16 @@ i387_cache_to_fxsave (struct regcache *regcache, void *buf)
+   struct i387_fxsave *fp = (struct i387_fxsave *) buf;
+   int i;
+   int st0_regnum = find_regno (regcache->tdesc, "st0");
+-  int xmm0_regnum = find_regno (regcache->tdesc, "xmm0");
+   unsigned long val, val2;
++#ifdef __KNC__
++  /* Knights Corner: no SSE registers.  */
++  int xmm0_regnum = -1;
++  int num_xmm_registers = 0;
++#else
++  int xmm0_regnum = find_regno (regcache->tdesc, "xmm0");
+   /* Amd64 has 16 xmm regs; I386 has 8 xmm regs.  */
+   int num_xmm_registers = register_size (regcache->tdesc, 0) == 8 ? 16 : 8;
++#endif
+ 
+   for (i = 0; i < 8; i++)
+     collect_register (regcache, i + st0_regnum,
+@@ -220,7 +226,9 @@ i387_cache_to_fxsave (struct regcache *regcache, void *buf)
+ 
+   fp->fioff = regcache_raw_get_unsigned_by_name (regcache, "fioff");
+   fp->fooff = regcache_raw_get_unsigned_by_name (regcache, "fooff");
++#ifndef __KNC__
+   fp->mxcsr = regcache_raw_get_unsigned_by_name (regcache, "mxcsr");
++#endif
+ 
+   /* This one's 11 bits... */
+   val2 = regcache_raw_get_unsigned_by_name (regcache, "fop");
+@@ -594,10 +602,16 @@ i387_fxsave_to_cache (struct regcache *regcache, const void *buf)
+   struct i387_fxsave *fp = (struct i387_fxsave *) buf;
+   int i, top;
+   int st0_regnum = find_regno (regcache->tdesc, "st0");
+-  int xmm0_regnum = find_regno (regcache->tdesc, "xmm0");
+   unsigned long val;
++#ifdef __KNC__
++  /* Knights Corner: no SSE registers.  */
++  int xmm0_regnum = -1;
++  int num_xmm_registers = 0;
++#else
++  int xmm0_regnum = find_regno (regcache->tdesc, "xmm0");
+   /* Amd64 has 16 xmm regs; I386 has 8 xmm regs.  */
+   int num_xmm_registers = register_size (regcache->tdesc, 0) == 8 ? 16 : 8;
++#endif
+ 
+   for (i = 0; i < 8; i++)
+     supply_register (regcache, i + st0_regnum,
+@@ -608,7 +622,9 @@ i387_fxsave_to_cache (struct regcache *regcache, const void *buf)
+ 
+   supply_register_by_name (regcache, "fioff", &fp->fioff);
+   supply_register_by_name (regcache, "fooff", &fp->fooff);
++#ifndef __KNC__
+   supply_register_by_name (regcache, "mxcsr", &fp->mxcsr);
++#endif
+ 
+   /* Some registers are 16-bit.  */
+   val = fp->fctrl & 0xFFFF;
+@@ -860,3 +876,41 @@ i387_get_xsave_storage ()
+ {
+   return { &x86_xstate_bv, &xsave_layout };
+ }
++
++#ifdef __KNC__
++
++/* The k1om vector unit block follows the fxsave area and the xsave
++   header: zmm0-31, k0-7 (16 bits each), then vxcsr.  The tdesc numbers
++   k0-7, zmm0-31 and vxcsr consecutively.  */
++
++static int
++k1om_vpu_offset (int i)
++{
++  if (i < 8)
++    return 576 + 32 * 64 + 2 * i;
++  if (i < 40)
++    return 576 + 64 * (i - 8);
++  return 576 + 32 * 64 + 16;
++}
++
++void
++i387_cache_to_k1om_vpu (struct regcache *regcache, void *buf)
++{
++  int k0_regnum = find_regno (regcache->tdesc, "k0");
++
++  for (int i = 0; i < 41; i++)
++    collect_register (regcache, k0_regnum + i,
++		      (char *) buf + k1om_vpu_offset (i));
++}
++
++void
++i387_k1om_vpu_to_cache (struct regcache *regcache, const void *buf)
++{
++  int k0_regnum = find_regno (regcache->tdesc, "k0");
++
++  for (int i = 0; i < 41; i++)
++    supply_register (regcache, k0_regnum + i,
++		     (const char *) buf + k1om_vpu_offset (i));
++}
++
++#endif
+diff --git a/gdbserver/i387-fp.h b/gdbserver/i387-fp.h
+index 96fb66cea11..098c096ceeb 100644
+--- a/gdbserver/i387-fp.h
++++ b/gdbserver/i387-fp.h
+@@ -28,6 +28,14 @@ void i387_cache_to_fxsave (struct regcache *regcache, void *buf);
+ void i387_fxsave_to_cache (struct regcache *regcache, const void *buf);
+ 
+ void i387_cache_to_xsave (struct regcache *regcache, void *buf);
++
++#ifdef __KNC__
++/* Size of the k1om NT_X86_XSTATE regset.  */
++#define K1OM_XSTATE_SIZE 2752
++
++void i387_cache_to_k1om_vpu (struct regcache *regcache, void *buf);
++void i387_k1om_vpu_to_cache (struct regcache *regcache, const void *buf);
++#endif
+ void i387_xsave_to_cache (struct regcache *regcache, const void *buf);
+ 
+ /* Set the XSAVE mask and fetch the XSAVE layout via CPUID.  */
+diff --git a/gdbserver/linux-x86-low.cc b/gdbserver/linux-x86-low.cc
+index 44257d5d1ce..de2876cd30a 100644
+--- a/gdbserver/linux-x86-low.cc
++++ b/gdbserver/linux-x86-low.cc
+@@ -453,6 +453,17 @@ x86_fill_gregset (struct regcache *regcache, void *buf)
+   int i;
+ 
+ #ifdef __x86_64__
++#ifdef __KNC__
++  /* The k1om tdesc numbers the vector unit where amd64 has orig_rax and
++     the segment bases.  */
++  int st0_regnum = find_regno (regcache->tdesc, "st0");
++  for (i = 0; i < st0_regnum; i++)
++    collect_register (regcache, i, ((char *) buf) + x86_64_regmap[i]);
++  collect_register_by_name (regcache, "orig_rax", (char *) buf + ORIG_RAX * 8);
++  collect_register_by_name (regcache, "fs_base", (char *) buf + 21 * 8);
++  collect_register_by_name (regcache, "gs_base", (char *) buf + 22 * 8);
++  return;
++#endif
+   if (register_size (regcache->tdesc, 0) == 8)
+     {
+       for (i = 0; i < X86_64_NUM_REGS; i++)
+@@ -477,6 +488,16 @@ x86_store_gregset (struct regcache *regcache, const void *buf)
+   int i;
+ 
+ #ifdef __x86_64__
++#ifdef __KNC__
++  int st0_regnum = find_regno (regcache->tdesc, "st0");
++  for (i = 0; i < st0_regnum; i++)
++    supply_register (regcache, i, ((const char *) buf) + x86_64_regmap[i]);
++  supply_register_by_name (regcache, "orig_rax",
++			   (const char *) buf + ORIG_RAX * 8);
++  supply_register_by_name (regcache, "fs_base", (const char *) buf + 21 * 8);
++  supply_register_by_name (regcache, "gs_base", (const char *) buf + 22 * 8);
++  return;
++#endif
+   if (register_size (regcache->tdesc, 0) == 8)
+     {
+       for (i = 0; i < X86_64_NUM_REGS; i++)
+@@ -533,15 +554,41 @@ x86_store_fpxregset (struct regcache *regcache, const void *buf)
+ static void
+ x86_fill_xstateregset (struct regcache *regcache, void *buf)
+ {
++#ifdef __KNC__
++  i387_cache_to_k1om_vpu (regcache, buf);
++#else
+   i387_cache_to_xsave (regcache, buf);
++#endif
+ }
+ 
+ static void
+ x86_store_xstateregset (struct regcache *regcache, const void *buf)
+ {
++#ifdef __KNC__
++  i387_k1om_vpu_to_cache (regcache, buf);
++#else
+   i387_xsave_to_cache (regcache, buf);
++#endif
+ }
+ 
++#ifdef __KNC__
++/* Whether the kernel exports the KNC vector unit through NT_X86_XSTATE.
++   VXCSR.DUE is always set on the hardware; kernels without that support
++   return zeros there and must not be written to with PTRACE_SETREGSET.  */
++
++static bool
++x86_knc_vpu_regset_p (int tid)
++{
++  unsigned char buf[K1OM_XSTATE_SIZE] = {};
++  struct iovec iov = { buf, sizeof (buf) };
++
++  if (ptrace (PTRACE_GETREGSET, tid, (unsigned int) NT_X86_XSTATE,
++	      (long) &iov) < 0)
++    return false;
++  return (buf[576 + 32 * 64 + 16 + 2] & 0x20) != 0;
++}
++#endif
++
+ /* ??? The non-biarch i386 case stores all the i387 regs twice.
+    Once in i387_.*fsave.* and once in i387_.*fxsave.*.
+    This is, presumably, to handle the case where PTRACE_[GS]ETFPXREGS
+@@ -901,7 +948,12 @@ x86_linux_read_description ()
+   if (have_ptrace_getregset_was_unknown
+       && have_ptrace_getregset == TRIBOOL_TRUE)
+     {
++#ifdef __KNC__
++      /* Fixed KNC layout; the x87 state stays with PTRACE_GETFPREGS.  */
++      int xsave_len = K1OM_XSTATE_SIZE;
++#else
+       int xsave_len = x86_xsave_length ();
++#endif
+ 
+       /* Use PTRACE_GETREGSET if it is available.  */
+       for (regset_info *regset = x86_regsets;
+@@ -911,7 +963,13 @@ x86_linux_read_description ()
+ 	  if (regset->get_request == PTRACE_GETREGSET)
+ 	    {
+ 	      if (regset->nt_type == NT_X86_XSTATE)
+-		regset->size = xsave_len;
++		{
++		  regset->size = xsave_len;
++#ifdef __KNC__
++		  if (!x86_knc_vpu_regset_p (tid))
++		    regset->size = 0;
++#endif
++		}
+ 	      else if (regset->nt_type == NT_X86_SHSTK)
+ 		{
+ 		  /* We must configure the size of the NT_X86_SHSTK regset
+@@ -921,13 +979,19 @@ x86_linux_read_description ()
+ 		     OPTIONAL_RUNTIME_REGS.  A ptrace call with NT_X86_SHSTK
+ 		     request may only be successful later on, once shadow
+ 		     stack is enabled for the current thread.  */
++#ifdef __KNC__
++		    regset->size = 0;
++#else
+ 		    regset->size = sizeof (CORE_ADDR);
++#endif
+ 		}
+ 	      else
+ 		gdb_assert_not_reached ("invalid regset type.");
+ 	    }
++#ifndef __KNC__
+ 	  else if (regset->type != GENERAL_REGS)
+ 	    regset->size = 0;
++#endif
+ 	}
+     }
+ 

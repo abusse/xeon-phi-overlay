@@ -1,0 +1,79 @@
+From 8e6d86112b15a5d40fe39e21f3fa802fa10bda27 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Wed, 30 Sep 2026 10:50:28 +0200
+Subject: [PATCH 2/9] k1om: k1om-*-linux and k1om-*-elf targets
+
+From Intel MPSS 3.8.6: config.sub/config.guess know the k1om CPU, BFD
+selects bfd_elf64_k1om_vec (and x86-64 core files for a native k1om
+build), gas treats k1om* like x86_64, and ld uses elf_k1om for
+k1om-*-linux-*, k1om-*-elf* and the card rootfs triplet
+x86_64-k1om-linux-*.
+
+Only the Linux and bare ELF targets are kept; Intel's L1OM, Solaris,
+DICOS, DragonFly, BSD and MinGW variants are dropped.
+
+The bfd, opcodes and include parts of binutils knc-2.45 c3773f24de3.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ bfd/config.bfd   | 11 +++++++++++
+ bfd/configure    |  2 +-
+ bfd/configure.ac |  2 +-
+ 3 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/bfd/config.bfd b/bfd/config.bfd
+index e9d43c73b29..b51d859f30d 100644
+--- a/bfd/config.bfd
++++ b/bfd/config.bfd
+@@ -199,6 +199,7 @@ fido*)		 targ_archs=bfd_m68k_arch ;;
+ hppa*)		 targ_archs=bfd_hppa_arch ;;
+ i[3-7]86)	 targ_archs=bfd_i386_arch ;;
+ ia16)		 targ_archs=bfd_i386_arch ;;
++k1om)		 targ_archs=bfd_i386_arch ;;
+ kvx)		 targ_archs=bfd_kvx_arch ;;
+ loongarch*)	 targ_archs=bfd_loongarch_arch ;;
+ m6811*|m68hc11*) targ_archs="bfd_m68hc11_arch bfd_m68hc12_arch bfd_m9s12x_arch bfd_m9s12xg_arch" ;;
+@@ -695,6 +696,16 @@ case "${targ}" in
+     targ_selvecs="i386_elf32_vec iamcu_elf32_vec i386_coff_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec k1om_elf64_vec"
+     want64=true
+     ;;
++  k1om-*-elf*)
++    targ_defvec=k1om_elf64_vec
++    targ_selvecs="x86_64_elf64_vec i386_elf32_vec i386_coff_vec"
++    want64=true
++    ;;
++  k1om-*-linux-*)
++    targ_defvec=k1om_elf64_vec
++    targ_selvecs="x86_64_elf64_vec i386_elf32_vec x86_64_elf32_vec i386_pei_vec x86_64_pei_vec"
++    want64=true
++    ;;
+   x86_64-*-linux-*)
+     targ_defvec=x86_64_elf64_vec
+     targ_selvecs="i386_elf32_vec iamcu_elf32_vec x86_64_elf32_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec k1om_elf64_vec"
+diff --git a/bfd/configure b/bfd/configure
+index eda156583df..a8d09cbc3b4 100755
+--- a/bfd/configure
++++ b/bfd/configure
+@@ -16020,7 +16020,7 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+ 	COREFILE=trad-core.lo
+ 	TRAD_HEADER='"hosts/vaxbsd.h"'
+ 	;;
+-  x86_64-*-linux*)
++  x86_64-*-linux* | k1om-*-linux*)
+ 	CORE_HEADER='"hosts/x86-64linux.h"'
+ 	;;
+   x86_64-*-netbsd* | x86_64-*-openbsd*)
+diff --git a/bfd/configure.ac b/bfd/configure.ac
+index 356cb095b36..2e593e1eb1d 100644
+--- a/bfd/configure.ac
++++ b/bfd/configure.ac
+@@ -930,7 +930,7 @@ changequote([,])dnl
+ 	COREFILE=trad-core.lo
+ 	TRAD_HEADER='"hosts/vaxbsd.h"'
+ 	;;
+-  x86_64-*-linux*)
++  x86_64-*-linux* | k1om-*-linux*)
+ 	CORE_HEADER='"hosts/x86-64linux.h"'
+ 	;;
+   x86_64-*-netbsd* | x86_64-*-openbsd*)

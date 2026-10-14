@@ -1,0 +1,33 @@
+From c408d364daab1014014a7b8dcd4403e07c580340 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 14 Oct 2026 07:06:49 +0200
+Subject: [PATCH 6/9] bfd: k1om: 4 KiB pages, not the Solaris 1 MiB of the
+ vector above
+
+The restored k1om vectors follow x86_64_elf64_sol2_vec, which sets
+ELF_MAXPAGESIZE to 0x100000, and inherited it (upstream reset it in the
+l1om block in between, which is not restored).  With a 1 MiB minimum page
+size GDB rejected the PIE load displacement (breakpoints stayed at the
+unrelocated addresses) and placed shared libraries at 1 MiB boundaries.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ bfd/elf64-x86-64.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/bfd/elf64-x86-64.c b/bfd/elf64-x86-64.c
+index dd8ba8dc197..398a2e7bbdc 100644
+--- a/bfd/elf64-x86-64.c
++++ b/bfd/elf64-x86-64.c
+@@ -6491,6 +6491,10 @@ elf64_k1om_elf_object_p (bfd *abfd)
+ #undef elf_backend_object_p
+ #define elf_backend_object_p		    elf64_k1om_elf_object_p
+ 
++/* Not the Solaris 1MB page size of the vector above.  */
++#undef	ELF_MAXPAGESIZE
++#define ELF_MAXPAGESIZE			    0x1000
++
+ /* Restore defaults.  */
+ #undef ELF_TARGET_OS
+ 

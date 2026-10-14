@@ -1,0 +1,489 @@
+From be219ad05c5d66e48ed96a9543bb0b17b831be31 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 22:00:55 +0200
+Subject: [PATCH 1/9] x86: restore K1OM support removed in 2.39
+
+Binutils 2.39 dropped the L1OM/K1OM sub-architectures (801a7eab11e,
+e961c696dcb, c085ab00c7b).  Bring back the K1OM half: bfd_arch_k1om and
+cpu-k1om.c, the elf64-k1om and elf64-k1om-freebsd vectors, the elf_k1om
+and elf_k1om_fbsd emulations, -march=k1om and CpuK1OM in gas, and the
+tests, as they were in 2.38.  L1OM stays removed.  -march=k1om takes the
+CPU_UNKNOWN set (all but IAMCU), which is what "unknown" meant for K1OM
+before; i386-gen's dependency table cannot express that as a K1OM entry.
+
+The bfd, opcodes and include parts of binutils knc-2.45 d70aec9302c,
+i386 tables regenerated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ bfd/Makefile.am       |  2 ++
+ bfd/Makefile.in       |  3 +++
+ bfd/archures.c        |  5 +++++
+ bfd/bfd-in2.h         |  3 +++
+ bfd/config.bfd        | 35 ++++++++++++++++++-------------
+ bfd/configure         |  2 ++
+ bfd/configure.ac      |  2 ++
+ bfd/cpu-k1om.c        | 37 +++++++++++++++++++++++++++++++++
+ bfd/elf64-x86-64.c    | 48 +++++++++++++++++++++++++++++++++++++++++++
+ bfd/targets.c         |  7 +++++++
+ opcodes/configure     |  2 +-
+ opcodes/configure.ac  |  2 +-
+ opcodes/disassemble.c |  1 +
+ opcodes/i386-gen.c    |  1 +
+ opcodes/i386-opc.h    |  5 ++++-
+ 15 files changed, 138 insertions(+), 17 deletions(-)
+ create mode 100644 bfd/cpu-k1om.c
+
+diff --git a/bfd/Makefile.am b/bfd/Makefile.am
+index 3c3243269f1..7cacd5216af 100644
+--- a/bfd/Makefile.am
++++ b/bfd/Makefile.am
+@@ -119,6 +119,7 @@ ALL_MACHINES = \
+ 	cpu-i386.lo \
+ 	cpu-ia64.lo \
+ 	cpu-iamcu.lo \
++	cpu-k1om.lo \
+ 	cpu-ip2k.lo \
+ 	cpu-iq2000.lo \
+ 	cpu-kvx.lo \
+@@ -202,6 +203,7 @@ ALL_MACHINES_CFILES = \
+ 	cpu-i386.c \
+ 	cpu-ia64.c \
+ 	cpu-iamcu.c \
++	cpu-k1om.c \
+ 	cpu-ip2k.c \
+ 	cpu-iq2000.c \
+ 	cpu-kvx.c \
+diff --git a/bfd/Makefile.in b/bfd/Makefile.in
+index 4c259682fd0..831c9a05cf8 100644
+--- a/bfd/Makefile.in
++++ b/bfd/Makefile.in
+@@ -584,6 +584,7 @@ ALL_MACHINES = \
+ 	cpu-i386.lo \
+ 	cpu-ia64.lo \
+ 	cpu-iamcu.lo \
++	cpu-k1om.lo \
+ 	cpu-ip2k.lo \
+ 	cpu-iq2000.lo \
+ 	cpu-kvx.lo \
+@@ -667,6 +668,7 @@ ALL_MACHINES_CFILES = \
+ 	cpu-i386.c \
+ 	cpu-ia64.c \
+ 	cpu-iamcu.c \
++	cpu-k1om.c \
+ 	cpu-ip2k.c \
+ 	cpu-iq2000.c \
+ 	cpu-kvx.c \
+@@ -1494,6 +1496,7 @@ distclean-compile:
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-iamcu.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-ip2k.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-iq2000.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-k1om.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-kvx.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-lm32.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-loongarch.Plo@am__quote@
+diff --git a/bfd/archures.c b/bfd/archures.c
+index fd22c94d6d6..1f0cde9b6cd 100644
+--- a/bfd/archures.c
++++ b/bfd/archures.c
+@@ -206,6 +206,9 @@ DESCRIPTION
+ .#define bfd_mach_i386_i386_intel_syntax (bfd_mach_i386_i386 | bfd_mach_i386_intel_syntax)
+ .#define bfd_mach_x86_64_intel_syntax	(bfd_mach_x86_64 | bfd_mach_i386_intel_syntax)
+ .#define bfd_mach_x64_32_intel_syntax	(bfd_mach_x64_32 | bfd_mach_i386_intel_syntax)
++.  bfd_arch_k1om,      {* Intel K1OM.  *}
++.#define bfd_mach_k1om			(1 << 6)
++.#define bfd_mach_k1om_intel_syntax	(bfd_mach_k1om | bfd_mach_i386_intel_syntax)
+ .  bfd_arch_iamcu,     {* Intel MCU.  *}
+ .#define bfd_mach_iamcu			(1 << 8)
+ .#define bfd_mach_i386_iamcu		(bfd_mach_i386_i386 | bfd_mach_iamcu)
+@@ -652,6 +655,7 @@ extern const bfd_arch_info_type bfd_iamcu_arch;
+ extern const bfd_arch_info_type bfd_ia64_arch;
+ extern const bfd_arch_info_type bfd_ip2k_arch;
+ extern const bfd_arch_info_type bfd_iq2000_arch;
++extern const bfd_arch_info_type bfd_k1om_arch;
+ extern const bfd_arch_info_type bfd_kvx_arch;
+ extern const bfd_arch_info_type bfd_lm32_arch;
+ extern const bfd_arch_info_type bfd_loongarch_arch;
+@@ -740,6 +744,7 @@ static const bfd_arch_info_type * const bfd_archures_list[] =
+     &bfd_ia64_arch,
+     &bfd_ip2k_arch,
+     &bfd_iq2000_arch,
++    &bfd_k1om_arch,
+     &bfd_kvx_arch,
+     &bfd_lm32_arch,
+     &bfd_loongarch_arch,
+diff --git a/bfd/bfd-in2.h b/bfd/bfd-in2.h
+index 5e7c6ddf1ee..1414c846aa6 100644
+--- a/bfd/bfd-in2.h
++++ b/bfd/bfd-in2.h
+@@ -1435,6 +1435,9 @@ enum bfd_architecture
+ #define bfd_mach_i386_i386_intel_syntax (bfd_mach_i386_i386 | bfd_mach_i386_intel_syntax)
+ #define bfd_mach_x86_64_intel_syntax   (bfd_mach_x86_64 | bfd_mach_i386_intel_syntax)
+ #define bfd_mach_x64_32_intel_syntax   (bfd_mach_x64_32 | bfd_mach_i386_intel_syntax)
++  bfd_arch_k1om,      /* Intel K1OM.  */
++#define bfd_mach_k1om                  (1 << 6)
++#define bfd_mach_k1om_intel_syntax     (bfd_mach_k1om | bfd_mach_i386_intel_syntax)
+   bfd_arch_iamcu,     /* Intel MCU.  */
+ #define bfd_mach_iamcu                 (1 << 8)
+ #define bfd_mach_i386_iamcu            (bfd_mach_i386_i386 | bfd_mach_iamcu)
+diff --git a/bfd/config.bfd b/bfd/config.bfd
+index a5c3953a18a..e9d43c73b29 100644
+--- a/bfd/config.bfd
++++ b/bfd/config.bfd
+@@ -583,13 +583,13 @@ case "${targ}" in
+   i[3-7]86-*-solaris2*)
+     targ_defvec=i386_elf32_sol2_vec
+     targ_selvecs="iamcu_elf32_vec i386_coff_vec i386_pei_vec"
+-    targ64_selvecs="x86_64_elf64_sol2_vec x86_64_pe_vec x86_64_pei_vec"
++    targ64_selvecs="x86_64_elf64_sol2_vec k1om_elf64_vec x86_64_pe_vec x86_64_pei_vec"
+     want64=true
+     ;;
+ #ifdef BFD64
+   x86_64-*-solaris2*)
+     targ_defvec=i386_elf32_sol2_vec
+-    targ_selvecs="x86_64_elf64_sol2_vec iamcu_elf32_vec i386_coff_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec"
++    targ_selvecs="x86_64_elf64_sol2_vec k1om_elf64_vec iamcu_elf32_vec i386_coff_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec"
+     want64=true
+     ;;
+ #endif
+@@ -604,7 +604,7 @@ case "${targ}" in
+   i[3-7]86-*-dicos*)
+     targ_defvec=i386_elf32_vec
+     targ_selvecs=iamcu_elf32_vec
+-    targ64_selvecs="x86_64_elf64_vec"
++    targ64_selvecs="x86_64_elf64_vec k1om_elf64_vec"
+     ;;
+   *-*-msdosdjgpp* | *-*-go32* )
+     targ_defvec=i386_coff_go32_vec
+@@ -623,12 +623,12 @@ case "${targ}" in
+   i[3-7]86-*-dragonfly*)
+     targ_defvec=i386_elf32_vec
+     targ_selvecs=iamcu_elf32_vec
+-    targ64_selvecs="x86_64_elf64_vec"
++    targ64_selvecs="x86_64_elf64_vec k1om_elf64_vec"
+     ;;
+   i[3-7]86-*-freebsd* | i[3-7]86-*-kfreebsd*-gnu)
+     targ_defvec=i386_elf32_fbsd_vec
+     targ_selvecs="i386_elf32_vec iamcu_elf32_vec i386_pei_vec i386_coff_vec"
+-    targ64_selvecs="x86_64_elf64_fbsd_vec x86_64_elf64_vec x86_64_pe_vec x86_64_pei_vec"
++    targ64_selvecs="x86_64_elf64_fbsd_vec x86_64_elf64_vec x86_64_pe_vec x86_64_pei_vec k1om_elf64_vec k1om_elf64_fbsd_vec"
+     # FreeBSD <= 4.0 supports only the old nonstandard way of ABI labelling.
+     case "${targ}" in
+       i[3-7]86-*-freebsd3* | i[3-7]86-*-freebsd4 | i[3-7]86-*-freebsd4.0*)
+@@ -638,7 +638,7 @@ case "${targ}" in
+   i[3-7]86-*-netbsd* | i[3-7]86-*-knetbsd*-gnu)
+     targ_defvec=i386_elf32_vec
+     targ_selvecs="iamcu_elf32_vec"
+-    targ64_selvecs="x86_64_elf64_vec"
++    targ64_selvecs="x86_64_elf64_vec k1om_elf64_vec"
+     ;;
+   i[3-7]86-*-openbsd*)
+     targ_defvec=i386_elf32_vec
+@@ -647,7 +647,7 @@ case "${targ}" in
+   i[3-7]86-*-linux-*)
+     targ_defvec=i386_elf32_vec
+     targ_selvecs="iamcu_elf32_vec i386_pei_vec"
+-    targ64_selvecs="x86_64_elf64_vec x86_64_elf32_vec x86_64_pe_vec x86_64_pei_vec"
++    targ64_selvecs="x86_64_elf64_vec x86_64_elf32_vec x86_64_pe_vec x86_64_pei_vec k1om_elf64_vec"
+     ;;
+   i[3-7]86-*-redox*)
+     targ_defvec=i386_elf32_vec
+@@ -663,12 +663,12 @@ case "${targ}" in
+     ;;
+   x86_64-*-dicos*)
+     targ_defvec=x86_64_elf64_vec
+-    targ_selvecs="i386_elf32_vec iamcu_elf32_vec"
++    targ_selvecs="i386_elf32_vec iamcu_elf32_vec k1om_elf64_vec"
+     want64=true
+     ;;
+   x86_64-*-elf* | x86_64-*-rtems* | x86_64-*-fuchsia | x86_64-*-genode*)
+     targ_defvec=x86_64_elf64_vec
+-    targ_selvecs="i386_elf32_vec iamcu_elf32_vec x86_64_elf32_vec"
++    targ_selvecs="i386_elf32_vec iamcu_elf32_vec x86_64_elf32_vec k1om_elf64_vec"
+     case "${targ}" in
+       x86_64-*-rtems*)
+     targ_selvecs="${targ_selvecs} x86_64_pe_vec x86_64_pei_vec"
+@@ -677,12 +677,12 @@ case "${targ}" in
+     ;;
+   x86_64-*-dragonfly*)
+     targ_defvec=x86_64_elf64_vec
+-    targ_selvecs="i386_elf32_vec iamcu_elf32_vec"
++    targ_selvecs="i386_elf32_vec iamcu_elf32_vec k1om_elf64_vec"
+     want64=true
+     ;;
+   x86_64-*-freebsd* | x86_64-*-kfreebsd*-gnu)
+     targ_defvec=x86_64_elf64_fbsd_vec
+-    targ_selvecs="i386_elf32_fbsd_vec iamcu_elf32_vec i386_coff_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec i386_elf32_vec x86_64_elf64_vec"
++    targ_selvecs="i386_elf32_fbsd_vec iamcu_elf32_vec i386_coff_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec i386_elf32_vec x86_64_elf64_vec k1om_elf64_vec k1om_elf64_fbsd_vec"
+     want64=true
+     ;;
+   x86_64-*-haiku*)
+@@ -692,17 +692,17 @@ case "${targ}" in
+     ;;
+   x86_64-*-netbsd* | x86_64-*-openbsd*)
+     targ_defvec=x86_64_elf64_vec
+-    targ_selvecs="i386_elf32_vec iamcu_elf32_vec i386_coff_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec"
++    targ_selvecs="i386_elf32_vec iamcu_elf32_vec i386_coff_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec k1om_elf64_vec"
+     want64=true
+     ;;
+   x86_64-*-linux-*)
+     targ_defvec=x86_64_elf64_vec
+-    targ_selvecs="i386_elf32_vec iamcu_elf32_vec x86_64_elf32_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec"
++    targ_selvecs="i386_elf32_vec iamcu_elf32_vec x86_64_elf32_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec k1om_elf64_vec"
+     want64=true
+     ;;
+   x86_64-*-mingw* | x86_64-*-pe | x86_64-*-pep | x86_64-*-cygwin)
+     targ_defvec=x86_64_pe_vec
+-    targ_selvecs="x86_64_pe_vec x86_64_pei_vec x86_64_pe_big_vec x86_64_elf64_vec i386_pe_vec i386_pei_vec i386_elf32_vec iamcu_elf32_vec pdb_vec"
++    targ_selvecs="x86_64_pe_vec x86_64_pei_vec x86_64_pe_big_vec x86_64_elf64_vec k1om_elf64_vec i386_pe_vec i386_pei_vec i386_elf32_vec iamcu_elf32_vec pdb_vec"
+     want64=true
+     targ_underscore=no
+     ;;
+@@ -1517,6 +1517,13 @@ case "${targ_defvec} ${targ_selvecs}" in
+     ;;
+ esac
+ 
++# If we support Intel K1OM target, then add support for bfd_k1om_arch.
++case "${targ_defvec} ${targ_selvecs}" in
++  *k1om_elf64*)
++    targ_archs="$targ_archs bfd_k1om_arch"
++    ;;
++esac
++
+ case "${targ}" in
+   mipsisa32r6* | mipsisa64r6* | mips*-img-*)
+     targ_cflags="$targ_cflags -DMIPS_DEFAULT_R6=1"
+diff --git a/bfd/configure b/bfd/configure
+index ee588238500..eda156583df 100755
+--- a/bfd/configure
++++ b/bfd/configure
+@@ -15562,6 +15562,8 @@ do
+     ia64_pei_vec)		 tb="$tb pei-ia64.lo pepigen.lo $coff"; target_size=64 ;;
+     ip2k_elf32_vec)		 tb="$tb elf32-ip2k.lo elf32.lo $elf" ;;
+     iq2000_elf32_vec)		 tb="$tb elf32-iq2000.lo elf32.lo $elf" ;;
++    k1om_elf64_vec)		 tb="$tb elf64-x86-64.lo elfxx-x86.lo elf-ifunc.lo elf64.lo $elf"; target_size=64 ;;
++    k1om_elf64_fbsd_vec)	 tb="$tb elf64-x86-64.lo elfxx-x86.lo elf-ifunc.lo elf64.lo $elf"; target_size=64 ;;
+     kvx_elf32_vec)		 tb="$tb elf32-kvx.lo elfxx-kvx.lo elf32.lo $elf $ipa" ;;
+     kvx_elf64_vec)		 tb="$tb elf64-kvx.lo elfxx-kvx.lo elf64.lo $elf $ipa"; target_size=64 ;;
+     lm32_elf32_vec)		 tb="$tb elf32-lm32.lo elf32.lo $elf" ;;
+diff --git a/bfd/configure.ac b/bfd/configure.ac
+index 4fb3bf41f34..356cb095b36 100644
+--- a/bfd/configure.ac
++++ b/bfd/configure.ac
+@@ -487,6 +487,8 @@ do
+     ia64_pei_vec)		 tb="$tb pei-ia64.lo pepigen.lo $coff"; target_size=64 ;;
+     ip2k_elf32_vec)		 tb="$tb elf32-ip2k.lo elf32.lo $elf" ;;
+     iq2000_elf32_vec)		 tb="$tb elf32-iq2000.lo elf32.lo $elf" ;;
++    k1om_elf64_vec)		 tb="$tb elf64-x86-64.lo elfxx-x86.lo elf-ifunc.lo elf64.lo $elf"; target_size=64 ;;
++    k1om_elf64_fbsd_vec)	 tb="$tb elf64-x86-64.lo elfxx-x86.lo elf-ifunc.lo elf64.lo $elf"; target_size=64 ;;
+     kvx_elf32_vec)		 tb="$tb elf32-kvx.lo elfxx-kvx.lo elf32.lo $elf $ipa" ;;
+     kvx_elf64_vec)		 tb="$tb elf64-kvx.lo elfxx-kvx.lo elf64.lo $elf $ipa"; target_size=64 ;;
+     lm32_elf32_vec)		 tb="$tb elf32-lm32.lo elf32.lo $elf" ;;
+diff --git a/bfd/cpu-k1om.c b/bfd/cpu-k1om.c
+new file mode 100644
+index 00000000000..3f8aed03e97
+--- /dev/null
++++ b/bfd/cpu-k1om.c
+@@ -0,0 +1,37 @@
++/* BFD support for the Intel K1OM architecture.
++   Copyright (C) 2011-2022 Free Software Foundation, Inc.
++
++   This file is part of BFD, the Binary File Descriptor library.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston,
++   MA 02110-1301, USA.  */
++
++#include "sysdep.h"
++#include "bfd.h"
++#include "libbfd.h"
++
++extern void *bfd_arch_i386_short_nop_fill (bfd_size_type, bool, bool);
++
++#define N(number, name, print, next)				\
++  { 64, 64, 8, bfd_arch_k1om, number, name, print, 3, true,	\
++    bfd_default_compatible, bfd_default_scan,			\
++    bfd_arch_i386_short_nop_fill, next, 9 }
++
++static const bfd_arch_info_type bfd_k1om_arch_intel_syntax =
++  N (bfd_mach_k1om_intel_syntax, "k1om:intel", "k1om:intel", NULL);
++
++const bfd_arch_info_type bfd_k1om_arch =
++  N (bfd_mach_k1om, "k1om", "k1om", &bfd_k1om_arch_intel_syntax);
++
+diff --git a/bfd/elf64-x86-64.c b/bfd/elf64-x86-64.c
+index 00586455203..dd8ba8dc197 100644
+--- a/bfd/elf64-x86-64.c
++++ b/bfd/elf64-x86-64.c
+@@ -6463,6 +6463,54 @@ elf64_x86_64_copy_solaris_special_section_fields (const bfd *ibfd ATTRIBUTE_UNUS
+ #undef  elf_backend_strtab_flags
+ #undef  elf_backend_copy_special_section_fields
+ 
++/* Intel K1OM support.  */
++
++static bool
++elf64_k1om_elf_object_p (bfd *abfd)
++{
++  /* Set the right machine number for an K1OM elf64 file.  */
++  bfd_default_set_arch_mach (abfd, bfd_arch_k1om, bfd_mach_k1om);
++  return true;
++}
++
++#undef  TARGET_LITTLE_SYM
++#define TARGET_LITTLE_SYM		    k1om_elf64_vec
++#undef  TARGET_LITTLE_NAME
++#define TARGET_LITTLE_NAME		    "elf64-k1om"
++#undef ELF_ARCH
++#define ELF_ARCH			    bfd_arch_k1om
++
++#undef	ELF_MACHINE_CODE
++#define ELF_MACHINE_CODE		    EM_K1OM
++
++#undef	ELF_OSABI
++
++#undef  elf64_bed
++#define elf64_bed elf64_k1om_bed
++
++#undef elf_backend_object_p
++#define elf_backend_object_p		    elf64_k1om_elf_object_p
++
++/* Restore defaults.  */
++#undef ELF_TARGET_OS
++
++#include "elf64-target.h"
++
++/* FreeBSD K1OM support.  */
++
++#undef  TARGET_LITTLE_SYM
++#define TARGET_LITTLE_SYM		    k1om_elf64_fbsd_vec
++#undef  TARGET_LITTLE_NAME
++#define TARGET_LITTLE_NAME		    "elf64-k1om-freebsd"
++
++#undef	ELF_OSABI
++#define	ELF_OSABI			    ELFOSABI_FREEBSD
++
++#undef  elf64_bed
++#define elf64_bed elf64_k1om_fbsd_bed
++
++#include "elf64-target.h"
++
+ /* 32bit x86-64 support.  */
+ 
+ #undef  TARGET_LITTLE_SYM
+diff --git a/bfd/targets.c b/bfd/targets.c
+index ee629bbe9df..64fca97d086 100644
+--- a/bfd/targets.c
++++ b/bfd/targets.c
+@@ -762,6 +762,8 @@ extern const bfd_target ia64_elf64_vms_vec;
+ extern const bfd_target ia64_pei_vec;
+ extern const bfd_target ip2k_elf32_vec;
+ extern const bfd_target iq2000_elf32_vec;
++extern const bfd_target k1om_elf64_vec;
++extern const bfd_target k1om_elf64_fbsd_vec;
+ extern const bfd_target kvx_elf32_vec;
+ extern const bfd_target kvx_elf64_vec;
+ extern const bfd_target lm32_elf32_vec;
+@@ -1119,6 +1121,11 @@ static const bfd_target * const _bfd_target_vector[] =
+ 	&ip2k_elf32_vec,
+ 	&iq2000_elf32_vec,
+ 
++#ifdef BFD64
++	&k1om_elf64_vec,
++	&k1om_elf64_fbsd_vec,
++#endif
++
+ #ifdef BFD64
+ 	&kvx_elf32_vec,
+ 	&kvx_elf64_vec,
+diff --git a/opcodes/configure b/opcodes/configure
+index 7dc7b49ca2b..63fb0a1f376 100755
+--- a/opcodes/configure
++++ b/opcodes/configure
+@@ -13969,7 +13969,7 @@ if test x${all_targets} = xfalse ; then
+ 	bfd_moxie_arch)		ta="$ta moxie-dis.lo moxie-opc.lo" ;;
+ 	bfd_h8300_arch)		ta="$ta h8300-dis.lo" ;;
+ 	bfd_hppa_arch)		ta="$ta hppa-dis.lo" ;;
+-	bfd_i386_arch|bfd_iamcu_arch)
++	bfd_i386_arch|bfd_iamcu_arch|bfd_k1om_arch)
+ 				ta="$ta i386-dis.lo" ;;
+ 	bfd_ia64_arch)		ta="$ta ia64-dis.lo ia64-opc.lo" ;;
+ 	bfd_ip2k_arch)		ta="$ta ip2k-asm.lo ip2k-desc.lo ip2k-dis.lo ip2k-ibld.lo ip2k-opc.lo" using_cgen=yes ;;
+diff --git a/opcodes/configure.ac b/opcodes/configure.ac
+index 675f0662700..3f0504f88a7 100644
+--- a/opcodes/configure.ac
++++ b/opcodes/configure.ac
+@@ -282,7 +282,7 @@ if test x${all_targets} = xfalse ; then
+ 	bfd_moxie_arch)		ta="$ta moxie-dis.lo moxie-opc.lo" ;;
+ 	bfd_h8300_arch)		ta="$ta h8300-dis.lo" ;;
+ 	bfd_hppa_arch)		ta="$ta hppa-dis.lo" ;;
+-	bfd_i386_arch|bfd_iamcu_arch)
++	bfd_i386_arch|bfd_iamcu_arch|bfd_k1om_arch)
+ 				ta="$ta i386-dis.lo" ;;
+ 	bfd_ia64_arch)		ta="$ta ia64-dis.lo ia64-opc.lo" ;;
+ 	bfd_ip2k_arch)		ta="$ta ip2k-asm.lo ip2k-desc.lo ip2k-dis.lo ip2k-ibld.lo ip2k-opc.lo" using_cgen=yes ;;
+diff --git a/opcodes/disassemble.c b/opcodes/disassemble.c
+index 53ee1ecf38b..d1ca4ada17b 100644
+--- a/opcodes/disassemble.c
++++ b/opcodes/disassemble.c
+@@ -211,6 +211,7 @@ disassembler (enum bfd_architecture a,
+ #ifdef ARCH_i386
+     case bfd_arch_i386:
+     case bfd_arch_iamcu:
++    case bfd_arch_k1om:
+       disassemble = print_insn_i386;
+       break;
+ #endif
+diff --git a/opcodes/i386-gen.c b/opcodes/i386-gen.c
+index 97ded8c8b50..e910edee034 100644
+--- a/opcodes/i386-gen.c
++++ b/opcodes/i386-gen.c
+@@ -351,6 +351,7 @@ static bitfield cpu_flags[] =
+   BITFIELD (AVX512VL),
+   BITFIELD (AVX512DQ),
+   BITFIELD (AVX512BW),
++  BITFIELD (K1OM),
+   BITFIELD (IAMCU),
+   BITFIELD (SSE4a),
+   BITFIELD (3dnow),
+diff --git a/opcodes/i386-opc.h b/opcodes/i386-opc.h
+index 86fe0b86059..62d0b313609 100644
+--- a/opcodes/i386-opc.h
++++ b/opcodes/i386-opc.h
+@@ -109,6 +109,8 @@ enum i386_cpu
+   CpuAVX512DQ,
+   /* Intel AVX-512 BW Instructions support required.  */
+   CpuAVX512BW,
++  /* Intel K1OM support required */
++  CpuK1OM,
+   /* Intel IAMCU support required */
+   CpuIAMCU,
+   /* Xsave/xrstor New Instructions support required */
+@@ -371,7 +373,7 @@ enum i386_cpu
+ 
+ /* If you get a compiler error for zero width of an unused field,
+    comment the respective one out.  */
+-#define CpuUnused	(CpuMax + 1)
++/* #define CpuUnused	(CpuMax + 1) */
+ #define CpuAttrUnused	(CpuIsaBits + CpuMax + 1 - CpuAttrEnums)
+ 
+ #define CPU_FLAGS_COMMON \
+@@ -449,6 +451,7 @@ typedef union i386_cpu_flags
+       unsigned int cpuavx512pf:1;
+       unsigned int cpuavx512dq:1;
+       unsigned int cpuavx512bw:1;
++      unsigned int cpuk1om:1;
+       unsigned int cpuiamcu:1;
+       unsigned int cpuxsave:1;
+       unsigned int cpuxsaveopt:1;

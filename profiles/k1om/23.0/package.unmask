@@ -1,4 +1,5 @@
 app-arch/zstd::xeon-phi
+dev-debug/gdb::xeon-phi
 dev-libs/gmp::xeon-phi
 dev-libs/libffi::xeon-phi
 dev-libs/libgcrypt::xeon-phi
