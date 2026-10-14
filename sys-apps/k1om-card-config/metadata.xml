@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>anselm.busse@outlook.com</email>
+		<name>Anselm Busse</name>
+	</maintainer>
+	<longdescription>
+		Configuration a Gentoo root file system needs to run on a Knights Corner
+		card: the mic0 network interface, a sysctl default without the packet
+		scheduler setting, and (through emerge --config) consoles on hvc0 and
+		ttyS0 instead of virtual terminals and swclock instead of hwclock.
+	</longdescription>
+</pkgmetadata>

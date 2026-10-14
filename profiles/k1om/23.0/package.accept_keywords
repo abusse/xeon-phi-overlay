@@ -2,3 +2,4 @@
 =sys-devel/gcc-16.2.0 ~amd64
 =sys-kernel/linux-headers-6.18 ~amd64
 =sys-libs/glibc-2.44-r1 **
+sys-apps/k1om-card-config ~amd64
