@@ -57,7 +57,7 @@ if [ "`echo $root | cut -c1-3`" = "nfs" ]; then
 	mount -t nfs $nfs_server:$nfs_dir /new_root/ -o nolock,soft,timeo=900,retrans=3
 else
 	kl "loading card modules"
-	modprobe dma_module; modprobe micscif; modprobe michvc
+	modprobe dma_module; modprobe micscif; modprobe pm_scif; modprobe michvc
 	modprobe intel_micveth; modprobe micras; modprobe ramoops
 	kl "modules loaded; nets=$(ls /sys/class/net 2>/dev/null | tr '\n' ' '); polling for /dev/vda"
 	# The card kernel has no devtmpfs/udev, so /dev/vda is never auto-created
@@ -78,6 +78,13 @@ else
 		kl "MOUNTED /dev/vda as new root -> switching"
 		# Signal the host that the card is online (stock sysonline equivalent):
 		# clears mpssd's "boot failed"/reset and brings up the mic0 vnet link.
+		# wait for SCIF node0(host) to reach RUNNING so mpssboot notify (scif_connect) succeeds
+		w=0; while [ $w -lt 40 ]; do
+			st=$(awk '$1=="0"{print $2}' /proc/scif/scif_dev 2>/dev/null)
+			[ "$st" = "SCIFDEV_RUNNING" ] && break
+			sleep 1; w=$((w+1))
+		done
+		kl "node0 state=$st after ${w}s (pre-mpssboot)"
 		modprobe mpssboot 2>/dev/null
 		echo done > /sys/class/micnotify/notify/host_notified 2>/dev/null
 		kl "signaled online (host_notified)"
@@ -98,5 +105,12 @@ else
 fi
 )
 
+# carry the initramfs pseudo-fs mounts into the new root (busybox switch_root
+# does not move mounts; without this the rootfs /proc,/sys are empty ->
+# netifrc/udev see no /sys/class/net).
+mkdir -p /new_root/proc /new_root/sys /new_root/dev 2>/dev/null
+mount -t proc none /new_root/proc 2>/dev/null
+mount -t sysfs none /new_root/sys 2>/dev/null
+mount -t devtmpfs none /new_root/dev 2>/dev/null
 kl "exec switch_root /new_root /sbin/init"
 exec /sbin/switch_root /new_root /sbin/init
