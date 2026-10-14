@@ -1,0 +1,97 @@
+From 5fb59d818fbcac69811daf078b98b7fe151f738d Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Fri, 16 Oct 2026 23:43:18 +0200
+Subject: [PATCH] x86/fpu: KNC: export the VPU state through NT_X86_XSTATE
+
+KNC has no XSAVE: the generic uabi copy keys on header.xfeatures and the
+per-feature xstate offsets, neither of which is set up for the
+hand-saved VPU block. PTRACE_GETREGSET returned only init state (zmm, k,
+vxcsr and even the x87 part zero) and PTRACE_SETREGSET read past its
+buffer (oops in copy_from_buffer from copy_uabi_to_xstate), so debuggers
+could not see or change zmm0-31, k0-7 or VXCSR. Copy the fixed MPSS
+layout (fxsave area, xsave header, vpu block) instead, as the MPSS
+2.6.38 kernel did.
+
+Validated on mic1: gdb reads and writes zmm/k/vxcsr, float return values
+and float-argument inferior calls work, gcore keeps the vector state;
+vectest 10/10, toolchain tests 57/57.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ arch/x86/kernel/fpu/regset.c | 45 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 45 insertions(+)
+
+diff --git a/arch/x86/kernel/fpu/regset.c b/arch/x86/kernel/fpu/regset.c
+index 5c25dbaf15e3..fadf2f5c4e7d 100644
+--- a/arch/x86/kernel/fpu/regset.c
++++ b/arch/x86/kernel/fpu/regset.c
+@@ -127,6 +127,44 @@ int xfpregs_set(struct task_struct *target, const struct user_regset *regset,
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/*
++ * KNC has no XSAVE: the generic uabi copy keys on header.xfeatures and the
++ * per-feature xstate offsets, neither of which is set up for the hand-saved
++ * VPU block, so it exported only init state and dropped writes.  Copy the
++ * fixed MPSS layout (fxsave area, header, vpu) as the 2.6.38 MPSS kernel did.
++ */
++static int knc_xstateregs_get(struct fpu *fpu, struct membuf to)
++{
++	struct xregs_state *xsave = &fpu->fpstate->regs.xsave;
++	struct xstate_header header = {
++		.xfeatures = fpu_user_cfg.max_features,
++	};
++
++	membuf_write(&to, &xsave->i387,
++		     offsetof(struct fxregs_state, sw_reserved));
++	membuf_write(&to, xstate_fx_sw_bytes, sizeof(xsave->i387.sw_reserved));
++	membuf_write(&to, &header, sizeof(header));
++	membuf_write(&to, &xsave->vpu, sizeof(xsave->vpu));
++	return membuf_zero(&to, to.left);
++}
++
++static int knc_xstateregs_set(struct fpu *fpu, const struct xregs_state *buf)
++{
++	struct xregs_state *xsave = &fpu->fpstate->regs.xsave;
++
++	if ((buf->i387.mxcsr & ~mxcsr_feature_mask) ||
++	    (buf->vpu.vxcsr & ~mxcsr_feature_mask))
++		return -EINVAL;
++
++	fpu_force_restore(fpu);
++	memcpy(&xsave->i387, &buf->i387,
++	       offsetof(struct fxregs_state, sw_reserved));
++	memcpy(&xsave->vpu, &buf->vpu, sizeof(xsave->vpu));
++	return 0;
++}
++#endif
++
+ int xstateregs_get(struct task_struct *target, const struct user_regset *regset,
+ 		struct membuf to)
+ {
+@@ -137,6 +175,9 @@ int xstateregs_get(struct task_struct *target, const struct user_regset *regset,
+ 
+ 	sync_fpstate(x86_task_fpu(target));
+ 
++#ifdef CONFIG_X86_EARLYMIC
++	return knc_xstateregs_get(x86_task_fpu(target), to);
++#endif
+ 	copy_xstate_to_uabi_buf(to, target, XSTATE_COPY_XSAVE);
+ 	return 0;
+ }
+@@ -171,6 +212,10 @@ int xstateregs_set(struct task_struct *target, const struct user_regset *regset,
+ 		}
+ 	}
+ 
++#ifdef CONFIG_X86_EARLYMIC
++	ret = knc_xstateregs_set(fpu, kbuf ?: tmpbuf);
++	goto out;
++#endif
+ 	fpu_force_restore(fpu);
+ 	ret = copy_uabi_from_kernel_to_xstate(fpu->fpstate, kbuf ?: tmpbuf, &target->thread.pkru);
+ 
+-- 
+2.54.0
+
