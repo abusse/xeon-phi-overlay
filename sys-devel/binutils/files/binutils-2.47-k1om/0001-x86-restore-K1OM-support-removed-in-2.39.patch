@@ -1,6 +1,6 @@
-From fba128efdcf0a909f12d247e213ebb8ae8ed0e64 Mon Sep 17 00:00:00 2001
+From 397282e5d74b551cf5e3d84132a8eb07f4bae5ba Mon Sep 17 00:00:00 2001
 From: Anselm Busse <anselm.busse@outlook.com>
-Date: Wed, 30 Sep 2026 22:07:46 +0200
+Date: Wed, 14 Oct 2026 07:27:58 +0200
 Subject: [PATCH 1/7] x86: restore K1OM support removed in 2.39
 
 Binutils 2.39 dropped the L1OM/K1OM sub-architectures (801a7eab11e,
@@ -17,6 +17,9 @@ and elf64-k1om-freebsd matches ELFOSABI_FREEBSD exactly.  K1OM is added
 as a secondary target where x86 targets still list secondary targets;
 the Solaris and FreeBSD lists that were reorganized upstream get none.
 
+The K1OM vectors follow the Solaris one, which uses 1MB pages since
+2.46, so they set ELF_MAXPAGESIZE back to 4KB.
+
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
 ---
@@ -28,7 +31,7 @@ Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
  bfd/configure                            |   2 +
  bfd/configure.ac                         |   2 +
  bfd/cpu-k1om.c                           |  37 ++++
- bfd/elf64-x86-64.c                       |  56 +++++
+ bfd/elf64-x86-64.c                       |  60 ++++++
  bfd/targets.c                            |   7 +
  gas/config/tc-i386.c                     |  34 ++-
  gas/config/tc-i386.h                     |   5 +
@@ -53,7 +56,7 @@ Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
  opcodes/disassemble.c                    |   1 +
  opcodes/i386-gen.c                       |   1 +
  opcodes/i386-opc.h                       |   3 +
- 33 files changed, 548 insertions(+), 23 deletions(-)
+ 33 files changed, 552 insertions(+), 23 deletions(-)
  create mode 100644 bfd/cpu-k1om.c
  create mode 100644 gas/testsuite/gas/i386/k1om-inval.l
  create mode 100644 gas/testsuite/gas/i386/k1om-inval.s
@@ -322,10 +325,10 @@ index 00000000000..3f8aed03e97
 +  N (bfd_mach_k1om, "k1om", "k1om", &bfd_k1om_arch_intel_syntax);
 +
 diff --git a/bfd/elf64-x86-64.c b/bfd/elf64-x86-64.c
-index 575995d4957..a34081527f9 100644
+index 575995d4957..e407cce61de 100644
 --- a/bfd/elf64-x86-64.c
 +++ b/bfd/elf64-x86-64.c
-@@ -6495,6 +6495,62 @@ elf_x86_64_solaris2_add_symbol_hook (bfd *abfd,
+@@ -6495,6 +6495,66 @@ elf_x86_64_solaris2_add_symbol_hook (bfd *abfd,
  #undef	elf_backend_add_symbol_hook
  #define elf_backend_add_symbol_hook	elf_x86_64_add_symbol_hook
  
@@ -358,6 +361,10 @@ index 575995d4957..a34081527f9 100644
 +
 +#undef elf_backend_object_p
 +#define elf_backend_object_p		    elf64_k1om_elf_object_p
++
++/* Not the Solaris 1MB page size of the vector above.  */
++#undef	ELF_MAXPAGESIZE
++#define ELF_MAXPAGESIZE			    0x1000
 +
 +/* Restore defaults.  */
 +#undef ELF_TARGET_OS
