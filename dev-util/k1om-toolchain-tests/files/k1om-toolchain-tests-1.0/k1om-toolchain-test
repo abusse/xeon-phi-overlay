@@ -1,0 +1,199 @@
+#!/bin/bash
+# k1om-toolchain-test: build the k1om (Xeon Phi KNC) toolchain test programs with a k1om
+# cross compiler, run them on a card over ssh and check the results.
+set -u
+
+DATADIR=${K1OM_TEST_DATADIR:-/usr/share/k1om-toolchain-tests}
+CONF=${K1OM_TEST_CONF:-/etc/k1om-toolchain-test.conf}
+
+CARD= VIA= TARGET=k1om-mpss-linux-gnu BINDIR= SYSROOT= WORKDIR= KEEP= BUILD_ONLY=
+SSH_OPTS="-oHostKeyAlgorithms=+ssh-rsa -oPubkeyAcceptedAlgorithms=+ssh-rsa -oKexAlgorithms=+diffie-hellman-group1-sha1 -oCiphers=+aes128-cbc -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null -oBatchMode=yes -oLogLevel=ERROR -oConnectTimeout=15"
+[[ -r ${CONF} ]] && . "${CONF}"
+
+usage() {
+	cat <<-USAGE
+	usage: ${0##*/} [options]
+	  -c, --card HOST      card to run the tests on (user@host)
+	  -j, --via HOST       reach the card through HOST (runs "ssh HOST ssh CARD");
+                       HOST may carry ssh options, e.g. "-p 2222 root@host"
+	  -t, --target TRIPLET compiler triplet (default ${TARGET})
+	  -b, --bindir DIR     directory with TRIPLET-gcc, -g++, -gfortran (default: PATH)
+	  -s, --sysroot DIR    link against this sysroot (default: the compiler's own)
+	  -w, --workdir DIR    build directory (default: a temporary one, removed afterwards)
+	  -k, --keep           keep the build directory and the card output
+	      --build-only     build and check the binaries, do not run them
+	      --ssh-opts OPTS  ssh options for the card (default: legacy algorithms for OpenSSH 6.4)
+	Defaults can be set as shell variables (CARD, VIA, TARGET, BINDIR, SYSROOT, SSH_OPTS)
+	in ${CONF}.
+	Exit status: 0 if every check passed, 1 otherwise, 2 on usage errors.
+	USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+	case $1 in
+	-c|--card) CARD=$2; shift ;;
+	-j|--via) VIA=$2; shift ;;
+	-t|--target) TARGET=$2; shift ;;
+	-b|--bindir) BINDIR=$2; shift ;;
+	-s|--sysroot) SYSROOT=$2; shift ;;
+	-w|--workdir) WORKDIR=$2; shift ;;
+	-k|--keep) KEEP=1 ;;
+	--build-only) BUILD_ONLY=1 ;;
+	--ssh-opts) SSH_OPTS=$2; shift ;;
+	-h|--help) usage; exit 0 ;;
+	*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+	esac
+	shift
+done
+[[ -n ${CARD} || -n ${BUILD_ONLY} ]] || { echo "no card given (--card or CARD= in ${CONF})" >&2; exit 2; }
+
+tool() { if [[ -n ${BINDIR} ]]; then echo "${BINDIR}/${TARGET}-$1"; else command -v "${TARGET}-$1"; fi; }
+GCC=$(tool gcc) || true
+[[ -n ${GCC} && -x ${GCC} ]] || { echo "${TARGET}-gcc not found" >&2; exit 2; }
+GXX=$(tool g++) || true
+[[ -x ${GXX} ]] || GXX=
+GFC=$(tool gfortran) || true
+[[ -x ${GFC} ]] || GFC=
+SR=${SYSROOT:-$("${GCC}" -print-sysroot)}
+SRFLAG=${SYSROOT:+--sysroot=${SYSROOT}}
+CC="${GCC} ${SRFLAG}"
+CXX="${GXX} ${SRFLAG}"
+FC="${GFC} ${SRFLAG}"
+src=${DATADIR}/tests
+
+if [[ -z ${WORKDIR} ]]; then
+	WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/k1om-toolchain-test.XXXXXX") || exit 2
+	[[ -n ${KEEP} ]] || trap 'rm -rf "${WORKDIR}"' EXIT
+fi
+out=${WORKDIR}/t
+rm -rf "${out}" && mkdir -p "${out}" && cd "${out}" || exit 2
+
+fails=0
+fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
+c() { "$@" 2>>build.err || fail "build: $*"; }
+have_lib() { [[ $("${GCC}" ${SRFLAG} -print-file-name="$1") == /* ]]; }
+
+echo "compiler: $("${GCC}" --version | head -1)"
+echo "sysroot:  ${SR}"
+
+# --- build --------------------------------------------------------------------------------
+for o in O0 O2 O3 Os; do
+	for t in fpabi fpmath; do c ${CC} -${o} -o ${t}-${o} ${src}/${t}.c -lm; done
+	c ${CC} -${o} -pthread -o intops-${o} ${src}/intops.c
+	c ${CC} -${o} -o kb-pkq-${o} ${src}/kb-pkq.c
+	[[ -n ${GXX} ]] && c ${CXX} -${o} -std=c++14 -pthread -o cxx-${o} ${src}/cxx.cpp
+	c ${CC} -${o} -fopenmp -o omp-${o} ${src}/omp.c
+	c ${CC} -${o} -fPIC -shared -o libknctest-${o}.so ${src}/libdso.c
+	c ${CC} -${o} -o dso-${o} ${src}/dso.c -L. -lknctest-${o} -ldl -Wl,-rpath,'$ORIGIN'
+done
+c ${CC} -O2 -g -o fpabi-g ${src}/fpabi.c -lm
+[[ -n ${GXX} ]] && c ${CXX} -O2 -g -std=c++14 -pthread -o cxx-g ${src}/cxx.cpp
+c ${CC} -O2 -o imci ${src}/imci.c
+c ${CC} -O2 -o mxcsr ${src}/mxcsr.c
+for h in vectest efault perftest; do c ${CC} -O2 -std=gnu99 -U_FORTIFY_SOURCE -o hw-${h} ${src}/${h}.c; done
+cp libknctest-O2.so libknctest.so 2>/dev/null
+
+full_tests="ssp cq imm sfp tislot maskrax msabi timis"
+for o in O0 O2; do
+	c ${CC} -${o} -fstack-protector-strong -o full-ssp-${o} ${src}/full-ssp.c
+	c ${CC} -${o} -o full-cq-${o} ${src}/full-cq.c
+	c ${CC} -${o} -o full-imm-${o} ${src}/full-imm.c
+	c ${CC} -${o} -o full-sfp-${o} ${src}/full-sfp.c -lm
+	c ${CC} -${o} -frounding-math -ftrapping-math -fno-math-errno -o full-tislot-${o} ${src}/full-tislot.c -lm
+	c ${CC} -${o} -o full-maskrax-${o} ${src}/full-maskrax.c
+	c ${CC} -${o} -o full-msabi-${o} ${src}/full-msabi.c
+	c ${CC} -${o} -o full-timis-${o} ${src}/full-timis.c
+done
+if have_lib libitm.so.1; then
+	full_tests+=" itm"
+	for o in O0 O2; do c ${CC} -${o} -fgnu-tm -pthread -o full-itm-${o} ${src}/full-itm.c; done
+else echo "skip: libitm (not built)"; fi
+if have_lib libquadmath.so.0; then
+	full_tests+=" quad"
+	for o in O0 O2; do c ${CC} -${o} -o full-quad-${o} ${src}/full-quad.c -lquadmath; done
+else echo "skip: libquadmath (not built)"; fi
+if [[ -n ${GFC} ]] && have_lib libgfortran.so; then
+	full_tests+=" f90"
+	for o in O0 O2; do c ${FC} -${o} -o full-f90-${o} ${src}/full-f90.f90; done
+else echo "skip: Fortran (no gfortran)"; fi
+
+# known compiler bugs, recorded only
+for o in O0 O2; do
+	${CC} -${o} -c -o /dev/null ${src}/kb-sf2.c 2>/dev/null && echo "kb-sf2 -${o}: compiles" || echo "kb-sf2 -${o}: fails (known)"
+done
+
+# KNC has no SSE/AVX/MMX: the compiler must refuse them (configure probes rely on it)
+echo 'int f(void) { return 0; }' > sse1.c
+echo '__attribute__((target("avx2"))) int g(int a) { return a; }' > sse2.c
+${CC} -msse2 -c -o /dev/null sse1.c 2>/dev/null && fail "-msse2 not refused"
+${CC} -c -o /dev/null sse2.c 2>/dev/null && fail "target(\"avx2\") not refused"
+rm -f sse1.c sse2.c
+
+# runtime libraries of this compiler, and the C library of the sysroot linked against
+for l in libgcc_s.so.1 libstdc++.so.6 libgomp.so.1 libatomic.so.1 libitm.so.1 libquadmath.so.0; do
+	have_lib ${l} && cp -L "$(${CC} -print-file-name=${l})" .
+done
+if [[ ${full_tests} == *f90* ]]; then
+	gf=$(${CC} -print-file-name=libgfortran.so)
+	so=$(readelf -d "${gf}" | sed -n 's/.*SONAME.*\[\(.*\)\]/\1/p')
+	[[ -n ${so} ]] && cp -L "${gf}" "${so}"
+fi
+mkdir -p glibc
+for l in ld-linux-k1om.so.2 libc.so.6 libm.so.6 libpthread.so.0 libdl.so.2 librt.so.1 libutil.so.1 libresolv.so.2; do
+	for d in "${SR}"/lib64 "${SR}"/usr/lib64 "${SR}"/lib "${SR}"/usr/lib; do
+		[[ -e ${d}/${l} ]] && { cp -L "${d}/${l}" glibc/; break; }
+	done
+done
+[[ -e glibc/ld-linux-k1om.so.2 && -e glibc/libc.so.6 ]] || fail "no k1om C library found in ${SR}"
+
+pie=$(echo | ${CC} -dM -E - | grep -c __PIE__)
+for f in *; do
+	[[ -f ${f} && -x ${f} ]] || continue
+	readelf -h "${f}" 2>/dev/null | grep -q "Intel K1OM" || fail "${f} is not an Intel K1OM object"
+	case ${f} in lib*) continue ;; esac
+	[[ ${pie} != 0 ]] && ! readelf -h "${f}" | grep -q "DYN (" && fail "${f} is not PIE"
+done
+if [[ ${fails} != 0 ]]; then
+	echo "--- build.err"; cat build.err
+elif [[ -s build.err ]]; then
+	echo "compiler warnings: $([[ -n ${KEEP} ]] && echo "${out}/build.err" || echo "rerun with --keep to see them")"
+fi
+[[ -n ${BUILD_ONLY} ]] && { [[ -n ${KEEP} ]] && echo "built in ${out}"; [[ ${fails} == 0 ]]; exit $?; }
+
+# --- run on the card ----------------------------------------------------------------------
+cp "${DATADIR}/run-on-card.sh" .
+dir=/tmp/k1om-toolchain-test.$$
+cmd="rm -rf ${dir} && mkdir -p ${dir} && cd ${dir} && tar xzf - && sh ./run-on-card.sh; rc=\$?; cd /; rm -rf ${dir}; exit \$rc"
+if [[ -n ${VIA} ]]; then
+	tar czf - . | ssh -oBatchMode=yes ${VIA} "ssh ${SSH_OPTS} ${CARD} '${cmd}'" > "${WORKDIR}/card.out" 2>&1
+else
+	tar czf - . | ssh ${SSH_OPTS} "${CARD}" "${cmd}" > "${WORKDIR}/card.out" 2>&1
+fi
+grep -q '^== ' "${WORKDIR}/card.out" || { cat "${WORKDIR}/card.out"; fail "no results from ${CARD}"; exit 1; }
+
+# --- check ---------------------------------------------------------------------------------
+section() { sed -n "/^== $1\$/,/^rc=/p" "${WORKDIR}/card.out" | sed '1d'; }
+for o in O0 O2 O3 Os; do
+	diff <(section kb-pkq-${o}) "${src}/kb-pkq.expected" > /dev/null || {
+		fail "kb-pkq-${o}"; section kb-pkq-${o} | sed 's/^/    /'; }
+done
+for t in ${full_tests}; do
+	for o in O0 O2; do
+		diff <(section full-${t}-${o} | sed '$d' | grep -v "Segmentation fault\|time stamp") "${src}/full-${t}.expected" > /dev/null || {
+			fail "full-${t}-${o}"; section full-${t}-${o} | sed 's/^/    /'; }
+	done
+done
+# everything else against the reference run of Intel's MPSS gcc 5.1.1
+filter() {
+	awk -v cxx="${GXX}" '/^== /{skip = ($2 ~ /^(kb-pkq|full)-/ || (cxx == "" && $2 ~ /^cxx-/))}
+		cxx == "" && /^runtime libstdc/ {next} !skip' "$1" | grep -v "Segmentation fault\|time stamp"
+}
+if ! diff <(filter "${src}/reference.out") <(filter "${WORKDIR}/card.out") > "${WORKDIR}/reference.diff"; then
+	fail "output differs from the reference"
+	cat "${WORKDIR}/reference.diff"
+fi
+n=$(grep -c '^== ' "${WORKDIR}/card.out")
+bad=$(grep '^rc=' "${WORKDIR}/card.out" | grep -vc '^rc=0$')
+echo "card ${CARD}: ${n} programs, $((n - bad)) exited 0"
+[[ -n ${KEEP} ]] && echo "kept: ${WORKDIR}"
+if [[ ${fails} == 0 ]]; then echo "PASS"; exit 0; else echo "FAILED: ${fails}"; exit 1; fi

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>anselm.busse@outlook.com</email>
+		<name>Anselm Busse</name>
+	</maintainer>
+	<longdescription>
+		Builds C, C++, OpenMP, Fortran, libquadmath, libitm and IMCI test programs with a
+		k1om cross compiler, runs them on a Xeon Phi (KNC) card over ssh through the
+		sysroot's own loader, and compares the output with a reference run of Intel's
+		MPSS gcc 5.1.1 and with fixed expected results.
+	</longdescription>
+</pkgmetadata>

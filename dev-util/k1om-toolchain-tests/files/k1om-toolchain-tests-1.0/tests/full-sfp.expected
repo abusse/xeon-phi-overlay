@@ -1,0 +1,5 @@
+exact-mul    uf=0 inex=0
+exact-div    uf=0 inex=0
+exact-add    uf=0 inex=0
+inexact-mul  uf=1 inex=1
+narrow-exact uf=0 inex=0
