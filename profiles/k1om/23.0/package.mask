@@ -1,0 +1,5 @@
+# the k1om toolchain only exists in this overlay
+sys-devel/binutils::gentoo
+sys-devel/gcc::gentoo
+sys-kernel/linux-headers::gentoo
+sys-libs/glibc::gentoo

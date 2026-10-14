@@ -1,0 +1,8 @@
+# Knights Corner (Xeon Phi x100, k1om): x86-64 without MMX/SSE/AVX/CMOV. Scalar FP is x87,
+# vectors are KNC zmm (IMCI); the k1om gcc defaults to -march=knc.
+CHOST="k1om-mpss-linux-gnu"
+CHOST_amd64="k1om-mpss-linux-gnu"
+CFLAGS_amd64="-m64"
+LDFLAGS_amd64="-m elf_k1om"
+CPU_FLAGS_X86="-mmx -mmxext -sse -sse2"
+USE="-cet"

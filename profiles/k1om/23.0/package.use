@@ -1,0 +1,10 @@
+# hand-written x86-64 asm assumes SSE/AVX or CMOV, or dispatches on CPUID
+dev-libs/openssl -asm
+dev-libs/gmp -asm -cpudetection
+dev-libs/libgcrypt -asm
+dev-libs/nettle -asm
+dev-libs/leancrypto -asm
+# the sljit x86 backend emits SSE2
+dev-libs/libpcre2 -jit
+# libsanitizer is not ported to k1om
+sys-devel/gcc -sanitize
