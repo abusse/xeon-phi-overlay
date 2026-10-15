@@ -1,0 +1,44 @@
+From c222aedc9f87bb7beb25047c7bbe6a6c37d5e301 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Thu, 1 Oct 2026 06:28:02 +0200
+Subject: [PATCH 15/22] libgcc: KNC soft-fp takes the trap state from the x87
+ control word
+
+soft-fp derives the trapping exceptions from the MXCSR mask bits.  KNC's
+MXCSR has none (bits 7-12 cannot be set; ldmxcsr with any of them
+faults; the default is 0x00200000), so every exception looked
+unmasked, and __float128 operations followed the trapping rules: an
+exact tiny result raised underflow.  Read the masks from the x87
+control word instead; the rounding mode still comes from MXCSR, whose
+rounding bits KNC has.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ libgcc/config/i386/sfp-machine.h | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/libgcc/config/i386/sfp-machine.h b/libgcc/config/i386/sfp-machine.h
+index cc20c2c5f3e..42f4a94e8f9 100644
+--- a/libgcc/config/i386/sfp-machine.h
++++ b/libgcc/config/i386/sfp-machine.h
+@@ -62,7 +62,19 @@ void __sfp_handle_exceptions (int);
+       __sfp_handle_exceptions (_fex);		\
+   } while (0)
+ 
++#ifdef __KNC__
++/* KNC's MXCSR has no exception mask bits (loading them faults), so it
++   reads as all exceptions unmasked; take the trap state from the x87
++   control word, whose low six bits have the same layout.  */
++# define FP_TRAPPING_EXCEPTIONS					\
++  ({								\
++    unsigned short int __knc_cw;				\
++    __asm__ __volatile__ ("fnstcw\t%0" : "=m" (__knc_cw));	\
++    (~__knc_cw) & FP_EX_ALL;					\
++  })
++#else
+ #define FP_TRAPPING_EXCEPTIONS ((~_fcw >> FP_EX_SHIFT) & FP_EX_ALL)
++#endif
+ 
+ #define FP_ROUNDMODE		(_fcw & FP_RND_MASK)
+ #endif

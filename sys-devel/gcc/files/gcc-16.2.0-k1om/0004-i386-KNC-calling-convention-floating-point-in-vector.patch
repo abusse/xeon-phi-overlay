@@ -1,0 +1,86 @@
+From 1e132d93b214146611812af067c4b43f56998c0b Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Tue, 29 Sep 2026 18:16:04 +0200
+Subject: [PATCH 04/22] i386: KNC calling convention: floating point in vector
+ registers
+
+From Intel MPSS 3.8.6: the k1om psABI passes and returns float, double
+and __float128 values and __m128-class aggregates in the vector
+registers exactly where the x86-64 psABI uses xmm0-7, and the varargs
+register save area holds them, although KNC has no SSE.  The SSE2
+check in construct_container is skipped for KNC.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gcc/config/i386/i386.cc | 15 ++++++++-------
+ 1 file changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/gcc/config/i386/i386.cc b/gcc/config/i386/i386.cc
+index 25135e146b8..4905d9c1c54 100644
+--- a/gcc/config/i386/i386.cc
++++ b/gcc/config/i386/i386.cc
+@@ -1583,7 +1583,7 @@ ix86_function_arg_regno_p (int regno)
+   enum calling_abi call_abi;
+   const int *parm_regs;
+ 
+-  if (TARGET_SSE && SSE_REGNO_P (regno)
++  if ((TARGET_SSE || TARGET_KNC) && SSE_REGNO_P (regno)
+       && regno < FIRST_SSE_REG + SSE_REGPARM_MAX)
+     return true;
+ 
+@@ -1924,7 +1924,7 @@ init_cumulative_args (CUMULATIVE_ARGS *cum,  /* Argument info to initialize */
+                    ? X86_64_REGPARM_MAX
+                    : X86_64_MS_REGPARM_MAX);
+     }
+-  if (TARGET_SSE)
++  if (TARGET_SSE || TARGET_KNC)
+     {
+       cum->sse_nregs = SSE_REGPARM_MAX;
+       if (TARGET_64BIT)
+@@ -2820,7 +2820,7 @@ construct_container (machine_mode mode, machine_mode orig_mode,
+ 
+   /* We allowed the user to turn off SSE for kernel mode.  Don't crash if
+      some less clueful developer tries to use floating-point anyway.  */
+-  if (needed_sseregs
++  if (needed_sseregs && !TARGET_KNC
+       && (!TARGET_SSE || (VALID_SSE2_TYPE_MODE (mode) && !TARGET_SSE2)))
+     {
+       /* Return early if we shouldn't raise an error for invalid
+@@ -3671,7 +3671,8 @@ static bool
+ ix86_compat_aligned_value_p (const_tree type)
+ {
+   machine_mode mode = TYPE_MODE (type);
+-  if (((TARGET_SSE && SSE_REG_MODE_P (mode))
++  if ((((TARGET_SSE || TARGET_KNC)
++	&& SSE_REG_MODE_P (mode))
+        || mode == TDmode
+        || mode == TFmode
+        || mode == TCmode)
+@@ -3886,7 +3887,7 @@ ix86_function_value_regno_p (const unsigned int regno)
+       /* Complex values are returned in %xmm0/%xmm1 pair.  */
+     case XMM0_REG:
+     case XMM1_REG:
+-      return TARGET_SSE;
++      return TARGET_SSE || TARGET_KNC;
+ 
+     case MM0_REG:
+       if (TARGET_MACHO || TARGET_64BIT)
+@@ -4657,7 +4658,7 @@ setup_incoming_varargs_64 (CUMULATIVE_ARGS *cum)
+ 
+   /* FPR size of varargs save area.  We don't need it if we don't pass
+      anything in SSE registers.  */
+-  if (TARGET_SSE && cfun->va_list_fpr_size)
++  if ((TARGET_SSE || TARGET_KNC) && cfun->va_list_fpr_size)
+     ix86_varargs_fpr_size = X86_64_SSE_REGPARM_MAX * 16;
+   else
+     ix86_varargs_fpr_size = 0;
+@@ -4897,7 +4898,7 @@ ix86_va_start (tree valist, rtx nextarg)
+       expand_expr (t, const0_rtx, VOIDmode, EXPAND_NORMAL);
+     }
+ 
+-  if (TARGET_SSE && cfun->va_list_fpr_size)
++  if ((TARGET_SSE || TARGET_KNC) && cfun->va_list_fpr_size)
+     {
+       type = TREE_TYPE (fpr);
+       t = build2 (MODIFY_EXPR, type, fpr,

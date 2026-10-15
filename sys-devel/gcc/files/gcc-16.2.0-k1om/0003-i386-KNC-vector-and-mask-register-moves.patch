@@ -1,0 +1,1342 @@
+From 2246ad7ea60fff8696ea5e99fe2a3a975fe060ef Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Tue, 29 Sep 2026 18:16:04 +0200
+Subject: [PATCH 03/22] i386: KNC vector and mask register moves
+
+From Intel MPSS 3.8.6: make the 512-bit vector registers (as xmm0-31)
+and the mask registers k0-k7 usable for scalar values on KNC.
+
+KNC has no SSE: a scalar in a vector register is loaded with a
+broadcast (vpbroadcastd/q, vbroadcastss/sd, vbroadcasti32x4) and stored
+with a masked vpackstorel{d,q,ps,pd} under a mask in k1/k2 (knc.md).
+Stores are routed through ix86_secondary_reload and ix86_expand_move.
+Misaligned SF/DF/DI/TF moves and the TImode input reload go through a
+stack slot and an integer scratch.  Mask constants are loaded via a
+free (or saved) GPR after reload (ix86_split_load_mask_reg, needing
+ix86_save_reg_1).  k2 is reserved as the post-reload store mask.  KNC
+spells kmovw "kmov" and has no k-register logic.  The new operand code
+'J' prints a memory operand without its size.
+
+KNC's kmov only moves between mask and general registers, so the HI/QI
+mask moves to and from memory are disabled for KNC: the mixed "k <- km"
+alternative of *movhi_internal is split into "k <- k" and a new last
+"k <- m", and a spilled mask value is reloaded through a general
+register.
+
+The mask-constant ("CBC") alternatives GCC 9 added to *movhi_internal
+and *movqi_internal are disabled for KNC, which has no k-register logic.
+
+Intel's "x", "v" and "Yv" constraints also admit the KNC vector
+registers, so upstream alternatives that rely on them implying SSE are
+gated with isa noknc (or the new x64_noknc): the zeroing ("C")
+alternatives of the scalar move patterns, the pshufd split of
+*highpartdisi2 and the punpcklqdq split of *concat<mode><dwi>3_3.
+
+Differences from Intel's code:
+ - The operand code is 'J'; Intel used 'M', now taken for the x32 VSIB
+   addr32 prefix.
+ - The misaligned-move patterns carry their stack slot and scratch as
+   real clobbers of the insn; Intel had them inside the UNSPEC, where
+   they are not definitions, and IRA turned the scratch into a pseudo
+   without a live range (heap corruption building libgomp).
+ - The stack slot is a pseudo that the register allocator has to put in
+   memory: a fixed frame slot as clobber operand was eliminated with a
+   stale offset when the prologue saved registers, and the copy
+   overwrote other locals.  The slot of the TImode input reload is a
+   KNC-own SLOT_KNC_TEMP, as SLOT_TEMP is gone.
+ - Intel allowed kmov with a memory operand, which the k1om assembler
+   rejects.
+ - The SImode register copy prints its operands with %g (zmm names);
+   Intel used %1/%0, which print xmm names the k1om assembler does not
+   know.
+ - An empty misaligned-DImode block (its body was commented out) and a
+   whitespace-only change in ix86_expand_move are dropped.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gcc/config/i386/constraints.md |  10 +-
+ gcc/config/i386/i386-expand.cc | 227 ++++++++++++++++++++++++++++
+ gcc/config/i386/i386-protos.h  |   4 +
+ gcc/config/i386/i386.cc        | 112 ++++++++++++--
+ gcc/config/i386/i386.h         |   1 +
+ gcc/config/i386/i386.md        | 214 +++++++++++++++++++++++---
+ gcc/config/i386/knc.md         | 268 +++++++++++++++++++++++++++++++++
+ gcc/config/i386/predicates.md  |   6 +-
+ 8 files changed, 804 insertions(+), 38 deletions(-)
+ create mode 100644 gcc/config/i386/knc.md
+
+diff --git a/gcc/config/i386/constraints.md b/gcc/config/i386/constraints.md
+index e7dec9cc0c0..3cbe93302ed 100644
+--- a/gcc/config/i386/constraints.md
++++ b/gcc/config/i386/constraints.md
+@@ -78,20 +78,20 @@
+  "TARGET_80387 || TARGET_FLOAT_RETURNS_IN_80387 ? FP_SECOND_REG : NO_REGS"
+  "Second from top of 80387 floating-point stack (@code{%st(1)}).")
+ 
+-(define_register_constraint "Yk" "TARGET_AVX512F ? MASK_REGS : NO_REGS"
++(define_register_constraint "Yk" "(TARGET_AVX512F || TARGET_KNC) ? MASK_REGS : NO_REGS"
+ "@internal Any mask register that can be used as predicate, i.e. k1-k7.")
+ 
+-(define_register_constraint "k" "TARGET_AVX512F ? ALL_MASK_REGS : NO_REGS"
++(define_register_constraint "k" "(TARGET_AVX512F || TARGET_KNC) ? ALL_MASK_REGS : NO_REGS"
+ "@internal Any mask register.")
+ 
+ ;; Vector registers (also used for plain floating point nowadays).
+ (define_register_constraint "y" "TARGET_MMX ? MMX_REGS : NO_REGS"
+  "Any MMX register.")
+ 
+-(define_register_constraint "x" "TARGET_SSE ? SSE_REGS : NO_REGS"
++(define_register_constraint "x" "(TARGET_SSE || TARGET_KNC) ? SSE_REGS : NO_REGS"
+  "Any SSE register.")
+ 
+-(define_register_constraint "v" "TARGET_SSE ? ALL_SSE_REGS : NO_REGS"
++(define_register_constraint "v" "(TARGET_SSE || TARGET_KNC) ? ALL_SSE_REGS : NO_REGS"
+  "Any EVEX encodable SSE register (@code{%xmm0-%xmm31}).")
+ 
+ ;; We use the Y prefix to denote any number of conditional register sets:
+@@ -146,7 +146,7 @@
+  "@internal Lower SSE register when avoiding REX prefix and all SSE registers otherwise.")
+ 
+ (define_register_constraint "Yv"
+- "TARGET_AVX512VL ? ALL_SSE_REGS : TARGET_SSE ? SSE_REGS : NO_REGS"
++ "(TARGET_AVX512VL || TARGET_KNC) ? ALL_SSE_REGS : TARGET_SSE ? SSE_REGS : NO_REGS"
+  "@internal For AVX512VL, any EVEX encodable SSE register (@code{%xmm0-%xmm31}), otherwise any SSE register.")
+ 
+ (define_register_constraint "Yw"
+diff --git a/gcc/config/i386/i386-expand.cc b/gcc/config/i386/i386-expand.cc
+index 4c91c74e099..736233085cd 100644
+--- a/gcc/config/i386/i386-expand.cc
++++ b/gcc/config/i386/i386-expand.cc
+@@ -270,6 +270,119 @@ ix86_expand_clear (rtx dest)
+   emit_insn (tmp);
+ }
+ 
++/* Load CONST_INT into MASK register.  */
++
++void
++ix86_split_load_mask_reg (rtx insn, rtx mask, rtx const_int)
++{
++  enum machine_mode mode = GET_MODE (mask);
++  rtx scratch = NULL_RTX;
++  unsigned int regno;
++  basic_block bb = BLOCK_FOR_INSN (insn);
++
++  /* Try to find a scratch register.  */
++  for (regno = 0; regno < FIRST_PSEUDO_REGISTER; regno++)
++    if (GENERAL_REGNO_P (regno)
++	&& !REGNO_REG_SET_P (DF_LR_IN (bb), regno)
++	&& !ix86_save_reg_1 (regno, true, true, true))
++      {
++	rtx_insn *next;
++
++	/* REGNO is dead when entering this basic block.  */
++	for (next = BB_HEAD (bb); next != insn; next = NEXT_INSN (next))
++	  if (NONDEBUG_INSN_P (next))
++	    {
++	      df_ref *def;
++	      for (def = &DF_INSN_DEFS (next); *def; def++)
++		if (DF_REF_TYPE (*def) == DF_REF_REG_DEF
++		    && !(DF_REF_FLAGS (*def)
++			 & (DF_REF_MUST_CLOBBER | DF_REF_MAY_CLOBBER))
++		    && !DF_REF_IS_ARTIFICIAL (*def)
++		    && regno == DF_REF_REGNO (*def))
++		  break;
++	    }
++
++	/* Use REGNO as scratch register if it isn't set before
++	   INSN.  */
++	if (next == insn)
++	  {
++	    scratch = gen_rtx_REG (mode, regno);
++	    break;
++	  }
++      }
++
++  if (scratch)
++    {
++      emit_move_insn (scratch, const_int);
++      emit_move_insn (mask, scratch);
++    }
++  else
++    {
++      /* Use AX_REG for scratch register if we can't find one.  */
++      rtx save = gen_rtx_REG (word_mode, AX_REG);
++      scratch = gen_rtx_REG (mode, AX_REG);
++      emit_insn (gen_push (save));
++      emit_move_insn (scratch, const_int);
++      emit_move_insn (mask, scratch);
++      emit_insn (gen_pop (save));
++    }
++}
++
++/* KNC scalar store expander for vector register.  For 32/64 bit, we
++   can simply store first element (mask 1).  For 128 bit, we can store
++   first 2 elements (mask 3) since 128 bit mememory is 128 bit aligned.
++
++   If SCRATCH register is NULL, allocate a hard register for scratch
++   register.  */
++
++void
++ix86_expand_knc_store (rtx dst, rtx src, rtx mask, rtx scratch)
++{
++  enum machine_mode mode = GET_MODE (dst);
++  rtx store_mask;
++  rtx (*knc_mask_store) (rtx, rtx, rtx);
++
++  if (mode == TImode || mode == TFmode)
++    store_mask = GEN_INT (0x3);
++  else
++    store_mask = CONST1_RTX (HImode);
++
++  if (scratch)
++    {
++      emit_move_insn (scratch, store_mask);
++      emit_move_insn (mask, scratch);
++    }
++  else
++    emit_insn (gen_knc_load_mask_reg_hi (mask, store_mask));
++
++  switch (mode)
++    {
++    case E_SImode:
++      knc_mask_store = gen_knc_storesi;
++      break;
++    case E_DImode:
++      knc_mask_store = gen_knc_storedi;
++      break;
++    case E_TImode:
++      knc_mask_store = gen_knc_storeti;
++      break;
++    case E_SFmode:
++      knc_mask_store = gen_knc_storesf;
++      break;
++    case E_DFmode:
++      knc_mask_store = gen_knc_storedf;
++      break;
++    case E_TFmode:
++      knc_mask_store = gen_knc_storetf;
++      break;
++    default:
++      gcc_unreachable ();
++      break;
++    }
++
++  emit_insn (knc_mask_store (dst, src, mask));
++}
++
+ /* Return true if V can be broadcasted from an integer of WIDTH bits
+    which is returned in VAL_BROADCAST.  Otherwise, return false.  */
+ 
+@@ -370,6 +483,45 @@ ix86_expand_move (machine_mode mode, rtx operands[])
+   op0 = operands[0];
+   op1 = operands[1];
+ 
++  if (TARGET_KNC
++      && (mode == SFmode || mode == DFmode)
++      && ((REG_P (op0)
++	   && MEM_P (op1)
++	   && MEM_ALIGN (op1) < GET_MODE_ALIGNMENT (mode))
++	  || (REG_P (op1)
++	      && MEM_P (op0)
++	      && MEM_ALIGN (op0) < GET_MODE_ALIGNMENT (mode)))
++      && can_create_pseudo_p ())
++    {
++      if (mode == SFmode)
++	emit_insn (gen_movmisalignsf (op0, op1));
++      else
++	emit_insn (gen_movmisaligndf (op0, op1));
++      return;
++    }
++
++  if (TARGET_KNC
++      && (mode == SImode
++	  || mode == DImode
++	  || mode == TImode
++	  || mode == SFmode
++	  || mode == DFmode
++	  || mode == TFmode)
++      && (SSE_REG_P (op1)
++	  || (GET_CODE (op1) == SUBREG && SSE_REG_P (SUBREG_REG (op1))))
++      && MEM_P (op0))
++    {
++      if (can_create_pseudo_p ())
++	ix86_expand_knc_store (op0, op1,
++			       gen_rtx_REG (HImode, MASK1_REG),
++			       gen_reg_rtx (HImode));
++      else
++	ix86_expand_knc_store (op0, op1,
++			       gen_rtx_REG (HImode, MASK2_REG),
++			       NULL_RTX);
++      return;
++    }
++
+   /* Avoid complex sets of likely spilled hard registers before reload.  */
+   if (!ix86_hardreg_mov_ok (op0, op1))
+     {
+@@ -584,6 +736,23 @@ ix86_expand_move (machine_mode mode, rtx operands[])
+ 	  op1 = gen_rtx_ASHIFT (TImode, op1, GEN_INT (64));
+ 	  op1 = gen_rtx_IOR (TImode, tmp, op1);
+ 	}
++
++      if (TARGET_KNC
++	  && (mode == SFmode || mode == DFmode)
++	  && ((REG_P (op0)
++	       && MEM_P (op1)
++	       && MEM_ALIGN (op1) < GET_MODE_ALIGNMENT (mode))
++	      || (REG_P (op1)
++		  && MEM_P (op0)
++		  && MEM_ALIGN (op0) < GET_MODE_ALIGNMENT (mode)))
++	  && can_create_pseudo_p ())
++	{
++	  if (mode == SFmode)
++	    emit_insn (gen_movmisalignsf (op0, op1));
++	  else
++	    emit_insn (gen_movmisaligndf (op0, op1));
++	  return;
++	}
+     }
+ 
+   emit_insn (gen_rtx_SET (op0, op1));
+@@ -640,6 +809,64 @@ ix86_broadcast_from_constant (machine_mode mode, rtx op)
+   return first;
+ }
+ 
++void
++ix86_expand_move_misalign (enum machine_mode mode, rtx operands[])
++{
++  rtx temp, mem;
++  enum machine_mode mem_mode;
++
++  /* Generate GPR load/store directly.  */
++  if (GENERAL_REG_P (operands[0]) || GENERAL_REG_P (operands[1]))
++    {
++      emit_move_insn (operands[0], operands[1]);
++      return;
++    }
++
++  /* Move the first 4/8 bytes.  */
++  mem_mode = GET_MODE (operands[3]);
++  temp = adjust_address (operands[2], mem_mode, 0);
++  if (MEM_P (operands[0]))
++    {
++      if (TARGET_KNC)
++	ix86_expand_knc_store (operands[2], operands[1],
++			       gen_rtx_REG (HImode, MASK2_REG),
++			       gen_rtx_REG (HImode,
++					    REGNO (operands[3])));
++      else
++	emit_move_insn (operands[2], operands[1]);
++      mem = adjust_address (operands[0], mem_mode, 0);
++      emit_move_insn (operands[3], temp);
++      emit_move_insn (mem, operands[3]);
++    }
++  else
++    {
++      mem = adjust_address (operands[1], mem_mode, 0);
++      emit_move_insn (operands[3], mem);
++      emit_move_insn (temp, operands[3]);
++    }
++
++  if (mode == TFmode)
++    {
++      /* Move the next 8 bytes.  */
++      temp = adjust_address (operands[2], mem_mode, 8);
++      if (MEM_P (operands[0]))
++	{
++	  mem = adjust_address (operands[0], mem_mode, 8);
++	  emit_move_insn (operands[3], temp);
++	  emit_move_insn (mem, operands[3]);
++	}
++      else
++	{
++	  mem = adjust_address (operands[1], mem_mode, 8);
++	  emit_move_insn (operands[3], mem);
++	  emit_move_insn (temp, operands[3]);
++	}
++    }
++
++  if (!MEM_P (operands[0]))
++    emit_move_insn (operands[0], operands[2]);
++}
++
+ void
+ ix86_expand_vector_move (machine_mode mode, rtx operands[])
+ {
+diff --git a/gcc/config/i386/i386-protos.h b/gcc/config/i386/i386-protos.h
+index 4ba4fb08556..e47b2915d9a 100644
+--- a/gcc/config/i386/i386-protos.h
++++ b/gcc/config/i386/i386-protos.h
+@@ -105,6 +105,10 @@ extern const char *output_probe_stack_range (rtx, rtx);
+ extern void ix86_output_patchable_area (unsigned int, bool);
+ 
+ extern void ix86_expand_clear (rtx);
++extern void ix86_expand_knc_store (rtx, rtx, rtx, rtx);
++extern void ix86_split_load_mask_reg (rtx, rtx, rtx);
++extern bool ix86_save_reg_1 (unsigned int, bool, bool, bool);
++extern void ix86_expand_move_misalign (enum machine_mode, rtx[]);
+ extern void ix86_expand_move (machine_mode, rtx[]);
+ extern void ix86_expand_vector_move (machine_mode, rtx[]);
+ extern void ix86_expand_vector_move_misalign (machine_mode, rtx[]);
+diff --git a/gcc/config/i386/i386.cc b/gcc/config/i386/i386.cc
+index 4dfb90acf3f..25135e146b8 100644
+--- a/gcc/config/i386/i386.cc
++++ b/gcc/config/i386/i386.cc
+@@ -549,7 +549,7 @@ ix86_conditional_register_usage (void)
+     accessible_reg_set &= ~reg_class_contents[MMX_REGS];
+ 
+   /* If SSE is disabled, disable the registers.  */
+-  if (! TARGET_SSE)
++  if (! (TARGET_SSE || TARGET_KNC))
+     accessible_reg_set &= ~reg_class_contents[ALL_SSE_REGS];
+ 
+   /* If the FPU is disabled, disable the registers.  */
+@@ -557,7 +557,7 @@ ix86_conditional_register_usage (void)
+     accessible_reg_set &= ~reg_class_contents[FLOAT_REGS];
+ 
+   /* If AVX512F is disabled, disable the registers.  */
+-  if (! TARGET_AVX512F)
++  if (! (TARGET_AVX512F || TARGET_KNC))
+     {
+       for (i = FIRST_EXT_REX_SSE_REG; i <= LAST_EXT_REX_SSE_REG; i++)
+ 	CLEAR_HARD_REG_BIT (accessible_reg_set, i);
+@@ -5455,7 +5455,7 @@ standard_sse_constant_p (rtx x, machine_mode pred_mode)
+ {
+   machine_mode mode;
+ 
+-  if (!TARGET_SSE)
++  if (!TARGET_SSE && !TARGET_KNC)
+     return 0;
+ 
+   mode = GET_MODE (x);
+@@ -5463,6 +5463,9 @@ standard_sse_constant_p (rtx x, machine_mode pred_mode)
+   if (x == const0_rtx || const0_operand (x, mode))
+     return 1;
+ 
++  if (!TARGET_SSE)
++    return 0;
++
+   if (x == constm1_rtx
+       || vector_all_ones_operand (x, mode)
+       || ((GET_MODE_CLASS (mode) == MODE_VECTOR_FLOAT
+@@ -5511,12 +5514,15 @@ standard_sse_constant_opcode (rtx_insn *insn, rtx *operands)
+   machine_mode mode;
+   rtx x = operands[1];
+ 
+-  gcc_assert (TARGET_SSE);
++  gcc_assert (TARGET_SSE || TARGET_KNC);
+ 
+   mode = GET_MODE (x);
+ 
+   if (x == const0_rtx || const0_operand (x, mode))
+     {
++      if (TARGET_KNC)
++	return "vpxorq\t%g0, %g0, %g0";
++
+       switch (get_attr_mode (insn))
+ 	{
+ 	case MODE_TI:
+@@ -6773,7 +6779,8 @@ ix86_hard_regno_scratch_ok (unsigned int regno)
+ /* Return TRUE if we need to save REGNO.  */
+ 
+ bool
+-ix86_save_reg (unsigned int regno, bool maybe_eh_return, bool ignore_outlined)
++ix86_save_reg_1 (unsigned int regno, bool maybe_eh_return,
++		 bool ignore_outlined, bool maybe_live)
+ {
+   rtx reg;
+ 
+@@ -6830,7 +6837,8 @@ ix86_save_reg (unsigned int regno, bool maybe_eh_return, bool ignore_outlined)
+ 	  if (!TARGET_64BIT && flag_pic && crtl->profile)
+ 	    return true;
+ 	}
+-      else if (df_regs_ever_live_p (REAL_PIC_OFFSET_TABLE_REGNUM)
++      else if (maybe_live
++	       || df_regs_ever_live_p (REAL_PIC_OFFSET_TABLE_REGNUM)
+ 	       || crtl->profile
+ 	       || crtl->calls_eh_return
+ 	       || crtl->uses_const_pool
+@@ -6859,11 +6867,19 @@ ix86_save_reg (unsigned int regno, bool maybe_eh_return, bool ignore_outlined)
+ 	return false;
+     }
+ 
+-  return (df_regs_ever_live_p (regno)
++  return ((maybe_live || df_regs_ever_live_p (regno))
+ 	  && !call_used_or_fixed_reg_p (regno)
+ 	  && (regno != HARD_FRAME_POINTER_REGNUM || !frame_pointer_needed));
+ }
+ 
++/* Return 1 if we need to save REGNO.  */
++
++bool
++ix86_save_reg (unsigned int regno, bool maybe_eh_return, bool ignore_outlined)
++{
++  return ix86_save_reg_1 (regno, maybe_eh_return, ignore_outlined, false);
++}
++
+ /* Return number of saved general prupose registers.  */
+ 
+ static int
+@@ -14183,6 +14199,7 @@ print_reg (rtx x, int code, FILE *file)
+    Y -- print condition for XOP pcom* instruction.
+    V -- print naked full integer register name without %.
+    v -- print segment override prefix
++   J -- don't print memory operand size.
+    + -- print a branch hint as 'cs' or 'ds' prefix
+    ; -- print a semicolon (after prefixes due to bug in older gas).
+    ~ -- print "i" if TARGET_AVX2, "f" otherwise.
+@@ -14759,6 +14776,10 @@ ix86_print_operand (FILE *file, rtx x, int code)
+ #endif
+ 	  return;
+ 
++	case 'J':
++	  /* Skip memory operand size.  */
++	  break;
++
+ 	case '~':
+ 	  putc (TARGET_AVX2 ? 'i' : 'f', file);
+ 	  return;
+@@ -14806,7 +14827,8 @@ ix86_print_operand (FILE *file, rtx x, int code)
+       rtx addr = XEXP (x, 0);
+ 
+       /* No `byte ptr' prefix for call instructions ... */
+-      if (ASSEMBLER_DIALECT == ASM_INTEL && code != 'X' && code != 'P')
++      if (ASSEMBLER_DIALECT == ASM_INTEL && code != 'X' && code != 'P'
++	  && code != 'J')
+ 	{
+ 	  machine_mode mode = GET_MODE (x);
+ 	  const char *size;
+@@ -21144,7 +21166,7 @@ ix86_preferred_output_reload_class (rtx x, reg_class_t regclass)
+   if (SSE_FLOAT_MODE_P (mode) && TARGET_SSE_MATH)
+     return MAYBE_SSE_CLASS_P (regclass) ? ALL_SSE_REGS : NO_REGS;
+ 
+-  if (IS_STACK_MODE (mode))
++  if ((!TARGET_KNC) && IS_STACK_MODE (mode))
+     return FLOAT_CLASS_P (regclass) ? regclass : NO_REGS;
+ 
+   return regclass;
+@@ -21154,13 +21176,71 @@ static reg_class_t
+ ix86_secondary_reload (bool in_p, rtx x, reg_class_t rclass,
+ 		       machine_mode mode, secondary_reload_info *sri)
+ {
++  if (TARGET_KNC
++      && in_p
++      && REG_P (x)
++      && SSE_CLASS_P (rclass)
++      && mode == TImode)
++    {
++      sri->icode = CODE_FOR_knc_reload_inti;
++      return NO_REGS;
++    }
++
++  if (TARGET_KNC
++      && !in_p
++      && MEM_P (x)
++      && SSE_CLASS_P (rclass)
++      && (mode == SImode
++	  || mode == DImode
++	  || mode == TImode
++	  || mode == SFmode
++	  || mode == DFmode
++	  || mode == TFmode))
++    {
++      /* Prohibit for secondary reloads.  */
++      if (misaligned_operand (x, mode)
++	  && (mode != SFmode)
++	  && (mode != DFmode)
++	  && (mode != TFmode)
++	  && (mode != DImode))
++	return NO_REGS;
++
++      switch (mode)
++	{
++	case E_SImode:
++	  sri->icode = CODE_FOR_knc_reload_outsi;
++	  break;
++	case E_DImode:
++	  sri->icode = CODE_FOR_knc_reload_outdi;
++	  break;
++	case E_TImode:
++	  sri->icode = CODE_FOR_knc_reload_outti;
++	  break;
++	case E_SFmode:
++	  sri->icode = CODE_FOR_knc_reload_outsf;
++	  break;
++	case E_DFmode:
++	  sri->icode = CODE_FOR_knc_reload_outdf;
++	  break;
++	case E_TFmode:
++	  sri->icode = CODE_FOR_knc_reload_outtf;
++	  break;
++	default:
++	  gcc_unreachable ();
++	  break;
++	}
++
++      return NO_REGS;
++    }
++
+   /* Double-word spills from general registers to non-offsettable memory
+      references (zero-extended addresses) require special handling.  */
+   if (TARGET_64BIT
+       && MEM_P (x)
+       && GET_MODE_SIZE (mode) > UNITS_PER_WORD
+       && INTEGER_CLASS_P (rclass)
+-      && !offsettable_memref_p (x))
++      && !offsettable_nonstrict_memref_p (x)
++      && !push_operand (x, mode))
+     {
+       sri->icode = (in_p
+ 		    ? CODE_FOR_reload_noff_load
+@@ -21328,6 +21408,18 @@ inline_secondary_memory_needed (machine_mode mode, reg_class_t class1,
+   if (lra_in_progress && (class1 == NO_REGS || class2 == NO_REGS))
+     return false;
+ 
++  if (TARGET_KNC
++      && strict
++      && ((SSE_CLASS_P (class1)
++	   && !SSE_CLASS_P (class2))
++	  || (SSE_CLASS_P (class2)
++	      && !SSE_CLASS_P (class1)))
++      && mode == TImode)
++    {
++      gcc_assert (lra_in_progress);
++      /*return true;*/
++    }
++
+   if (MAYBE_FLOAT_CLASS_P (class1) != FLOAT_CLASS_P (class1)
+       || MAYBE_FLOAT_CLASS_P (class2) != FLOAT_CLASS_P (class2)
+       || MAYBE_SSE_CLASS_P (class1) != SSE_CLASS_P (class1)
+diff --git a/gcc/config/i386/i386.h b/gcc/config/i386/i386.h
+index 389cb23f3e7..279063c0cea 100644
+--- a/gcc/config/i386/i386.h
++++ b/gcc/config/i386/i386.h
+@@ -2636,6 +2636,7 @@ enum ix86_stack_slot
+   SLOT_CW_CEIL,
+   SLOT_STV_TEMP,
+   SLOT_FLOATxFDI_387,
++  SLOT_KNC_TEMP,
+   MAX_386_STACK_LOCALS
+ };
+ 
+diff --git a/gcc/config/i386/i386.md b/gcc/config/i386/i386.md
+index ba312ff8f13..f6cf9bd4c8a 100644
+--- a/gcc/config/i386/i386.md
++++ b/gcc/config/i386/i386.md
+@@ -225,6 +225,11 @@
+   ;; For APX CCMP support
+   ;; DFV = default flag value
+   UNSPEC_APX_DFV
++
++  ;; For KNC support
++  UNSPEC_LOAD_MASK_REG
++  UNSPEC_MASKED_MERGE_MOVE
++  UNSCPEC_KNC_NO_SEC_RELOAD
+ ])
+ 
+ (define_c_enum "unspecv" [
+@@ -585,7 +590,7 @@
+ 		    avx512bw,noavx512bw,avx512dq,noavx512dq,fma_or_avx512vl,
+ 		    avx512vl,noavx512vl,avxvnni,avxvnniint8,avx512vnnivl,avx512fp16,avxifma,
+ 		    avx512ifmavl,avxneconvert,avx512bf16vl,vpclmulqdqvl,
+-		    avx_noavx512f,avx_noavx512vl,vaes_avx512vl,noapx_nf,avx10_2"
++		    avx_noavx512f,avx_noavx512vl,vaes_avx512vl,noapx_nf,avx10_2,noknc,sse4_noknc,x64_noknc"
+   (const_string "base"))
+ 
+ ;; The (bounding maximum) length of an instruction immediate.
+@@ -944,6 +949,8 @@
+ 	 (eq_attr "isa" "sse4") (symbol_ref "TARGET_SSE4_1")
+ 	 (eq_attr "isa" "sse4_noavx")
+ 	   (symbol_ref "TARGET_SSE4_1 && !TARGET_AVX")
++	 (eq_attr "isa" "sse4_noknc")
++	   (symbol_ref "TARGET_SSE4_1 && !TARGET_KNC")
+ 	 (eq_attr "isa" "avx") (symbol_ref "TARGET_AVX")
+ 	 (eq_attr "isa" "avx_noavx512f")
+ 	   (symbol_ref "TARGET_AVX && !TARGET_AVX512F")
+@@ -997,6 +1004,8 @@
+ 	 (eq_attr "mmx_isa" "avx")
+ 	   (symbol_ref "TARGET_MMX_WITH_SSE && TARGET_AVX")
+ 	 (eq_attr "isa" "noapx_nf") (symbol_ref "!TARGET_APX_NF")
++	 (eq_attr "isa" "noknc") (symbol_ref "!TARGET_KNC")
++	 (eq_attr "isa" "x64_noknc") (symbol_ref "TARGET_64BIT && !TARGET_KNC")
+ 	]
+ 	(const_int 1)))
+ 
+@@ -2516,6 +2525,20 @@
+    (set_attr "prefix" "vex")
+    (set_attr "mode" "OI")])
+ 
++(define_insn "*movti_internal_knc"
++  [(set (match_operand:TI 0 "register_operand"   "=!r")
++	(match_operand:TI 1 "misaligned_operand" "o"))]
++  "TARGET_KNC"
++  "#"	
++  [(set_attr "mode" "DI")])
++
++(define_insn "*movti_internal_knc_2"
++  [(set (match_operand:TI 0 "misaligned_operand" "=o")
++	(match_operand:TI 1 "register_operand"    "r"))]
++  "TARGET_KNC"
++  "#"	
++  [(set_attr "mode" "DI")])
++
+ (define_insn "*movti_internal"
+   [(set (match_operand:TI 0 "nonimmediate_operand" "=!r ,o ,v,v ,v ,m,?jc,?Yd")
+ 	(match_operand:TI 1 "general_operand"	   "riFo,re,C,BC,vm,v,Yd,jc"))]
+@@ -2535,6 +2558,26 @@
+       return standard_sse_constant_opcode (insn, operands);
+ 
+     case TYPE_SSEMOV:
++      if (TARGET_KNC)
++	{
++	  if (REG_P (operands[0]) && REG_P (operands[1]))
++	    return "vmovdqa64\t{%g1, %g0|%g0, %g1}";
++	  else
++	    {
++	      if (REG_P (operands[0]))
++		{
++		  /* For KNC, load 4 x 32bit elements.  */
++		  gcc_assert (!misaligned_operand(operands[1], TImode));
++		  return "vbroadcasti32x4\t{%J1, %g0|%g0, %J1}";
++		}
++	      else
++		{
++		  /* No store on KNC.  */
++		  gcc_unreachable ();
++		}
++	    }
++	}
++
+       return ix86_output_ssemov (insn, operands);
+ 
+     default:
+@@ -2546,6 +2589,8 @@
+ 	      (const_string "x64")
+ 	    (eq_attr "alternative" "3")
+ 	      (const_string "sse2")
++	    (eq_attr "alternative" "5")
++	      (const_string "noknc")
+ 	   ]
+ 	   (const_string "*")))
+    (set (attr "type")
+@@ -2602,6 +2647,7 @@
+   		  gen_lowpart (DImode, operands[1]));
+ })
+ 
++;; DImode load expander for integer register and KNC vector register.
+ (define_insn "*movdi_internal"
+   [(set (match_operand:DI 0 "nonimmediate_operand"
+     "=r  ,o  ,r,r  ,r,m ,*y,*y,?*y,?m,?r,?*y,?Yv,?v,?v,m ,m,?jc,?*Yd,?r,?v,?*y,?*x,*k,*k  ,*r,*m,*k")
+@@ -2639,6 +2685,26 @@
+       return standard_sse_constant_opcode (insn, operands);
+ 
+     case TYPE_SSEMOV:
++      if (TARGET_KNC)
++	{
++	  if (get_attr_mode (insn) == MODE_TI)
++	    {
++	      gcc_assert (REG_P (operands[0]) && REG_P (operands[1]));
++	      return "vmovdqa64\t{%g1, %g0|%g0, %g1}";
++	    }
++	  else if (REG_P (operands[0]))
++	    {
++	      /* For KNC, load one 64bit element.  */
++	      gcc_assert (!misaligned_operand(operands[1], DImode));
++	      return "vpbroadcastq\t{%J1, %g0|%g0, %J1}";
++	    }
++	  else
++	    {
++	      /* Store is handled by secondary reload.  */
++	      gcc_unreachable ();
++	    }
++	}
++
+       return ix86_output_ssemov (insn, operands);
+ 
+     case TYPE_SSECVT:
+@@ -2733,7 +2799,9 @@
+      (cond [(eq_attr "alternative" "2")
+ 	      (const_string "SI")
+ 	    (eq_attr "alternative" "12")
+-	      (cond [(match_test "TARGET_AVX")
++	      (cond [(match_test "TARGET_KNC")
++		       (const_string "TI")
++		     (match_test "TARGET_AVX")
+ 		       (const_string "TI")
+ 		     (ior (not (match_test "TARGET_SSE2"))
+ 			  (match_test "optimize_function_for_size_p (cfun)"))
+@@ -2741,7 +2809,9 @@
+ 		    ]
+ 		    (const_string "TI"))
+ 	    (eq_attr "alternative" "13")
+-	      (cond [(match_test "TARGET_AVX512VL")
++	      (cond [(match_test "TARGET_KNC")
++		       (const_string "TI")
++		     (match_test "TARGET_AVX512VL")
+ 		       (const_string "TI")
+ 		     (match_test "TARGET_AVX512F")
+ 		       (const_string "DF")
+@@ -2870,6 +2940,22 @@
+       gcc_unreachable ();
+ 
+     case TYPE_SSEMOV:
++      if (TARGET_KNC)
++	switch (which_alternative)
++	  {
++	  case 9:
++	      return "vmovdqa32\t{%g1, %g0|%g0, %g1}";
++	  case 10:
++	    /* For KNC, load one 32bit element.  */
++	    gcc_assert (!misaligned_operand(operands[0], SImode));
++	    return "vpbroadcastd\t{%J1, %g0|%g0, %J1}";
++	  case 11:
++	    /* No store for KNC.  */
++	    gcc_unreachable ();
++	  default:
++	    break;
++	}
++
+       return ix86_output_ssemov (insn, operands);
+ 
+     case TYPE_MMX:
+@@ -2906,6 +2992,8 @@
+ 	      (const_string "sse2")
+ 	    (eq_attr "alternative" "14,15,16,17")
+ 	      (const_string "avx512bw")
++	    (eq_attr "alternative" "8,11")
++	      (const_string "noknc")
+ 	   ]
+ 	   (const_string "*")))
+    (set (attr "type")
+@@ -3011,9 +3099,9 @@
+ 
+ (define_insn "*movhi_internal"
+   [(set (match_operand:HI 0 "nonimmediate_operand"
+-    "=r,r,r,m ,*k,*k ,r ,m ,*k ,?r,?*v,*Yv,*v,*v,jm,m")
++    "=r,r,r,m ,*k,*k,r ,m ,*k ,?r,?*v,*Yv,*v,*v,jm,m ,*k")
+ 	(match_operand:HI 1 "general_operand"
+-    "r ,n,m,rn,r ,*km,*k,*k,CBC,*v,r  ,C  ,*v,m ,*x,*v"))]
++    "r ,n,m,rn,r ,*k,*k,*k,CBC,*v,r  ,C  ,*v,m ,*x,*v,*m"))]
+   "!(MEM_P (operands[0]) && MEM_P (operands[1]))
+    && ix86_hardreg_mov_ok (operands[0], operands[1])"
+ {
+@@ -3026,16 +3114,13 @@
+ 
+     case TYPE_MSKMOV:
+       switch (which_alternative)
+-	{
+-	case 4:
+-	  return "kmovw\t{%k1, %0|%0, %k1}";
+-	case 6:
+-	  return "kmovw\t{%1, %k0|%k0, %1}";
+-	case 5:
+-	case 7:
+-	  return "kmovw\t{%1, %0|%0, %1}";
+-	default:
+-	  gcc_unreachable ();
++        {
++	case 4: return TARGET_KNC ? "kmov\t{%k1, %0|%0, %k1}" : "kmovw\t{%k1, %0|%0, %k1}";
++	case 5: /* FALLTHRU */
++	case 7: /* FALLTHRU */
++	case 16: return TARGET_KNC ? "kmov\t{%1, %0|%0, %1}" : "kmovw\t{%1, %0|%0, %1}";
++	case 6: return TARGET_KNC ? "kmov\t{%1, %k0|%k0, %1}" : "kmovw\t{%1, %k0|%k0, %1}";
++	default: gcc_unreachable ();
+ 	}
+ 
+     case TYPE_SSEMOV:
+@@ -3071,6 +3156,8 @@
+ 		  (const_string "sse4_noavx")
+ 	       (eq_attr "alternative" "15")
+ 		  (const_string "avx")
++	       (eq_attr "alternative" "7,8,16")
++		  (const_string "noknc")
+ 	       ]
+ 	       (const_string "*")))
+    (set (attr "addr")
+@@ -3078,7 +3165,7 @@
+ 		      (const_string "gpr16")
+ 		      (const_string "*")))
+    (set (attr "type")
+-     (cond [(eq_attr "alternative" "4,5,6,7")
++     (cond [(eq_attr "alternative" "4,5,6,7,16")
+ 	      (const_string "mskmov")
+ 	    (eq_attr "alternative" "8")
+ 	      (const_string "msklog")
+@@ -3109,7 +3196,7 @@
+        (const_string "sselogic")
+        (const_string "*")))
+    (set (attr "prefix")
+-	(cond [(eq_attr "alternative" "4,5,6,7,8")
++	(cond [(eq_attr "alternative" "4,5,6,7,8,16")
+ 		 (const_string "vex")
+ 	       (eq_attr "alternative" "9,10,11,12,13,14,15")
+ 		 (const_string "maybe_evex")
+@@ -3215,7 +3302,10 @@
+ 	  gcc_unreachable ();
+ 	}
+ 
+-      suffix = (get_attr_mode (insn) == MODE_HI) ? "w" : "b";
++      if (TARGET_KNC)
++	suffix = "";
++      else
++	suffix = (get_attr_mode (insn) == MODE_HI) ? "w" : "b";
+ 
+       snprintf (buf, sizeof (buf), ops, suffix);
+       output_asm_insn (buf, operands);
+@@ -3248,6 +3338,8 @@
+ 	      (const_string "x64")
+ 	    (eq_attr "alternative" "12,13,15")
+ 	      (const_string "avx512dq")
++	    (eq_attr "alternative" "12,13,14")
++	      (const_string "noknc")
+ 	   ]
+ 	   (const_string "*")))
+    (set (attr "type")
+@@ -3820,6 +3912,17 @@
+   operands[0] = replace_equiv_address (operands[0], stack_pointer_rtx);
+ })
+ 
++(define_split
++  [(set (match_operand:TF 0 "push_operand")
++	(match_operand:TF 1 "register_no_elim_operand"))]
++  "TARGET_KNC"
++  [(set (reg:P SP_REG) (plus:P (reg:P SP_REG) (const_int -16)))
++   (set (match_dup 0) (match_dup 1))]
++{
++  /* Preserve memory attributes. */
++  operands[0] = replace_equiv_address (operands[0], stack_pointer_rtx);
++})
++
+ (define_insn "*pushxf"
+   [(set (match_operand:XF 0 "push_operand" "=<,<,<,<,<")
+ 	(match_operand:XF 1 "general_no_elim_operand" "f,r,*r,oF,oC"))]
+@@ -4067,7 +4170,12 @@
+ (define_insn "*movtf_internal"
+   [(set (match_operand:TF 0 "nonimmediate_operand" "=v,v ,m,?*r ,!o")
+ 	(match_operand:TF 1 "general_operand"	   "C ,vm,v,*roF,*rC"))]
+-  "(TARGET_64BIT || TARGET_SSE)
++  "(TARGET_64BIT || TARGET_SSE
++    || (TARGET_KNC
++	&& (!MEM_P (operands[0])
++	    || !misaligned_operand(operands[0], SImode))
++	&& (!MEM_P (operands[1])
++	    || !misaligned_operand(operands[1], SImode))))
+    && !(MEM_P (operands[0]) && MEM_P (operands[1]))
+    && (lra_in_progress || reload_completed
+        || !CONST_DOUBLE_P (operands[1])
+@@ -4082,6 +4190,25 @@
+       return standard_sse_constant_opcode (insn, operands);
+ 
+     case TYPE_SSEMOV:
++      if (TARGET_KNC)
++	{
++	  if (REG_P (operands[0]) && REG_P (operands[1]))
++	    return "vmovdqa64\t{%g1, %g0|%g0, %g1}";
++	  else
++	    {
++	      if (REG_P (operands[0]))
++		{
++		  /* For KNC, load 4 x 32bit elements.  */
++		  return "vbroadcasti32x4\t{%J1, %g0|%g0, %J1}";
++		}
++	      else
++		{
++		  /* KNC have no stores.  */
++		  gcc_unreachable ();
++		}
++	    }
++	}
++
+       return ix86_output_ssemov (insn, operands);
+ 
+     case TYPE_MULTI:
+@@ -4091,7 +4218,7 @@
+       gcc_unreachable ();
+     }
+ }
+-  [(set_attr "isa" "*,*,*,x64,x64")
++  [(set_attr "isa" "*,*,noknc,x64,x64")
+    (set_attr "type" "sselog1,ssemov,ssemov,multi,multi")
+    (set_attr "c86_attr" "sselogic,*,*,*,*")
+    (set (attr "prefix")
+@@ -4237,6 +4364,26 @@
+       return standard_sse_constant_opcode (insn, operands);
+ 
+     case TYPE_SSEMOV:
++      if (TARGET_KNC)
++	{
++	  switch (which_alternative)
++	    {
++	    case 13: /* v -> v  */
++	    case 17: /* *x -> *x  */
++	      return "vmovapd\t{%g1, %g0|%g0, %g1}";
++	    case 14: /* m -> v  */
++	    case 18: /* m -> *x  */
++	      return "vbroadcastsd\t{%J1, %g0|%g0, %J1}";
++	    case 15: /* v -> m  */
++	    case 19: /* *x -> m  */
++	      /* For KNC we shouldn't reach here.  */
++	      /* return "vstoreq\t{%1%{a%}, %J0|%J0, %J1%{a%}}"; */
++	      gcc_unreachable ();
++	    default:
++	      break;
++	    }
++	}
++
+       return ix86_output_ssemov (insn, operands);
+ 
+     default:
+@@ -4382,6 +4529,13 @@
+ 	(match_operand:SF 1 "general_operand"
+ 	  "Yf*fm,Yf*f,G   ,rmF,rF,C ,v,m,v,v ,r ,*y ,m  ,*y,*y,r  ,rmF,rF"))]
+   "!(MEM_P (operands[0]) && MEM_P (operands[1]))
++   && (!TARGET_KNC
++       || GENERAL_REG_P (operands[0])
++       || GENERAL_REG_P (operands[1])
++       || !((MEM_P (operands[0])
++	     && misaligned_operand(operands[0], SFmode))
++	    || (MEM_P (operands[1])
++		&&  misaligned_operand(operands[1], SFmode))))
+    && (lra_in_progress || reload_completed
+        || !CONST_DOUBLE_P (operands[1])
+        || ((optimize_function_for_size_p (cfun)
+@@ -4407,6 +4561,21 @@
+       return standard_sse_constant_opcode (insn, operands);
+ 
+     case TYPE_SSEMOV:
++      if(TARGET_KNC)
++        {
++          switch (which_alternative)
++	    {
++	    case 6:
++		return "vmovaps\t{%g1, %g0|%g0, %g1}";
++	    case 7:
++	        return "vbroadcastss\t{%J1, %g0|%g0, %J1}";
++	    case 8:
++	      gcc_unreachable ();
++	    default:
++	      break;
++	    }
++        }
++
+       return ix86_output_ssemov (insn, operands);
+ 
+     case TYPE_MMXMOV:
+@@ -14498,7 +14667,7 @@
+     split_double_concat (<DWI>mode, operands[0], operands[3], operands[1]);
+   DONE;
+ }
+-  [(set_attr "isa" "*,*,*,x64,x64")])
++  [(set_attr "isa" "*,*,*,x64,x64_noknc")])
+ 
+ (define_insn_and_split "*concat<mode><dwi>3_4"
+   [(set (match_operand:<DWI> 0 "nonimmediate_operand" "=ro,r,r,&r")
+@@ -17766,7 +17935,7 @@
+     }
+   operands[0] = gen_rtx_REG (DImode, REGNO (operands[0]));
+ }
+-[(set_attr "isa" "*,*,*,apx_ndd")])
++[(set_attr "isa" "*,noknc,*,apx_ndd")])
+ 
+ (define_insn "*lshr<mode>3_1<nf_name>"
+   [(set (match_operand:SWI48 0 "nonimmediate_operand" "=rm,r,?k,r")
+@@ -30899,3 +31068,4 @@
+ (include "mmx.md")
+ (include "sse.md")
+ (include "sync.md")
++(include "knc.md")
+diff --git a/gcc/config/i386/knc.md b/gcc/config/i386/knc.md
+new file mode 100644
+index 00000000000..41d87935e3e
+--- /dev/null
++++ b/gcc/config/i386/knc.md
+@@ -0,0 +1,268 @@
++;; GCC machine description for Intel MIC instructions
++;; Copyright (C) 2011
++;; Free Software Foundation, Inc.
++;;
++;; This file is part of GCC.
++;;
++;; GCC is free software; you can redistribute it and/or modify
++;; it under the terms of the GNU General Public License as published by
++;; the Free Software Foundation; either version 3, or (at your option)
++;; any later version.
++;;
++;; GCC is distributed in the hope that it will be useful,
++;; but WITHOUT ANY WARRANTY; without even the implied warranty of
++;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++;; GNU General Public License for more details.
++;;
++;; You should have received a copy of the GNU General Public License
++;; along with GCC; see the file COPYING3.  If not see
++;; <http://www.gnu.org/licenses/>.
++
++(define_mode_iterator KNC_MOVMISALIGN_MODE [SF DF TF DI])
++(define_mode_iterator KNC_MOVMISALIGN_NOTF_MODE [SF DF DI])
++(define_mode_attr KNC_MOVMISALIGN_MIN_MODE
++  [(SF "SF") (DF "DF") (TF "TF") (DI "DI")])
++(define_mode_attr knc_movmisalign_int_mode
++  [(SF "SI") (DF "DI") (TF "DI") (DI "DI")])
++
++(define_mode_iterator KNC_STORE_MODE [SI DI TI SF DF TF])
++(define_mode_attr knc_store_suffix
++  [(SI "d") (DI "q") (TI "q") (SF "ps") (DF "pd") (TF "q")])
++
++(define_expand "knc_reload_inti"
++  [(parallel [(match_operand:TI 0 "register_operand" "")
++	      (match_operand:TI 1 "register_operand" "")
++	      (match_operand:HI 2 "register_operand" "=&r")])]
++  "TARGET_KNC"
++{
++  rtx mem = assign_386_stack_local (TImode, SLOT_KNC_TEMP);
++  emit_move_insn (mem, operands[1]);
++  emit_move_insn (operands[0], mem);
++  DONE;
++})
++
++;; KNC output reload.
++(define_expand "knc_reload_out<mode>"
++  [(parallel [(match_operand:KNC_STORE_MODE 0 "memory_operand" "")
++	      (match_operand:KNC_STORE_MODE 1 "register_operand" "")
++	      (match_operand:HI 2 "register_operand" "=&r")])]
++ "TARGET_KNC"
++{
++  if (!misaligned_operand(operands[0], <MODE>mode))
++    {
++      ix86_expand_knc_store (operands[0], operands[1],
++			     gen_rtx_REG (HImode, MASK2_REG),
++			     operands[2]);
++      DONE;
++    }
++  else
++    {
++      switch (GET_MODE (operands[0]))
++	{
++	case E_SFmode:
++	  emit_insn( gen_movmisalignsf (operands[0], operands[1]));
++	  DONE;
++	  break;
++
++	case E_DFmode:
++	  emit_insn (gen_movmisaligndf (operands[0], operands[1]));
++	  DONE;
++	  break;
++
++	case E_TFmode:
++	  emit_insn (gen_movmisaligntf (operands[0], operands[1]));
++	  DONE;
++	  break;
++
++	case E_DImode:
++	  emit_insn (gen_movmisaligndi (operands[0], operands[1]));
++	  DONE;
++	  break;
++
++	default:
++	  FAIL;
++	}
++    }
++})
++
++;; Scalar store for KNC vector registers.
++(define_insn "knc_store<mode>"
++  [(set (match_operand:KNC_STORE_MODE 0 "memory_operand" "=m")
++	(unspec:KNC_STORE_MODE [
++	   (match_operand:KNC_STORE_MODE 1 "register_operand" "v")
++           (match_operand:HI 2 "register_operand" "Yk")] UNSCPEC_KNC_NO_SEC_RELOAD))]
++  "TARGET_KNC"
++{
++  gcc_assert (! misaligned_operand(operands[0], <MODE>mode));
++  return "vpackstorel<knc_store_suffix>\t{%g1, %J0%{%2%}|%J0%{%2%}, %g1}";
++}
++  [(set_attr "type" "ssemov")
++   (set_attr "mode" "<MODE>")])
++
++;; Load a constant integer into mask register.
++(define_insn_and_split "knc_load_mask_reg_hi"
++  [(set (match_operand:HI 0 "register_operand" "=k")
++	(unspec:HI [(match_operand:HI 1 "const_int_operand" "n")]
++		   UNSPEC_LOAD_MASK_REG))]
++  "TARGET_KNC"
++  "#"
++  "&& reload_completed"
++  [(const_int 0)]
++  "ix86_split_load_mask_reg (curr_insn, operands[0], operands[1]); DONE;"
++  [(set_attr "type" "multi")])
++
++;; DImode load expander for integer register and KNC vector register.
++(define_expand "knc_load_misalign_di"
++  [(set (match_operand:DI 0 "register_operand" "")
++	(match_operand:DI 1 "memory_operand" ""))]
++  "TARGET_KNC"
++{
++  rtx reg = gen_reg_rtx (HImode);
++  rtx mask = gen_rtx_REG (HImode, MASK1_REG);
++  emit_move_insn (reg, CONST1_RTX (HImode));
++  emit_move_insn (mask, reg);
++  emit_insn (gen_knc_load_misalign_di_1 (operands[0], operands[1], mask));
++  DONE;
++})
++
++;; DImode load for integer register and KNC vector register.
++(define_insn "knc_load_misalign_di_1"
++  [(set (match_operand:DI 0 "register_operand" "=r,v")
++	(match_operand:DI 1 "memory_operand" "m,m"))
++   (use (match_operand:HI 2 "register_operand" "Yk,Yk"))]
++  "TARGET_KNC"
++  "#")
++
++;; DImode load for integer register and aligned DImode load for KNC
++;; vector register.
++(define_split
++  [(set (match_operand:DI 0 "register_operand" "")
++	(match_operand:DI 1 "memory_operand" ""))
++   (use (match_operand:HI 2 "register_operand" ""))]
++  "TARGET_KNC
++   && reload_completed
++   && (GENERAL_REG_P (operands[0])
++       || (GET_CODE (operands[0]) == SUBREG
++	   && GENERAL_REG_P (SUBREG_REG (operands[0])))
++       ||  !misaligned_operand(operands[1], DImode))"
++  [(set (match_dup 0) (match_dup 1))])
++
++;; Misaligned DImode load for KNC vector register.
++(define_split
++  [(set (match_operand:DI 0 "sse_reg_operand" "")
++	(match_operand:DI 1 "memory_operand" ""))]
++  "TARGET_KNC
++   && reload_completed
++   && misaligned_operand(operands[1], DImode)"
++  [(const_int 0)]
++{
++  rtx m_low = adjust_address (operands[1], SImode, 0);
++  rtx m_high = adjust_address (operands[1], SImode, 4);
++  rtx mask = gen_rtx_REG (HImode, MASK2_REG);
++  emit_insn (gen_knc_broadcast_vec_si2di (operands[0], m_high));
++
++  ix86_split_load_mask_reg (curr_insn, mask, CONST1_RTX (HImode));
++
++  emit_insn (gen_knc_masked_merge_load_vec_si2di (operands[0], m_low, mask));
++
++  DONE;
++})
++
++(define_split
++  [(set (match_operand:DI 0 "register_operand" "")
++	(match_operand:DI 1 "memory_operand" ""))
++   (use (match_operand:HI 2 "register_operand" ""))]
++  "TARGET_KNC
++   && reload_completed
++   && misaligned_operand(operands[1], DImode)"
++  [(const_int 0)]
++{
++  rtx m_low = adjust_address (operands[1], SImode, 0);
++  rtx m_high = adjust_address (operands[1], SImode, 4);
++  emit_insn (gen_knc_broadcast_vec_si2di (operands[0], m_high));
++  emit_insn (gen_knc_masked_merge_load_vec_si2di (operands[0], m_low,
++						  operands[2]));
++  DONE;
++})
++
++;; Masked merging load SI to DI for KNC vector register.
++(define_insn "knc_masked_merge_load_vec_si2di"
++  [(set (match_operand:DI 0 "register_operand" "=v")
++	(unspec:DI [(match_dup 0)
++		    (match_operand:SI 1 "memory_operand" "m")
++		    (match_operand:HI 2 "register_operand" "Yk")]
++		   UNSPEC_MASKED_MERGE_MOVE))]
++  "TARGET_KNC"
++{
++  gcc_assert (!misaligned_operand(operands[1], SImode));
++  return "vpbroadcastd\t{%J1, %g0%{%2%}|%g0%{%2%}, %J1}";
++}
++  [(set_attr "type" "ssemov")
++   (set_attr "mode" "SI")])
++
++;; Broadcast SI to DI for MIC vector register.
++(define_insn "knc_broadcast_vec_si2di"
++  [(set (match_operand:DI 0 "register_operand" "=v")
++	(ior:DI
++	  (zero_extend:DI
++	    (match_operand:SI 1 "memory_operand" "m"))
++	  (ashift:DI
++	    (zero_extend:DI (match_dup 1))
++	    (const_int 32))))]
++  "TARGET_KNC"
++{
++  gcc_assert (!misaligned_operand(operands[1], SImode));
++  return "vpbroadcastd\t{%J1, %g0|%g0, %J1}";
++}
++  [(set_attr "type" "ssemov")
++   (set_attr "mode" "SI")])
++
++(define_expand "movmisalign<mode>"
++  [(set (match_operand:KNC_MOVMISALIGN_MODE 0 "nonimmediate_operand" "")
++	(match_operand:KNC_MOVMISALIGN_MODE 1 "nonimmediate_operand" ""))]
++  "TARGET_KNC"
++{
++  if ((MEM_P (operands[0])
++       && (misaligned_operand(operands[0], <KNC_MOVMISALIGN_MIN_MODE>mode)))
++      || (MEM_P (operands[1])
++	  && (misaligned_operand(operands[1], <KNC_MOVMISALIGN_MIN_MODE>mode))
++	  /* See comment in ix86_expand_move.  */
++	  && (<MODE>mode != DImode
++	      || MEM_ALIGN (operands[1]) != GET_MODE_ALIGNMENT (SImode))))
++    {
++      /* A pseudo the register allocator has to put in a stack slot of
++	 its own; a fixed frame slot here was not eliminated correctly.  */
++      rtx mem = gen_reg_rtx (<MODE>mode);
++      emit_insn (gen_knc_movmisalign<mode> (operands[0], operands[1],
++					    mem));
++      DONE;
++    }
++})
++
++(define_insn_and_split "knc_movmisaligntf"
++  [(set (match_operand:TF 0 "nonimmediate_operand" "=v,m")
++	(unspec:TF [
++	  (match_operand:TF 1 "nonimmediate_operand" "m,v")]
++	  UNSCPEC_KNC_NO_SEC_RELOAD))
++   (clobber (match_operand:TF 2 "nonimmediate_operand" "=m,m"))
++   (clobber (match_scratch:DI 3 "=&r,&r"))]
++  "TARGET_KNC"
++  "#"
++  "&& reload_completed"
++  [(const_int 0)]
++  "ix86_expand_move_misalign (TFmode, operands); DONE;"
++  [(set_attr "type" "multi")])
++
++(define_insn_and_split "knc_movmisalign<mode>"
++  [(set (match_operand:KNC_MOVMISALIGN_NOTF_MODE 0 "nonimmediate_operand" "=r,m,v,m")
++	(unspec:KNC_MOVMISALIGN_NOTF_MODE [
++	  (match_operand:KNC_MOVMISALIGN_NOTF_MODE 1 "nonimmediate_operand" "m,r,m,v")]
++	  UNSCPEC_KNC_NO_SEC_RELOAD))
++   (clobber (match_operand:KNC_MOVMISALIGN_NOTF_MODE 2 "nonimmediate_operand" "=m,m,m,m"))
++   (clobber (match_scratch:<knc_movmisalign_int_mode> 3 "=&r,&r,&r,&r"))]
++  "TARGET_KNC"
++  "#"
++  "&& reload_completed"
++  [(const_int 0)]
++  "ix86_expand_move_misalign (<MODE>mode, operands); DONE;"
++  [(set_attr "type" "multi")])
+diff --git a/gcc/config/i386/predicates.md b/gcc/config/i386/predicates.md
+index cf3a68a9fe8..a5964c01e7c 100644
+--- a/gcc/config/i386/predicates.md
++++ b/gcc/config/i386/predicates.md
+@@ -1759,7 +1759,7 @@
+ ;; Return true if OP is a memory operand, aligned to
+ ;; less than its natural alignment.
+ (define_predicate "misaligned_operand"
+-  (and (match_code "mem")
++  (and (match_operand 0 "memory_operand")
+        (match_test "MEM_ALIGN (op) < GET_MODE_BITSIZE (mode)")))
+ 
+ ;; Return true if OP is a parallel for an mov{d,q,dqa,ps,pd} vec_select,
+@@ -2404,3 +2404,7 @@
+ 
+   return true;
+ })
++
++(define_predicate "mem_align_or_reg_operand"
++  (ior (match_operand 0 "register_operand")
++       (match_operand 0 "aligned_operand")))

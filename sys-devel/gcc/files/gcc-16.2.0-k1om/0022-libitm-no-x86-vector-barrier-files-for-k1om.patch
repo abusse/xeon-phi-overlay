@@ -1,0 +1,70 @@
+From 168e459843281754effe4969123032675142543a Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Sun, 4 Oct 2026 09:24:18 +0200
+Subject: [PATCH 22/22] libitm: no x86 vector barrier files for k1om
+
+x86_sse.cc and x86_avx.cc are built with -msse and -mavx, which KNC
+does not have and which are now refused for it.  Leave them out for
+k1om (ARCH_X86 conditional) instead of compiling x86_sse.cc empty.  The
+M64/M128/M256 barriers are only called from code using those vector
+types, which KNC code never does.
+
+libitm/configure regenerated with autoconf 2.69.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ libitm/config/x86/x86_sse.cc | 6 ------
+ libitm/configure             | 3 ++-
+ libitm/configure.ac          | 3 ++-
+ 3 files changed, 4 insertions(+), 8 deletions(-)
+
+diff --git a/libitm/config/x86/x86_sse.cc b/libitm/config/x86/x86_sse.cc
+index a13b54dfffb..5bd50e238c7 100644
+--- a/libitm/config/x86/x86_sse.cc
++++ b/libitm/config/x86/x86_sse.cc
+@@ -25,10 +25,6 @@
+ #include "libitm_i.h"
+ #include "dispatch.h"
+ 
+-// KNC has no SSE or MMX: nothing uses these barriers there, and the
+-// k1om assembler rejects the SSE moves -msse makes of them.
+-#ifndef __KNC__
+-
+ // ??? Use memcpy for now, until we have figured out how to best instantiate
+ // these loads/stores.
+ CREATE_DISPATCH_FUNCTIONS_T_MEMCPY(M64, GTM::abi_disp()->, )
+@@ -45,5 +41,3 @@ _ITM_LM128 (const _ITM_TYPE_M128 *ptr)
+ {
+   GTM::GTM_LB (ptr, sizeof (*ptr));
+ }
+-
+-#endif // __KNC__
+diff --git a/libitm/configure b/libitm/configure
+index 54b73f517a8..64872102cfe 100755
+--- a/libitm/configure
++++ b/libitm/configure
+@@ -18527,7 +18527,8 @@ else
+   ARCH_ARM_FALSE=
+ fi
+ 
+- if test "$ARCH" = x86; then
++# k1om (KNC) has neither the SSE nor the AVX the x86 barrier files need.
++ if test "$ARCH" = x86 && test "$target_cpu" != k1om; then
+   ARCH_X86_TRUE=
+   ARCH_X86_FALSE='#'
+ else
+diff --git a/libitm/configure.ac b/libitm/configure.ac
+index 0b5f08b86e8..9d5a2798a03 100644
+--- a/libitm/configure.ac
++++ b/libitm/configure.ac
+@@ -297,7 +297,8 @@ fi
+ AC_SUBST(link_itm)
+ 
+ AM_CONDITIONAL([ARCH_ARM], [test "$ARCH" = arm])
+-AM_CONDITIONAL([ARCH_X86], [test "$ARCH" = x86])
++# k1om (KNC) has neither the SSE nor the AVX the x86 barrier files need.
++AM_CONDITIONAL([ARCH_X86], [test "$ARCH" = x86 && test "$target_cpu" != k1om])
+ AM_CONDITIONAL([ARCH_X86_AVX], [test "$libitm_cv_as_avx" = yes])
+ AM_CONDITIONAL([ARCH_FUTEX], [test $enable_linux_futex = yes])
+ 

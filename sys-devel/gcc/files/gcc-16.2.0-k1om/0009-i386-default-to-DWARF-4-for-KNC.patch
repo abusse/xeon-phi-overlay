@@ -1,0 +1,30 @@
+From 6c9f3eb269977eec313a20200c9bcc00f59fc9d4 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Tue, 29 Sep 2026 19:40:39 +0200
+Subject: [PATCH 09/22] i386: default to DWARF 4 for KNC
+
+GCC 11 switched the default to DWARF 5, which nothing that reads debug
+information for the card understands: the k1om binutils are 2.22 and
+its gdb is 7.6.  Keep DWARF 4 unless -gdwarf-N is given.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gcc/config/i386/i386-options.cc | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/gcc/config/i386/i386-options.cc b/gcc/config/i386/i386-options.cc
+index 5d27f27a69c..3caf584a6a7 100644
+--- a/gcc/config/i386/i386-options.cc
++++ b/gcc/config/i386/i386-options.cc
+@@ -2860,6 +2860,10 @@ ix86_option_override_internal (bool main_args_p,
+ 	}
+     }
+ 
++  /* The k1om binutils 2.22 and gdb 7.6 predate DWARF 5.  */
++  if (TARGET_KNC && main_args_p && !opts_set->x_dwarf_version)
++    opts->x_dwarf_version = 4;
++
+   /* For sane SSE instruction set generation we need fcomi instruction.
+      It is safe to enable all CMOVE instructions.  Also, RDRAND intrinsic
+      expands to a sequence that includes conditional move. */

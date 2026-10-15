@@ -1,0 +1,1002 @@
+From f76be9a99d1bcdc62ec9d14972256fc848251487 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Tue, 29 Sep 2026 18:16:11 +0200
+Subject: [PATCH 06/22] k1om-*-linux: runtime libraries
+
+From Intel MPSS 3.8.6: libgcc, libstdc++, libgomp, libitm, libffi,
+libgfortran, libsanitizer, libgo and libtool treat k1om-*-linux* like
+x86_64-*-linux*.  libgcc additionally builds the soft-fp TF routines
+and crtprec*/crtfastmath and uses the x86 Linux unwinder; decimal float
+is BID.  libgcc builds none of the _Float16/__bf16 routines (upstream
+compiles them with -msse2): the compiler still provides both types for
+the intrinsic headers, but libgcc is built without HF/BF support.
+libsanitizer does not emit prefetchnta (no SSE) and does without
+<scsi/scsi.h>.
+
+Configure scripts are regenerated from their sources.  Intel's tree had
+them sed-edited instead, partly without the matching source change: the
+x86 -fpic choice in config/picflag.m4 is carried here as a source
+change; k1om in autoconf's own AC_C_BIGENDIAN darwin -arch list, in
+libitm's AVX/RTM and libstdc++'s rdrand assembler probes (which fail
+for k1om regardless) and a hard-wired libgcc_cv_lib_sjlj_exceptions=no
+are dropped.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ config/dfp.m4                                 |  4 ++--
+ config/picflag.m4                             |  2 +-
+ gcc/configure                                 | 10 ++++----
+ libada/configure                              |  2 +-
+ libatomic/configure                           |  4 ++--
+ libbacktrace/configure                        |  4 ++--
+ libcc1/configure                              |  4 ++--
+ libdecnumber/configure                        |  4 ++--
+ libffi/configure                              |  4 ++--
+ libffi/configure.host                         |  2 +-
+ libga68/configure                             |  4 ++--
+ libgcc/config.host                            | 24 ++++++++++++++-----
+ libgcc/config/i386/t-softfp-knc               |  7 ++++++
+ libgcc/configure                              |  6 ++---
+ libgcobol/configure                           |  4 ++--
+ libgfortran/configure                         |  4 ++--
+ libgfortran/configure.host                    |  2 +-
+ libgm2/configure                              |  4 ++--
+ libgo/config/libtool.m4                       |  4 ++--
+ libgo/configure                               |  6 ++---
+ libgo/configure.ac                            |  2 +-
+ libgomp/configure                             |  4 ++--
+ libgomp/configure.tgt                         |  2 +-
+ libgrust/configure                            |  4 ++--
+ libiberty/configure                           |  2 +-
+ libitm/configure                              |  4 ++--
+ libitm/configure.tgt                          |  4 ++--
+ libobjc/configure                             |  4 ++--
+ libphobos/configure                           |  4 ++--
+ libquadmath/configure                         |  4 ++--
+ libsanitizer/configure                        |  4 ++--
+ libsanitizer/configure.tgt                    |  2 +-
+ .../sanitizer_internal_defs.h                 |  2 +-
+ .../sanitizer_platform_limits_posix.cpp       |  6 ++++-
+ libssp/configure                              |  4 ++--
+ libstdc++-v3/configure                        |  4 ++--
+ libstdc++-v3/configure.host                   |  8 +++----
+ libtool.m4                                    |  4 ++--
+ libvtv/configure                              |  4 ++--
+ lto-plugin/configure                          |  4 ++--
+ zlib/configure                                |  4 ++--
+ 41 files changed, 104 insertions(+), 81 deletions(-)
+ create mode 100644 libgcc/config/i386/t-softfp-knc
+
+diff --git a/config/dfp.m4 b/config/dfp.m4
+index d1d151b2da7..e5050dd06b5 100644
+--- a/config/dfp.m4
++++ b/config/dfp.m4
+@@ -39,7 +39,7 @@ Valid choices are 'yes', 'bid', 'dpd', and 'no'.]) ;;
+ [
+   case $1 in
+     aarch64* | \
+-    powerpc*-*-linux* | i?86*-*-linux* | x86_64*-*-linux* | s390*-*-linux* | \
++    powerpc*-*-linux* | i?86*-*-linux* | x86_64*-*-linux* | k1om*-*-linux* | s390*-*-linux* | \
+     i?86*-*-elfiamcu | i?86*-*-gnu* | x86_64*-*-gnu* | \
+     i?86*-*-mingw* | x86_64*-*-mingw* | \
+     i?86*-*-cygwin* | x86_64*-*-cygwin*)
+@@ -56,7 +56,7 @@ Valid choices are 'yes', 'bid', 'dpd', and 'no'.]) ;;
+ case x$enable_decimal_float in
+   xyes)
+     case $1 in
+-      aarch64* | i?86*-*-* | x86_64*-*-*)
++      aarch64* | i?86*-*-* | x86_64*-*-* | k1om*-*-*)
+ 	enable_decimal_float=bid
+ 	;;
+       *)
+diff --git a/config/picflag.m4 b/config/picflag.m4
+index 3f3ac744c96..15bf03f647b 100644
+--- a/config/picflag.m4
++++ b/config/picflag.m4
+@@ -56,7 +56,7 @@ case "${$2}" in
+ 
+     # Some targets support both -fPIC and -fpic, but prefer the latter.
+     # FIXME: Why?
+-    i[[34567]]86-*-* | x86_64-*-*)
++    i[[34567]]86-*-* | x86_64-*-* | k1om-*-*)
+ 	$1=-fpic
+ 	;;
+     # FIXME: Override -fPIC default in libgcc only? 
+diff --git a/gcc/configure b/gcc/configure
+index 35260d8ebc2..408ad4177ad 100755
+--- a/gcc/configure
++++ b/gcc/configure
+@@ -5604,7 +5604,7 @@ case "${target}" in
+ 
+     # Some targets support both -fPIC and -fpic, but prefer the latter.
+     # FIXME: Why?
+-    i[34567]86-*-* | x86_64-*-*)
++    i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+ 	PICFLAG_FOR_TARGET=-fpic
+ 	;;
+     # FIXME: Override -fPIC default in libgcc only?
+@@ -7984,7 +7984,7 @@ else
+ 
+   case $target in
+     aarch64* | \
+-    powerpc*-*-linux* | i?86*-*-linux* | x86_64*-*-linux* | s390*-*-linux* | \
++    powerpc*-*-linux* | i?86*-*-linux* | x86_64*-*-linux* | k1om*-*-linux* | s390*-*-linux* | \
+     i?86*-*-elfiamcu | i?86*-*-gnu* | x86_64*-*-gnu* | \
+     i?86*-*-mingw* | x86_64*-*-mingw* | \
+     i?86*-*-cygwin* | x86_64*-*-cygwin*)
+@@ -8004,7 +8004,7 @@ fi
+ case x$enable_decimal_float in
+   xyes)
+     case $target in
+-      aarch64* | i?86*-*-* | x86_64*-*-*)
++      aarch64* | i?86*-*-* | x86_64*-*-* | k1om*-*-*)
+ 	enable_decimal_float=bid
+ 	;;
+       *)
+@@ -17652,7 +17652,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -17696,7 +17696,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libada/configure b/libada/configure
+index ac4dad3ad3b..4d0b0ff7249 100755
+--- a/libada/configure
++++ b/libada/configure
+@@ -3224,7 +3224,7 @@ case "${host}" in
+ 
+     # Some targets support both -fPIC and -fpic, but prefer the latter.
+     # FIXME: Why?
+-    i[34567]86-*-* | x86_64-*-*)
++    i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+ 	PICFLAG=-fpic
+ 	;;
+     # FIXME: Override -fPIC default in libgcc only?
+diff --git a/libatomic/configure b/libatomic/configure
+index 2ab04c889a7..18dcf995c0d 100755
+--- a/libatomic/configure
++++ b/libatomic/configure
+@@ -7413,7 +7413,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -7457,7 +7457,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libbacktrace/configure b/libbacktrace/configure
+index 1006223d00b..d47016876ec 100755
+--- a/libbacktrace/configure
++++ b/libbacktrace/configure
+@@ -7700,7 +7700,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -7744,7 +7744,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libcc1/configure b/libcc1/configure
+index e010d1b67e5..f4699c6da50 100755
+--- a/libcc1/configure
++++ b/libcc1/configure
+@@ -6956,7 +6956,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -7000,7 +7000,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libdecnumber/configure b/libdecnumber/configure
+index f06c7ac1d3f..f06bff3a68d 100755
+--- a/libdecnumber/configure
++++ b/libdecnumber/configure
+@@ -4908,7 +4908,7 @@ else
+ 
+   case $target in
+     aarch64* | \
+-    powerpc*-*-linux* | i?86*-*-linux* | x86_64*-*-linux* | s390*-*-linux* | \
++    powerpc*-*-linux* | i?86*-*-linux* | x86_64*-*-linux* | k1om*-*-linux* | s390*-*-linux* | \
+     i?86*-*-elfiamcu | i?86*-*-gnu* | x86_64*-*-gnu* | \
+     i?86*-*-mingw* | x86_64*-*-mingw* | \
+     i?86*-*-cygwin* | x86_64*-*-cygwin*)
+@@ -4928,7 +4928,7 @@ fi
+ case x$enable_decimal_float in
+   xyes)
+     case $target in
+-      aarch64* | i?86*-*-* | x86_64*-*-*)
++      aarch64* | i?86*-*-* | x86_64*-*-* | k1om*-*-*)
+ 	enable_decimal_float=bid
+ 	;;
+       *)
+diff --git a/libffi/configure b/libffi/configure
+index e15a6546f1f..4dde843da94 100755
+--- a/libffi/configure
++++ b/libffi/configure
+@@ -7623,7 +7623,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -7667,7 +7667,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libffi/configure.host b/libffi/configure.host
+index 9d73f18ee8c..8eb2adae55e 100644
+--- a/libffi/configure.host
++++ b/libffi/configure.host
+@@ -114,7 +114,7 @@ case "${host}" in
+ 	fi
+ 	;;
+ 
+-  i?86-*-* | x86_64-*-* | amd64-*)
++  i?86-*-* | x86_64-*-* | k1om-*-* | amd64-*)
+ 	TARGETDIR=x86
+ 	if test $ac_cv_sizeof_size_t = 4; then
+ 	  echo 'int foo (void) { return __x86_64__; }' > conftest.c
+diff --git a/libga68/configure b/libga68/configure
+index fd27bd6ab6c..92be6de0458 100755
+--- a/libga68/configure
++++ b/libga68/configure
+@@ -8476,7 +8476,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -8520,7 +8520,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libgcc/config.host b/libgcc/config.host
+index ac10ccc4340..ae88d0df7a8 100644
+--- a/libgcc/config.host
++++ b/libgcc/config.host
+@@ -128,7 +128,7 @@ moxie*)	cpu_type=moxie
+ i[34567]86-*-*)
+ 	cpu_type=i386
+ 	;;
+-x86_64-*-*)
++x86_64-*-* | k1om-*-*)
+ 	cpu_type=i386
+ 	;;
+ ia64-*-*)
+@@ -801,7 +801,7 @@ i[34567]86-*-gnu*)
+ 	tm_file="${tm_file} i386/elf-lib.h"
+ 	md_unwind_header=i386/gnu-unwind.h
+ 	;;
+-x86_64-*-linux*)
++x86_64-*-linux* | k1om-*-linux*)
+ 	extra_parts="$extra_parts crtprec32.o crtprec64.o crtprec80.o crtfastmath.o"
+ 	tmake_file="${tmake_file} i386/t-crtpc t-crtfm i386/t-crtstuff t-dfprules"
+ 	tm_file="${tm_file} i386/elf-lib.h"
+@@ -1581,7 +1581,7 @@ nvptx-*)
+ esac
+ 
+ case ${host} in
+-i[34567]86-*-* | x86_64-*-*)
++i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+ 	case ${host} in
+ 	*-musl*)
+ 		tmake_file="${tmake_file} i386/t-cpuinfo-static"
+@@ -1594,7 +1594,7 @@ i[34567]86-*-* | x86_64-*-*)
+ esac
+ 
+ case ${host} in
+-i[34567]86-*-linux* | x86_64-*-linux* | \
++i[34567]86-*-linux* | x86_64-*-linux* | k1om-*-linux* | \
+   i[34567]86-*-kfreebsd*-gnu | x86_64-*-kfreebsd*-gnu | \
+   i[34567]86-*-gnu* | x86_64-*-gnu*)
+ 	tmake_file="${tmake_file} t-tls i386/t-linux i386/t-msabi t-slibgcc-libgcc"
+@@ -1608,14 +1608,14 @@ case ${host} in
+ i[34567]86-*-elfiamcu | i[34567]86-*-rtems*)
+ 	# These use soft-fp for SFmode and DFmode, not just TFmode.
+ 	;;
+-i[34567]86-*-* | x86_64-*-*)
++i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+   	tmake_file="${tmake_file} t-softfp-tf"
+ 	tmake_file="${tmake_file} i386/${host_address}/t-softfp i386/t-softfp t-softfp"
+ 	;;
+ esac
+ 
+ case ${host} in
+-i[34567]86-*-linux* | x86_64-*-linux*)
++i[34567]86-*-linux* | x86_64-*-linux* | k1om-*-linux*)
+ 	# Provide backward binary compatibility for 64bit Linux/x86.
+ 	if test "${host_address}" = 64; then
+ 		tmake_file="${tmake_file} i386/${host_address}/t-softfp-compat"
+@@ -1681,3 +1681,15 @@ case ${host} in
+   tmake_file="$tmake_file t-gthr-noweak"
+   ;;
+ esac
++
++case ${host} in
++x86_64-k1om-linux* | k1om-*-linux*)
++	extra_parts="$extra_parts crtprec32.o crtprec64.o crtprec80.o crtfastmath.o"
++	tmake_file="${tmake_file} i386/32/t-softfp i386/t-crtpc t-crtfm i386/t-crtstuff t-dfprules t-fpbit"
++	# The ms-abi register save/restore stubs are SSE code, and so are the
++	# _Float16 soft-fp routines.
++	tmake_file=`echo " ${tmake_file} " | sed -e 's, i386/t-msabi , ,' \
++	  -e 's, i386/64/t-softfp , ,' -e 's, i386/t-softfp , i386/t-softfp-knc ,'`
++	tm_file="${tm_file} i386/elf-lib.h"
++	md_unwind_header=i386/linux-unwind.h
++esac
+diff --git a/libgcc/config/i386/t-softfp-knc b/libgcc/config/i386/t-softfp-knc
+new file mode 100644
+index 00000000000..1a58a995424
+--- /dev/null
++++ b/libgcc/config/i386/t-softfp-knc
+@@ -0,0 +1,7 @@
++# i386/t-softfp without the _Float16 routines: those are built with
++# -msse2, and KNC has no SSE2 and hence no _Float16 arithmetic.  The
++# compiler still provides the _Float16 and __bf16 types (for the
++# intrinsic headers), so keep libgcc's own HF/BF support off.
++LIB2ADD += $(srcdir)/config/i386/sfp-exceptions.c
++LIB2FUNCS_EXCLUDE += _divhc3 _mulhc3
++HOST_LIBGCC2_CFLAGS += -U__LIBGCC_HAS_HF_MODE__ -U__LIBGCC_HAS_BF_MODE__
+diff --git a/libgcc/configure b/libgcc/configure
+index f2bee6d90fe..a1836c953e1 100755
+--- a/libgcc/configure
++++ b/libgcc/configure
+@@ -2421,7 +2421,7 @@ case "${host}" in
+ 
+     # Some targets support both -fPIC and -fpic, but prefer the latter.
+     # FIXME: Why?
+-    i[34567]86-*-* | x86_64-*-*)
++    i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+ 	PICFLAG=-fpic
+ 	;;
+     # FIXME: Override -fPIC default in libgcc only?
+@@ -4776,7 +4776,7 @@ else
+ 
+   case $host in
+     aarch64* | \
+-    powerpc*-*-linux* | i?86*-*-linux* | x86_64*-*-linux* | s390*-*-linux* | \
++    powerpc*-*-linux* | i?86*-*-linux* | x86_64*-*-linux* | k1om*-*-linux* | s390*-*-linux* | \
+     i?86*-*-elfiamcu | i?86*-*-gnu* | x86_64*-*-gnu* | \
+     i?86*-*-mingw* | x86_64*-*-mingw* | \
+     i?86*-*-cygwin* | x86_64*-*-cygwin*)
+@@ -4796,7 +4796,7 @@ fi
+ case x$enable_decimal_float in
+   xyes)
+     case $host in
+-      aarch64* | i?86*-*-* | x86_64*-*-*)
++      aarch64* | i?86*-*-* | x86_64*-*-* | k1om*-*-*)
+ 	enable_decimal_float=bid
+ 	;;
+       *)
+diff --git a/libgcobol/configure b/libgcobol/configure
+index 950b1e26262..40ee2e9c3dc 100755
+--- a/libgcobol/configure
++++ b/libgcobol/configure
+@@ -7857,7 +7857,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -7901,7 +7901,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libgfortran/configure b/libgfortran/configure
+index 75cf47e3a19..26e92420693 100755
+--- a/libgfortran/configure
++++ b/libgfortran/configure
+@@ -8890,7 +8890,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -8934,7 +8934,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libgfortran/configure.host b/libgfortran/configure.host
+index 9abd40f511a..66c0d16e5bd 100644
+--- a/libgfortran/configure.host
++++ b/libgfortran/configure.host
+@@ -43,7 +43,7 @@ case "${host_cpu}" in
+ 
+   # x86 asm should be used instead of glibc, since glibc doesn't support
+   # the x86 denormal exception.
+-  i?86 | x86_64)
++  i?86 | x86_64 | k1om)
+     if test "x${have_soft_float}" = "xyes"; then
+       fpu_host='fpu-generic'
+       ieee_support='no'
+diff --git a/libgm2/configure b/libgm2/configure
+index 7799d3987e0..1f24fcb5da2 100755
+--- a/libgm2/configure
++++ b/libgm2/configure
+@@ -10886,7 +10886,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -10930,7 +10930,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libgo/config/libtool.m4 b/libgo/config/libtool.m4
+index 4ca90ee71bc..5d83d90214b 100644
+--- a/libgo/config/libtool.m4
++++ b/libgo/config/libtool.m4
+@@ -1225,7 +1225,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -1265,7 +1265,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libgo/configure b/libgo/configure
+index fa290d43ba2..9d44c6e9b33 100755
+--- a/libgo/configure
++++ b/libgo/configure
+@@ -6954,7 +6954,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -6998,7 +6998,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+@@ -14164,7 +14164,7 @@ case ${host} in
+ 	;;
+     esac
+     ;;
+-  i[34567]86-*-* | x86_64-*-*)
++  i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+     cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
+ 
+diff --git a/libgo/configure.ac b/libgo/configure.ac
+index 0004819d967..7f940ea78ac 100644
+--- a/libgo/configure.ac
++++ b/libgo/configure.ac
+@@ -269,7 +269,7 @@ case ${host} in
+     esac
+     ;;
+ changequote(,)dnl
+-  i[34567]86-*-* | x86_64-*-*)
++  i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+ changequote([,])dnl
+     AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+ #ifdef __x86_64__
+diff --git a/libgomp/configure b/libgomp/configure
+index 56cffe79634..a6810320aff 100755
+--- a/libgomp/configure
++++ b/libgomp/configure
+@@ -7405,7 +7405,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -7449,7 +7449,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libgomp/configure.tgt b/libgomp/configure.tgt
+index 46af75f978f..2fc3f974351 100644
+--- a/libgomp/configure.tgt
++++ b/libgomp/configure.tgt
+@@ -85,7 +85,7 @@ if test x$enable_linux_futex = xyes; then
+ 	;;
+ 
+     # Note that bare i386 is not included here.  We need cmpxchg.
+-    i[456]86-*-linux* | x86_64-*-linux*)
++    i[456]86-*-linux* | x86_64-*-linux* | k1om-*-linux*)
+ 	config_path="linux/x86 linux posix"
+ 	cat > conftestx.c <<EOF
+ #ifndef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_4
+diff --git a/libgrust/configure b/libgrust/configure
+index 0cd07dc13b9..b0ff02cd516 100755
+--- a/libgrust/configure
++++ b/libgrust/configure
+@@ -8688,7 +8688,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -8732,7 +8732,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libiberty/configure b/libiberty/configure
+index 359f19ac037..f35c6508de0 100755
+--- a/libiberty/configure
++++ b/libiberty/configure
+@@ -5636,7 +5636,7 @@ case "${host}" in
+ 
+     # Some targets support both -fPIC and -fpic, but prefer the latter.
+     # FIXME: Why?
+-    i[34567]86-*-* | x86_64-*-*)
++    i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+ 	PICFLAG=-fpic
+ 	;;
+     # FIXME: Override -fPIC default in libgcc only?
+diff --git a/libitm/configure b/libitm/configure
+index 0c82eba44a6..54b73f517a8 100755
+--- a/libitm/configure
++++ b/libitm/configure
+@@ -8066,7 +8066,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -8110,7 +8110,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libitm/configure.tgt b/libitm/configure.tgt
+index c6424ffabea..f1db4271654 100644
+--- a/libitm/configure.tgt
++++ b/libitm/configure.tgt
+@@ -37,7 +37,7 @@ if test "$gcc_cv_have_tls" = yes ; then
+     # For x86, we use slots in the TCB head for most of our TLS.
+     # The setup of those slots in beginTransaction can afford to
+     # use the global-dynamic model.
+-    i[456]86-*-linux* | x86_64-*-linux*)
++    i[456]86-*-linux* | x86_64-*-linux* | k1om-*-linux*)
+ 	;;
+     
+     *-*-linux*)
+@@ -59,7 +59,7 @@ case "${target_cpu}" in
+ 
+   arm*)		ARCH=arm ;;
+ 
+-  i[3456]86 | x86_64)
++  i[3456]86 | x86_64 | k1om)
+ 	cat > conftestx.c <<EOF
+ #ifndef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_4
+ #error need -march=i486
+diff --git a/libobjc/configure b/libobjc/configure
+index dbf08291cd8..f27d6f7237e 100755
+--- a/libobjc/configure
++++ b/libobjc/configure
+@@ -6781,7 +6781,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -6825,7 +6825,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libphobos/configure b/libphobos/configure
+index c150fdd192e..00c5476be40 100755
+--- a/libphobos/configure
++++ b/libphobos/configure
+@@ -7930,7 +7930,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -7974,7 +7974,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libquadmath/configure b/libquadmath/configure
+index a696c62deac..1f7ba9cb8ff 100755
+--- a/libquadmath/configure
++++ b/libquadmath/configure
+@@ -6954,7 +6954,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -6998,7 +6998,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libsanitizer/configure b/libsanitizer/configure
+index c0e57bd4287..b5f5eeba2f5 100755
+--- a/libsanitizer/configure
++++ b/libsanitizer/configure
+@@ -8541,7 +8541,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -8585,7 +8585,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libsanitizer/configure.tgt b/libsanitizer/configure.tgt
+index 3161ab3ee91..d25a2499c62 100644
+--- a/libsanitizer/configure.tgt
++++ b/libsanitizer/configure.tgt
+@@ -24,7 +24,7 @@ SANITIZER_COMMON_TARGET_DEPENDENT_OBJECTS=
+ case "${target}" in
+   x86_64-*-freebsd* | i?86-*-freebsd*)
+ 	;;
+-  x86_64-*-linux* | i?86-*-linux*)
++  x86_64-*-linux* | k1om-*-linux* | i?86-*-linux*)
+ 	if test x$ac_cv_sizeof_void_p = x8; then
+ 		TSAN_SUPPORTED=yes
+ 		LSAN_SUPPORTED=yes
+diff --git a/libsanitizer/sanitizer_common/sanitizer_internal_defs.h b/libsanitizer/sanitizer_common/sanitizer_internal_defs.h
+index c719e2a8ef6..a32959c113e 100644
+--- a/libsanitizer/sanitizer_common/sanitizer_internal_defs.h
++++ b/libsanitizer/sanitizer_common/sanitizer_internal_defs.h
+@@ -247,7 +247,7 @@ typedef u64 ThreadID;
+ # define THREADLOCAL   __thread
+ # define LIKELY(x)     __builtin_expect(!!(x), 1)
+ # define UNLIKELY(x)   __builtin_expect(!!(x), 0)
+-# if defined(__i386__) || defined(__x86_64__)
++# if (defined(__i386__) || defined(__x86_64__)) && (!defined(__KNC__))
+ // __builtin_prefetch(x) generates prefetchnt0 on x86
+ #  define PREFETCH(x) __asm__("prefetchnta (%0)" : : "r" (x))
+ # else
+diff --git a/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp b/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp
+index 47eb1dc3267..27c6b26160c 100644
+--- a/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp
++++ b/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp
+@@ -132,7 +132,9 @@ typedef struct user_fpregs elf_fpregset_t;
+ #      if HAVE_RPC_XDR_H
+ #        include <rpc/xdr.h>
+ #      endif
+-#      include <scsi/scsi.h>
++#      if !defined(__KNC__)
++#        include <scsi/scsi.h>
++#      endif /* __KNC__  */
+ #else
+ #include <linux/if_ppp.h>
+ #include <linux/kd.h>
+@@ -956,10 +958,12 @@ unsigned struct_ElfW_Phdr_sz = sizeof(Elf_Phdr);
+   unsigned IOCTL_PIO_UNIMAPCLR = PIO_UNIMAPCLR;
+   unsigned IOCTL_PIO_UNISCRNMAP = PIO_UNISCRNMAP;
+ #if SANITIZER_GLIBC
++#if !defined(__KNC__)
+   unsigned IOCTL_SCSI_IOCTL_GET_IDLUN = SCSI_IOCTL_GET_IDLUN;
+   unsigned IOCTL_SCSI_IOCTL_PROBE_HOST = SCSI_IOCTL_PROBE_HOST;
+   unsigned IOCTL_SCSI_IOCTL_TAGGED_DISABLE = SCSI_IOCTL_TAGGED_DISABLE;
+   unsigned IOCTL_SCSI_IOCTL_TAGGED_ENABLE = SCSI_IOCTL_TAGGED_ENABLE;
++#endif /* __KNC  */
+   unsigned IOCTL_SIOCAIPXITFCRT = SIOCAIPXITFCRT;
+   unsigned IOCTL_SIOCAIPXPRISLT = SIOCAIPXPRISLT;
+   unsigned IOCTL_SIOCAX25ADDUID = SIOCAX25ADDUID;
+diff --git a/libssp/configure b/libssp/configure
+index aa7ea4a3a9f..8d1e6c1722e 100755
+--- a/libssp/configure
++++ b/libssp/configure
+@@ -7196,7 +7196,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -7240,7 +7240,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libstdc++-v3/configure b/libstdc++-v3/configure
+index bc9dce5e288..c09d47c96c3 100755
+--- a/libstdc++-v3/configure
++++ b/libstdc++-v3/configure
+@@ -8194,7 +8194,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -8238,7 +8238,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libstdc++-v3/configure.host b/libstdc++-v3/configure.host
+index ff97216167d..50555616ced 100644
+--- a/libstdc++-v3/configure.host
++++ b/libstdc++-v3/configure.host
+@@ -116,7 +116,7 @@ case "${host_cpu}" in
+   crisv32)
+     try_cpu=cris
+     ;;
+-  i[567]86 | x86_64)
++  i[567]86 | x86_64 | k1om)
+     try_cpu=i486
+     ;;
+   hppa*)
+@@ -169,7 +169,7 @@ case "${host_cpu}" in
+   cris*)
+     atomic_word_dir=cpu/cris
+     ;;
+-  i[4567]86 | x86_64)
++  i[4567]86 | x86_64 | k1om)
+     atomic_flags="-march=native"
+     ;;
+   sparc* | ultrasparc)
+@@ -245,7 +245,7 @@ case "${host_os}" in
+     # For 8+ compatibility is better if not -flat_namespace.
+     OPT_LDFLAGS="${OPT_LDFLAGS} -Wl,-single_module"
+     case "${host_cpu}" in
+-      i[34567]86 | x86_64)
++      i[34567]86 | x86_64 | k1om)
+         OPTIMIZE_CXXFLAGS="${OPTIMIZE_CXXFLAGS} -fvisibility-inlines-hidden"
+         ;;
+     esac
+@@ -351,7 +351,7 @@ case "${host}" in
+       sparc64)
+         abi_baseline_pair=sparc64-linux-gnu
+         ;;
+-      x86_64)
++      x86_64 | k1om)
+         abi_baseline_pair=x86_64-linux-gnu
+         ;;
+       *)
+diff --git a/libtool.m4 b/libtool.m4
+index 5d70652c435..c4376325a3e 100644
+--- a/libtool.m4
++++ b/libtool.m4
+@@ -1269,7 +1269,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -1309,7 +1309,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/libvtv/configure b/libvtv/configure
+index 3979555df73..2a85f2ac505 100755
+--- a/libvtv/configure
++++ b/libvtv/configure
+@@ -8435,7 +8435,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -8479,7 +8479,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/lto-plugin/configure b/lto-plugin/configure
+index 2e37612e60b..4b9dfa01fca 100755
+--- a/lto-plugin/configure
++++ b/lto-plugin/configure
+@@ -8306,7 +8306,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -8350,7 +8350,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)
+diff --git a/zlib/configure b/zlib/configure
+index 6bc5a28e164..fe247a29188 100755
+--- a/zlib/configure
++++ b/zlib/configure
+@@ -6756,7 +6756,7 @@ ia64-*-hpux*)
+   rm -rf conftest*
+   ;;
+ 
+-x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
++x86_64-*kfreebsd*-gnu|x86_64-*linux*|k1om-*linux*|powerpc*-*linux*| \
+ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+   # Find out which ABI we are using.
+   echo 'int i;' > conftest.$ac_ext
+@@ -6800,7 +6800,7 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
+ 	  x86_64-*kfreebsd*-gnu)
+ 	    LD="${LD-ld} -m elf_x86_64_fbsd"
+ 	    ;;
+-	  x86_64-*linux*)
++	  x86_64-*linux*|k1om-*linux*)
+ 	    LD="${LD-ld} -m elf_x86_64"
+ 	    ;;
+ 	  powerpcle-*linux*)

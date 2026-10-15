@@ -1,0 +1,52 @@
+From 5f594e02d58593f388bc595c7321ca8de28c99d7 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Sun, 4 Oct 2026 09:24:18 +0200
+Subject: [PATCH 19/22] i386: KNC vector moves of TImode only at aligned
+ addresses
+
+*movti_internal accepted any memory for its vector alternatives.  When
+a TImode value (a 16-byte memcpy, say) landed in a vector register and
+its memory was not 16-byte aligned, KNC had nothing to emit: the load
+asserted in final (seen in leancrypto built with
+-ftrivial-auto-var-init=zero -fzero-call-used-regs=used-gpr).  An insn
+condition does not help, LRA substitutes memory equivalences without
+re-checking it.  Add a memory constraint BK (on KNC: aligned to its
+mode) and use it for the vector load and store alternatives; misaligned
+TImode moves go through general registers (*movti_internal_knc).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gcc/config/i386/constraints.md | 6 ++++++
+ gcc/config/i386/i386.md        | 4 ++--
+ 2 files changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/gcc/config/i386/constraints.md b/gcc/config/i386/constraints.md
+index 3cbe93302ed..911f2bb6ecc 100644
+--- a/gcc/config/i386/constraints.md
++++ b/gcc/config/i386/constraints.md
+@@ -473,3 +473,9 @@
+    (i.e. APX NDD/NF) check."
+   (and (match_operand 0 "apx_evex_memory_operand")
+ 	   (match_test "offsettable_nonstrict_memref_p (op)")))
++
++;; KNC moves a vector register to or from memory only at an aligned address.
++(define_special_memory_constraint "BK"
++  "@internal Memory operand, aligned to its mode on KNC."
++  (and (match_operand 0 "memory_operand")
++       (match_test "!TARGET_KNC || !misaligned_operand (op, GET_MODE (op))")))
+diff --git a/gcc/config/i386/i386.md b/gcc/config/i386/i386.md
+index 5055edd7fa2..e1e3b0f1453 100644
+--- a/gcc/config/i386/i386.md
++++ b/gcc/config/i386/i386.md
+@@ -2540,8 +2540,8 @@
+   [(set_attr "mode" "DI")])
+ 
+ (define_insn "*movti_internal"
+-  [(set (match_operand:TI 0 "nonimmediate_operand" "=!r ,o ,v,v ,v ,m,?jc,?Yd")
+-	(match_operand:TI 1 "general_operand"	   "riFo,re,C,BC,vm,v,Yd,jc"))]
++  [(set (match_operand:TI 0 "nonimmediate_operand" "=!r ,o ,v,v ,v ,BK,?jc,?Yd")
++	(match_operand:TI 1 "general_operand"	   "riFo,re,C,BC,vBK,v,Yd,jc"))]
+   "(TARGET_64BIT
+     && !(MEM_P (operands[0]) && MEM_P (operands[1])))
+    || (TARGET_SSE

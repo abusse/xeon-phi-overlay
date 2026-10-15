@@ -1,0 +1,38 @@
+From 51c0a37da9d0b3ca434a13a92cc6efc9c5fc9d65 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Fri, 2 Oct 2026 17:00:30 +0200
+Subject: [PATCH 17/22] k1om-*-linux: use the x86-64 link spec
+
+linuxk1om.h carried its own copy of an older x86-64 LINK_SPEC that
+predates static-pie, so -static-pie linked a dynamic PIE (glibc's
+static-pie sln then failed on _DYNAMIC).  Set the k1om emulation in
+GNU_USER_LINK_EMULATION64 and use GNU_USER_TARGET_LINK_SPEC instead;
+links without -static-pie are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gcc/config/i386/linuxk1om.h | 12 ++++--------
+ 1 file changed, 4 insertions(+), 8 deletions(-)
+
+diff --git a/gcc/config/i386/linuxk1om.h b/gcc/config/i386/linuxk1om.h
+index f69b7422f2e..a035a2fd19b 100644
+--- a/gcc/config/i386/linuxk1om.h
++++ b/gcc/config/i386/linuxk1om.h
+@@ -36,12 +36,8 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
+ #undef ASM_SPEC
+ #define ASM_SPEC "%{" SPEC_32 ":--32} %{" SPEC_64 ":--march=k1om}"
+ 
++/* x86-64's link spec (static-pie included) with the k1om emulation.  */
++#undef GNU_USER_LINK_EMULATION64
++#define GNU_USER_LINK_EMULATION64 "elf_k1om"
+ #undef	LINK_SPEC
+-#define LINK_SPEC "%{" SPEC_64 ":-m elf_k1om} %{" SPEC_32 ":-m elf_i386} \
+-  %{shared:-shared} \
+-  %{!shared: \
+-    %{!static: \
+-      %{rdynamic:-export-dynamic} \
+-      %{" SPEC_32 ":-dynamic-linker " GLIBC_DYNAMIC_LINKER32 "} \
+-      %{" SPEC_64 ":-dynamic-linker " GLIBC_DYNAMIC_LINKER64 "}} \
+-    %{static:-static}}"
++#define LINK_SPEC GNU_USER_TARGET_LINK_SPEC

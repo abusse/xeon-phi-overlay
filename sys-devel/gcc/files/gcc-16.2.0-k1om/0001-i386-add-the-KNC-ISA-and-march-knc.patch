@@ -1,0 +1,461 @@
+From 8b163d8583ea87cbaa07c2bad2f9c015f746d1b8 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Tue, 29 Sep 2026 18:16:04 +0200
+Subject: [PATCH 01/22] i386: add the KNC ISA and -march=knc
+
+From Intel MPSS 3.8.6: the Knights Corner (k1om) scalar ISA.
+
+ - -mknc (OPTION_MASK_ISA2_KNC), "knc" in the -march table and
+   --with-arch/--with-cpu, and the target("knc") attribute; __KNC__,
+   __k1om and __k1om__ are predefined.
+ - KNC is a P54C-derived in-order core: PROCESSOR_PENTIUM tuning with
+   its own cost table (vector-unit stores and moves to the integer unit
+   are priced out), no CMOV, no inter-unit moves, no CMPXCHG16B, no
+   SAHF, no SSE/MMX; x86-64 only (the ISA bit is dropped for -m32).
+   The __i586__/__pentium__ macros are not defined for 64-bit.
+ - Scalar floating point stays on x87 (no fp movcc, no SSE compares),
+   ffs<mode>2 is not used (it expands to cmov).
+ - mfence is "lock or" on the stack; ldmxcsr/stmxcsr (the vector unit
+   has an MXCSR) and their builtins are available.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gcc/common/config/i386/i386-common.cc |   2 +
+ gcc/config.gcc                        |   2 +-
+ gcc/config/i386/i386-builtins.cc      |   8 +-
+ gcc/config/i386/i386-c.cc             |   9 ++
+ gcc/config/i386/i386-expand.cc        |   5 +-
+ gcc/config/i386/i386-options.cc       |  50 ++++++++++
+ gcc/config/i386/i386.h                |   3 +-
+ gcc/config/i386/i386.md               |   4 +-
+ gcc/config/i386/i386.opt              |   4 +
+ gcc/config/i386/sse.md                |   4 +-
+ gcc/config/i386/sync.md               |   1 +
+ gcc/config/i386/x86-tune-costs.h      | 129 ++++++++++++++++++++++++++
+ 12 files changed, 211 insertions(+), 10 deletions(-)
+
+diff --git a/gcc/common/config/i386/i386-common.cc b/gcc/common/config/i386/i386-common.cc
+index effc570aca1..9fbcb5c2779 100644
+--- a/gcc/common/config/i386/i386-common.cc
++++ b/gcc/common/config/i386/i386-common.cc
+@@ -2490,6 +2490,8 @@ const pta processor_alias_table[] =
+     PTA_C86_4G_M8,
+     M_CPU_SUBTYPE (HYGONFAM18H_C86_4G_M8), P_PROC_AVX512F},
+ 
++  {"knc", PROCESSOR_PENTIUM, CPU_GENERIC,
++    PTA_64BIT | PTA_NO_SAHF, 0, P_NONE},
+   {"generic", PROCESSOR_GENERIC, CPU_GENERIC,
+     PTA_64BIT
+       | PTA_HLE /* flags are only used for -march switch.  */,
+diff --git a/gcc/config.gcc b/gcc/config.gcc
+index 743421768ea..bafae2dc883 100644
+--- a/gcc/config.gcc
++++ b/gcc/config.gcc
+@@ -768,7 +768,7 @@ sapphirerapids alderlake rocketlake eden-x2 nano nano-1000 nano-2000 nano-3000 \
+ nano-x2 eden-x4 nano-x4 lujiazui yongfeng shijidadao x86-64 x86-64-v2 \
+ x86-64-v3 x86-64-v4 sierraforest graniterapids graniterapids-d grandridge \
+ arrowlake arrowlake-s clearwaterforest pantherlake diamondrapids novalake \
+-c86-4g-m4 c86-4g-m6 c86-4g-m7 c86-4g-m8 native"
++c86-4g-m4 c86-4g-m6 c86-4g-m7 c86-4g-m8 native knc"
+ 
+ # Additional x86 processors supported by --with-cpu=.  Each processor
+ # MUST be separated by exactly one space.
+diff --git a/gcc/config/i386/i386-builtins.cc b/gcc/config/i386/i386-builtins.cc
+index 6837efd8da5..1bae72d15de 100644
+--- a/gcc/config/i386/i386-builtins.cc
++++ b/gcc/config/i386/i386-builtins.cc
+@@ -649,10 +649,12 @@ ix86_init_mmx_sse_builtins (void)
+ 		 IX86_BUILTIN__BDESC_COMI_FIRST,
+ 		 ARRAY_SIZE (bdesc_comi) - 1);
+ 
+-  /* SSE */
+-  def_builtin (OPTION_MASK_ISA_SSE, 0,  "__builtin_ia32_ldmxcsr",
++  /* SSE or KNC */
++  def_builtin (TARGET_KNC ? 0 : OPTION_MASK_ISA_SSE, 0,
++	       "__builtin_ia32_ldmxcsr",
+ 	       VOID_FTYPE_UNSIGNED, IX86_BUILTIN_LDMXCSR);
+-  def_builtin_pure (OPTION_MASK_ISA_SSE, 0, "__builtin_ia32_stmxcsr",
++  def_builtin_pure (TARGET_KNC ? 0 : OPTION_MASK_ISA_SSE, 0,
++		    "__builtin_ia32_stmxcsr",
+ 		    UNSIGNED_FTYPE_VOID, IX86_BUILTIN_STMXCSR);
+ 
+   /* SSE or 3DNow!A */
+diff --git a/gcc/config/i386/i386-c.cc b/gcc/config/i386/i386-c.cc
+index a2749ae6b14..9db439b38df 100644
+--- a/gcc/config/i386/i386-c.cc
++++ b/gcc/config/i386/i386-c.cc
+@@ -63,6 +63,8 @@ ix86_target_macros_internal (HOST_WIDE_INT isa_flag,
+     case PROCESSOR_LAKEMONT:
+       /* Intel MCU is based on Intel Pentium CPU.  */
+     case PROCESSOR_PENTIUM:
++      if (TARGET_64BIT)
++        break;
+       def_or_undef (parse_in, "__i586");
+       def_or_undef (parse_in, "__i586__");
+       def_or_undef (parse_in, "__pentium");
+@@ -337,6 +339,8 @@ ix86_target_macros_internal (HOST_WIDE_INT isa_flag,
+       def_or_undef (parse_in, "__tune_i486__");
+       break;
+     case PROCESSOR_PENTIUM:
++      if (TARGET_64BIT)
++        break;
+       def_or_undef (parse_in, "__tune_i586__");
+       def_or_undef (parse_in, "__tune_pentium__");
+       if (last_tune_char == 'x')
+@@ -636,6 +640,11 @@ ix86_target_macros_internal (HOST_WIDE_INT isa_flag,
+     def_or_undef (parse_in, "__FMA__");
+   if (isa_flag & OPTION_MASK_ISA_RTM)
+     def_or_undef (parse_in, "__RTM__");
++  if (isa_flag2 & OPTION_MASK_ISA2_KNC) {
++    def_or_undef (parse_in, "__KNC__");
++    def_or_undef (parse_in, "__k1om"),
++    def_or_undef (parse_in, "__k1om__");
++  }
+   if (isa_flag & OPTION_MASK_ISA_SSE4A)
+     def_or_undef (parse_in, "__SSE4A__");
+   if (isa_flag & OPTION_MASK_ISA_FMA4)
+diff --git a/gcc/config/i386/i386-expand.cc b/gcc/config/i386/i386-expand.cc
+index be6aed2bd21..4c91c74e099 100644
+--- a/gcc/config/i386/i386-expand.cc
++++ b/gcc/config/i386/i386-expand.cc
+@@ -2810,7 +2810,7 @@ ix86_prepare_fp_compare_args (enum rtx_code code, rtx *pop0, rtx *pop1)
+   bool unordered_compare = ix86_unordered_fp_compare (code);
+   rtx op0 = *pop0, op1 = *pop1;
+   machine_mode op_mode = GET_MODE (op0);
+-  bool is_sse = SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (op_mode);
++  bool is_sse = !TARGET_KNC && SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (op_mode);
+ 
+   if (op_mode == BFmode && (!TARGET_AVX10_2 || flag_trapping_math))
+     {
+@@ -4688,6 +4688,9 @@ ix86_expand_fp_movcc (rtx operands[])
+   rtx op0 = XEXP (operands[1], 0);
+   rtx op1 = XEXP (operands[1], 1);
+ 
++  if (TARGET_KNC)
++    return false;
++
+   if (GET_MODE (op0) == BFmode
+       && !ix86_fp_comparison_operator (operands[1], VOIDmode))
+     return false;
+diff --git a/gcc/config/i386/i386-options.cc b/gcc/config/i386/i386-options.cc
+index dc7f8bf003f..6b56bca9d0a 100644
+--- a/gcc/config/i386/i386-options.cc
++++ b/gcc/config/i386/i386-options.cc
+@@ -1109,6 +1109,7 @@ ix86_valid_target_attribute_inner_p (tree fndecl, tree args, char *p_strings[],
+     IX86_ATTR_ISA ("ptwrite",   OPT_mptwrite),
+     IX86_ATTR_ISA ("kl", OPT_mkl),
+     IX86_ATTR_ISA ("widekl",	OPT_mwidekl),
++    IX86_ATTR_ISA ("knc",	OPT_mknc),
+     IX86_ATTR_ISA ("avx512bf16",   OPT_mavx512bf16),
+     IX86_ATTR_ISA ("enqcmd", OPT_menqcmd),
+     IX86_ATTR_ISA ("serialize", OPT_mserialize),
+@@ -2040,6 +2041,8 @@ ix86_option_override_internal (bool main_args_p,
+       { "vec-sqrt",  RECIP_MASK_VEC_SQRT },
+     };
+ 
++  long long  mic_isa_bit;
++
+   /* Turn off both OPTION_MASK_ABI_64 and OPTION_MASK_ABI_X32 if
+      TARGET_64BIT_DEFAULT is true and TARGET_64BIT is false.  */
+   if (TARGET_64BIT_DEFAULT && !TARGET_64BIT_P (opts->x_ix86_isa_flags))
+@@ -2407,6 +2410,11 @@ ix86_option_override_internal (bool main_args_p,
+ 	    else
+ 	      opts->x_target_flags |= MASK_80387;
+ 	  }
++	/* The PTA word is full in GCC 7; recognise the knc entry by name.  */
++	if (!strcmp (processor_alias_table[i].name, "knc")
++	    && !(ix86_isa_flags2_explicit & OPTION_MASK_ISA2_KNC))
++	  ix86_isa_flags2 |= OPTION_MASK_ISA2_KNC;
++
+ 	break;
+       }
+ 
+@@ -2583,6 +2591,9 @@ ix86_option_override_internal (bool main_args_p,
+       if (!ix86_arch_specified)
+ 	opts->x_ix86_isa_flags
+ 	  |= TARGET_SUBTARGET64_ISA_DEFAULT & ~opts->x_ix86_isa_flags_explicit;
++      if (!ix86_arch_specified)
++	opts->x_ix86_isa_flags2
++	  |= TARGET_SUBTARGET_ISA2_DEFAULT & ~opts->x_ix86_isa_flags2_explicit;
+ 
+       if (!TARGET_128BIT_LONG_DOUBLE_P (opts->x_target_flags))
+ 	error ("%<-m96bit-long-double%> is not compatible with this target");
+@@ -2816,6 +2827,45 @@ ix86_option_override_internal (bool main_args_p,
+       opts->x_target_flags |= MASK_ACCUMULATE_OUTGOING_ARGS;
+     }
+ 
++   if (TARGET_KNC)
++    {
++      /* Always use KNC instruction costs.  */
++      ix86_cost = &knc_cost;
++      mic_isa_bit = OPTION_MASK_ISA2_KNC;
++    }
++  else
++    mic_isa_bit = 0;
++
++  if (mic_isa_bit)
++    {
++      /* Disable CMOVE.  */
++      TARGET_CMOV = 0;
++
++      /* Don't allow move from and to vector unit.  */
++      TARGET_INTER_UNIT_MOVES_FROM_VEC = 0;
++      TARGET_INTER_UNIT_MOVES_TO_VEC = 0;
++
++      if (TARGET_64BIT)
++	{
++	  /* Enable extended REX SSE registers.  */
++	  /* TARGET_EXT_REX_SSE_REGS = 1; */
++
++	  /* Enable mask registers.  */
++	  /* TARGET_MASK_REGS = 1; */
++	}
++      else
++	{
++	  /* Turn off KNC ISA in 32bit.  */
++	  ix86_isa_flags2 &= ~mic_isa_bit;
++	}
++    }
++
++  /* For sane SSE instruction set generation we need fcomi instruction.
++     It is safe to enable all CMOVE instructions.  Also, RDRAND intrinsic
++     expands to a sequence that includes conditional move. */
++  if (TARGET_SSE || TARGET_RDRND)
++    TARGET_CMOV = 1;
++
+   /* Figure out what ASM_GENERATE_INTERNAL_LABEL builds as a prefix.  */
+   {
+     char *p;
+diff --git a/gcc/config/i386/i386.h b/gcc/config/i386/i386.h
+index fc3d8b3f4d4..389cb23f3e7 100644
+--- a/gcc/config/i386/i386.h
++++ b/gcc/config/i386/i386.h
+@@ -39,7 +39,7 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
+ 
+ /* Redefines for option macros.  */
+ 
+-#define TARGET_CMPXCHG16B	TARGET_CX16
++#define TARGET_CMPXCHG16B	(TARGET_CX16 && !TARGET_KNC)
+ #define TARGET_CMPXCHG16B_P(x)	TARGET_CX16_P(x)
+ 
+ #define TARGET_LP64		TARGET_ABI_64
+@@ -593,6 +593,7 @@ extern GTY(()) tree x86_mfence;
+ /* Enable MMX, SSE and SSE2 by default.  */
+ #define TARGET_SUBTARGET64_ISA_DEFAULT \
+   (OPTION_MASK_ISA_MMX | OPTION_MASK_ISA_SSE | OPTION_MASK_ISA_SSE2)
++#define TARGET_SUBTARGET_ISA2_DEFAULT 0
+ 
+ /* Replace MACH-O, ifdefs by in-line tests, where possible.
+    (a) Macros defined in config/i386/darwin.h  */
+diff --git a/gcc/config/i386/i386.md b/gcc/config/i386/i386.md
+index 8407af948fc..ba312ff8f13 100644
+--- a/gcc/config/i386/i386.md
++++ b/gcc/config/i386/i386.md
+@@ -1986,7 +1986,7 @@
+ 		(match_operand:X87MODEF 2 "register_operand" "f"))]
+ 	     UNSPEC_NOTRAP)]
+ 	  UNSPEC_FNSTSW))]
+-  "TARGET_80387"
++  "TARGET_KNC || TARGET_80387"
+   "* return output_fp_compare (insn, operands, false, true);"
+   [(set_attr "type" "multi")
+    (set_attr "unit" "i387")
+@@ -21373,7 +21373,7 @@
+ 			(match_dup 0)))
+    (parallel [(set (match_dup 0) (plus:SWI48 (match_dup 0) (const_int 1)))
+ 	      (clobber (reg:CC FLAGS_REG))])]
+-  ""
++  "!TARGET_KNC"
+ {
+   machine_mode flags_mode;
+ 
+diff --git a/gcc/config/i386/i386.opt b/gcc/config/i386/i386.opt
+index 3b530944a36..264e4826b6e 100644
+--- a/gcc/config/i386/i386.opt
++++ b/gcc/config/i386/i386.opt
+@@ -1008,6 +1008,10 @@ mstack-protector-guard=
+ Target RejectNegative Joined Enum(stack_protector_guard) Var(ix86_stack_protector_guard) Init(SSP_TLS)
+ Use given stack-protector guard.
+ 
++mknc
++Target Mask(ISA2_KNC) Var(ix86_isa_flags2) Save
++Support KNC vector extension code generation instead of MMX/SSE/AVX
++
+ Enum
+ Name(stack_protector_guard) Type(enum stack_protector_guard)
+ Known stack protector guard (for use with the -mstack-protector-guard= option):
+diff --git a/gcc/config/i386/sse.md b/gcc/config/i386/sse.md
+index 7fce8558212..c9ccfa6b21a 100644
+--- a/gcc/config/i386/sse.md
++++ b/gcc/config/i386/sse.md
+@@ -22935,7 +22935,7 @@
+ (define_insn "sse_ldmxcsr"
+   [(unspec_volatile [(match_operand:SI 0 "memory_operand" "m,jm")]
+ 		    UNSPECV_LDMXCSR)]
+-  "TARGET_SSE"
++  "TARGET_SSE || TARGET_KNC"
+   "%vldmxcsr\t%0"
+   [(set_attr "isa" "noavx,avx")
+    (set_attr "type" "sse")
+@@ -22947,7 +22947,7 @@
+ (define_insn "sse_stmxcsr"
+   [(set (match_operand:SI 0 "memory_operand" "=m,jm")
+ 	(unspec_volatile:SI [(const_int 0)] UNSPECV_STMXCSR))]
+-  "TARGET_SSE"
++  "TARGET_SSE || TARGET_KNC"
+   "%vstmxcsr\t%0"
+   [(set_attr "isa" "noavx,avx")
+    (set_attr "type" "sse")
+diff --git a/gcc/config/i386/sync.md b/gcc/config/i386/sync.md
+index d9f822f4821..9a30a07fd3e 100644
+--- a/gcc/config/i386/sync.md
++++ b/gcc/config/i386/sync.md
+@@ -129,6 +129,7 @@
+       rtx mem;
+ 
+       if ((TARGET_64BIT || TARGET_SSE2)
++	  && !TARGET_KNC
+ 	  && (optimize_function_for_size_p (cfun)
+ 	      || !TARGET_AVOID_MFENCE))
+ 	mfence_insn = gen_mfence_sse2;
+diff --git a/gcc/config/i386/x86-tune-costs.h b/gcc/config/i386/x86-tune-costs.h
+index fcf82567440..673b48b72a5 100644
+--- a/gcc/config/i386/x86-tune-costs.h
++++ b/gcc/config/i386/x86-tune-costs.h
+@@ -538,6 +538,135 @@ struct processor_costs pentium_cost = {
+   COSTS_N_INSNS (2),			/* Branch mispredict scale.  */
+ };
+ 
++/* KNC: Pentium costs, but stores from and moves out of the vector unit
++   are priced out, and the stringop algorithms cover 64-bit.  */
++static stringop_algs knc_memcpy[2] = {
++  {libcall, {{256, rep_prefix_4_byte, false}, {-1, libcall, false}}},
++  {libcall, {{32, loop, false}, {8192, rep_prefix_8_byte, false},
++	     {-1, libcall, false}}}};
++static stringop_algs knc_memset[2] = {
++  {libcall, {{-1, rep_prefix_4_byte, false}}},
++  {libcall, {{32, loop, false}, {8192, rep_prefix_8_byte, false},
++	     {-1, libcall, false}}}};
++
++static const
++struct processor_costs knc_cost = {
++  {
++  /* Start of register allocator costs.  integer->integer move cost is 2. */
++  6,				     /* cost for loading QImode using movzbl */
++  {2, 4, 2},				/* cost of loading integer registers
++					   in QImode, HImode and SImode.
++					   Relative to reg-reg move (2).  */
++  {2, 4, 2},				/* cost of storing integer registers */
++  2,					/* cost of reg,reg fld/fst */
++  {2, 2, 6},				/* cost of loading fp registers
++					   in SFmode, DFmode and XFmode */
++  {4, 4, 6},				/* cost of storing fp registers
++					   in SFmode, DFmode and XFmode */
++  8,					/* cost of moving MMX register */
++  {8, 8},				/* cost of loading MMX registers
++					   in SImode and DImode */
++  {8, 8},				/* cost of storing MMX registers
++					   in SImode and DImode */
++  2, 4, 8,				/* cost of moving XMM,YMM,ZMM register */
++  {4, 8, 16, 32, 64},			/* cost of loading SSE registers
++					   in 32,64,128,256 and 512-bit */
++  {4096, 4096, 4096, 4096, 4096},			/* cost of storing SSE registers
++					   in 32,64,128,256 and 512-bit */
++  4096, 4096,				/* SSE->integer and integer->SSE moves */
++  3, 3,				/* mask->integer and integer->mask moves */
++  {2, 4, 2},				/* cost of loading mask register
++					   in QImode, HImode, SImode.  */
++  {2, 4, 2},				/* cost if storing mask register
++					   in QImode, HImode, SImode.  */
++  2,					/* cost of moving mask register.  */
++  /* End of register allocator costs.  */
++  },
++
++  COSTS_N_INSNS (1),			/* cost of an add instruction */
++  COSTS_N_INSNS (1),			/* cost of a lea instruction */
++  COSTS_N_INSNS (4),			/* variable shift costs */
++  COSTS_N_INSNS (1),			/* constant shift costs */
++  {COSTS_N_INSNS (11),			/* cost of starting multiply for QI */
++   COSTS_N_INSNS (11),			/*				 HI */
++   COSTS_N_INSNS (11),			/*				 SI */
++   COSTS_N_INSNS (11),			/*				 DI */
++   COSTS_N_INSNS (11)},			/*			      other */
++  0,					/* cost of multiply per each bit set */
++  {COSTS_N_INSNS (25),			/* cost of a divide/mod for QI */
++   COSTS_N_INSNS (25),			/*			    HI */
++   COSTS_N_INSNS (25),			/*			    SI */
++   COSTS_N_INSNS (25),			/*			    DI */
++   COSTS_N_INSNS (25)},			/*			    other */
++  COSTS_N_INSNS (3),			/* cost of movsx */
++  COSTS_N_INSNS (2),			/* cost of movzx */
++  8,					/* "large" insn */
++  6,					/* MOVE_RATIO */
++  6,					/* CLEAR_RATIO */
++  {2, 4, 2},				/* cost of loading integer registers
++					   in QImode, HImode and SImode.
++					   Relative to reg-reg move (2).  */
++  {2, 4, 2},				/* cost of storing integer registers */
++  {4, 8, 16, 32, 64},			/* cost of loading SSE register
++					   in 32bit, 64bit, 128bit, 256bit and 512bit */
++  {4096, 4096, 4096, 4096, 4096},			/* cost of storing SSE register
++					   in 32bit, 64bit, 128bit, 256bit and 512bit */
++  {4, 8, 16, 32, 64},			/* cost of unaligned loads.  */
++  {4096, 4096, 4096, 4096, 4096},			/* cost of unaligned stores.  */
++  2, 4, 8,				/* cost of moving XMM,YMM,ZMM register */
++  4096,					/* cost of moving SSE register to integer.  */
++  3,					/* cost of moving integer register to SSE.  */
++  4, 4,					/* Gather load static, per_elt.  */
++  4, 4,					/* Gather store static, per_elt.  */
++  8,					/* size of l1 cache.  */
++  8,					/* size of l2 cache  */
++  0,					/* size of prefetch block */
++  0,					/* number of parallel prefetches */
++  2,					/* Branch cost */
++  COSTS_N_INSNS (3),			/* cost of FADD and FSUB insns.  */
++  COSTS_N_INSNS (3),			/* cost of FMUL instruction.  */
++  COSTS_N_INSNS (39),			/* cost of FDIV instruction.  */
++  COSTS_N_INSNS (1),			/* cost of FABS instruction.  */
++  COSTS_N_INSNS (1),			/* cost of FCHS instruction.  */
++  COSTS_N_INSNS (70),			/* cost of FSQRT instruction.  */
++
++  COSTS_N_INSNS (1),			/* cost of cheap SSE instruction.  */
++  COSTS_N_INSNS (3),			/* cost of ADDSS/SD SUBSS/SD insns.  */
++  COSTS_N_INSNS (3),			/* cost of MULSS instruction.  */
++  COSTS_N_INSNS (3),			/* cost of MULSD instruction.  */
++  COSTS_N_INSNS (6),			/* cost of FMA SS instruction.  */
++  COSTS_N_INSNS (6),			/* cost of FMA SD instruction.  */
++  COSTS_N_INSNS (39),			/* cost of DIVSS instruction.  */
++  COSTS_N_INSNS (39),			/* cost of DIVSD instruction.  */
++  COSTS_N_INSNS (70),			/* cost of SQRTSS instruction.  */
++  COSTS_N_INSNS (70),			/* cost of SQRTSD instruction.  */
++  COSTS_N_INSNS (3),			/* cost of CVTSS2SD etc.  */
++  COSTS_N_INSNS (6),			/* cost of 256bit VCVTPS2PD etc.  */
++  COSTS_N_INSNS (12),			/* cost of 512bit VCVTPS2PD etc.  */
++  COSTS_N_INSNS (3),			/* cost of CVTSI2SS instruction.  */
++  COSTS_N_INSNS (3),			/* cost of CVT(T)SS2SI instruction.  */
++  COSTS_N_INSNS (3),			/* cost of CVTPI2PS instruction.  */
++  COSTS_N_INSNS (3),			/* cost of CVT(T)PS2PI instruction.  */
++  1, 1, 1, 1,				/* reassoc int, fp, vec_int, vec_fp.  */
++  {1, 1, 1},				/* latency times throughput of
++					   FMA/DOT_PROD_EXPR/SAD_EXPR,
++					   it's used to determine unroll
++					   factor in the vectorizer.  */
++  1,					/* Limit how much the autovectorizer
++					   may unroll a loop.  */
++  knc_memcpy,
++  knc_memset,
++  COSTS_N_INSNS (3),			/* cond_taken_branch_cost.  */
++  COSTS_N_INSNS (1),			/* cond_not_taken_branch_cost.  */
++  "16:8:8",				/* Loop alignment.  */
++  "16:8:8",				/* Jump alignment.  */
++  "0:0:8",				/* Label alignment.  */
++  "16",					/* Func alignment.  */
++  4,					/* Small unroll limit.  */
++  2,					/* Small unroll factor.  */
++  COSTS_N_INSNS (2),			/* Branch mispredict scale.  */
++};
++
+ static const
+ struct processor_costs lakemont_cost = {
+   {

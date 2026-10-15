@@ -1,0 +1,77 @@
+From b8b23700c47ecf781faa877ad2fef980ccdccab3 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Sun, 4 Oct 2026 09:24:18 +0200
+Subject: [PATCH 20/22] i386: KNC: save and restore xmm6-15 in ms_abi functions
+
+An ms_abi function saves xmm6-15 in its prologue with V4SF moves, for
+which KNC has no store: every ms_abi function failed with an
+unrecognizable insn (libffi's ffiw64.c).  On KNC save them with the
+masked knc_storeti (mask k2 = 3, loaded through r11, which is free in
+the prologue under both calling conventions), described for the
+unwinder as the plain move, and restore them with TImode loads
+(vbroadcasti32x4).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gcc/config/i386/i386.cc | 29 ++++++++++++++++++++++++++---
+ 1 file changed, 26 insertions(+), 3 deletions(-)
+
+diff --git a/gcc/config/i386/i386.cc b/gcc/config/i386/i386.cc
+index 8e3ad0aa57e..ad0731e8479 100644
+--- a/gcc/config/i386/i386.cc
++++ b/gcc/config/i386/i386.cc
+@@ -7715,7 +7715,18 @@ ix86_emit_save_reg_using_mov (machine_mode mode, unsigned int regno,
+   gcc_assert (! (cfa_offset & (align / BITS_PER_UNIT - 1)));
+   set_mem_align (mem, align);
+ 
+-  insn = emit_insn (gen_rtx_SET (mem, reg));
++  if (TARGET_KNC && SSE_REGNO_P (regno))
++    {
++      /* KNC stores a vector register only under a mask (k2, loaded by
++	 ix86_emit_save_sse_regs_using_mov); describe the save for the
++	 unwinder as the plain move.  */
++      insn = emit_insn (gen_knc_storeti (adjust_address (mem, TImode, 0),
++					gen_rtx_REG (TImode, regno),
++					gen_rtx_REG (HImode, MASK2_REG)));
++      add_reg_note (insn, REG_FRAME_RELATED_EXPR, gen_rtx_SET (mem, reg));
++    }
++  else
++    insn = emit_insn (gen_rtx_SET (mem, reg));
+   RTX_FRAME_RELATED_P (insn) = 1;
+ 
+   base = addr;
+@@ -7795,6 +7806,18 @@ ix86_emit_save_sse_regs_using_mov (HOST_WIDE_INT cfa_offset)
+ {
+   unsigned int regno;
+ 
++  if (TARGET_KNC)
++    for (regno = 0; regno < FIRST_PSEUDO_REGISTER; regno++)
++      if (SSE_REGNO_P (regno) && ix86_save_reg (regno, true, true))
++	{
++	  /* Mask for the KNC stores: two quadwords.  R11 is free in the
++	     prologue under both calling conventions.  */
++	  rtx scratch = gen_rtx_REG (HImode, R11_REG);
++	  emit_move_insn (scratch, GEN_INT (3));
++	  emit_move_insn (gen_rtx_REG (HImode, MASK2_REG), scratch);
++	  break;
++	}
++
+   for (regno = 0; regno < FIRST_PSEUDO_REGISTER; regno++)
+     if (SSE_REGNO_P (regno) && ix86_save_reg (regno, true, true))
+       {
+@@ -10188,12 +10211,12 @@ ix86_emit_restore_sse_regs_using_mov (HOST_WIDE_INT cfa_offset,
+   for (regno = 0; regno < FIRST_PSEUDO_REGISTER; regno++)
+     if (SSE_REGNO_P (regno) && ix86_save_reg (regno, maybe_eh_return, true))
+       {
+-	rtx reg = gen_rtx_REG (V4SFmode, regno);
++	rtx reg = gen_rtx_REG (TARGET_KNC ? TImode : V4SFmode, regno);
+ 	rtx mem;
+ 	unsigned int align = GET_MODE_ALIGNMENT (V4SFmode);
+ 
+ 	mem = choose_baseaddr (cfa_offset, &align);
+-	mem = gen_rtx_MEM (V4SFmode, mem);
++	mem = gen_rtx_MEM (TARGET_KNC ? TImode : V4SFmode, mem);
+ 
+ 	/* The location aligment depends upon the base register.  */
+ 	align = MIN (GET_MODE_ALIGNMENT (V4SFmode), align);

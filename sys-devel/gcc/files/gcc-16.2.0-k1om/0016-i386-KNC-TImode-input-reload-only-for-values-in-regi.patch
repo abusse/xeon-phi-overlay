@@ -1,0 +1,40 @@
+From 78e641c53cc19373a15c673ae14627635d1dce8d Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Thu, 1 Oct 2026 11:31:05 +0200
+Subject: [PATCH 16/22] i386: KNC TImode input reload only for values in
+ registers
+
+knc_reload_inti copies a TImode value into a vector register through a
+stack slot.  ix86_secondary_reload asked for it for any REG source,
+including a pseudo without a hard register: LRA's own secondary memory
+for a general-to-vector move is such a pseudo (class NO_REGS), so the
+value went through a second, fixed slot (SLOT_KNC_TEMP, SLOT_TEMP before
+GCC 15) allocated by assign_386_stack_local in the middle of LRA.  That
+slot ended up on top of a spill slot of a value still live (glibc's
+f32fmaf128 reread x after it had been overwritten by the fma result).
+A pseudo without a hard register is memory already and loads directly.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gcc/config/i386/i386.cc | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/gcc/config/i386/i386.cc b/gcc/config/i386/i386.cc
+index 32fb4558f6a..8e3ad0aa57e 100644
+--- a/gcc/config/i386/i386.cc
++++ b/gcc/config/i386/i386.cc
+@@ -21177,9 +21177,13 @@ static reg_class_t
+ ix86_secondary_reload (bool in_p, rtx x, reg_class_t rclass,
+ 		       machine_mode mode, secondary_reload_info *sri)
+ {
++  /* Only a value in a register needs the copy through memory; a pseudo
++     without a hard register (e.g. LRA's own secondary memory) is memory
++     already and loads directly.  */
+   if (TARGET_KNC
+       && in_p
+       && REG_P (x)
++      && true_regnum (x) >= 0
+       && SSE_CLASS_P (rclass)
+       && mode == TImode)
+     {

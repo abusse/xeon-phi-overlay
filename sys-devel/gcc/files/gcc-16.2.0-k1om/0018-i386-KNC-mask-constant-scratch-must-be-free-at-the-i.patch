@@ -1,0 +1,140 @@
+From 2d41d6140561ea2bab3bfc2da1c17f212dd5ac67 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Sun, 4 Oct 2026 08:24:30 +0200
+Subject: [PATCH 18/22] i386: KNC mask constant scratch must be free at the
+ insn
+
+ix86_split_load_mask_reg loads a mask constant through a general
+register after reload.  It took any register that was not live into
+the basic block and not set before the insn, which missed the insn's
+own uses and anything read after it: for a misaligned DImode load into
+a vector register (a struct of two floats, _Complex float) it picked
+the address register, so the second half was loaded through the mask
+constant (movl $1,%eax; kmov %eax,%k2; vpbroadcastd (%rax),...).  Take
+a register only if the insn does not mention it, nothing later in the
+block reads it before setting it in full, and it is not live out.  The
+fallback borrows %rax with push/pop; step over the red zone first, the
+push would overwrite it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gcc/config/i386/i386-expand.cc | 80 ++++++++++++++++++++++------------
+ 1 file changed, 53 insertions(+), 27 deletions(-)
+
+diff --git a/gcc/config/i386/i386-expand.cc b/gcc/config/i386/i386-expand.cc
+index 138b316443e..15ceccbc217 100644
+--- a/gcc/config/i386/i386-expand.cc
++++ b/gcc/config/i386/i386-expand.cc
+@@ -270,6 +270,44 @@ ix86_expand_clear (rtx dest)
+   emit_insn (tmp);
+ }
+ 
++/* Return true if general register REGNO can serve as a scratch register
++   right before INSN: INSN does not mention it, and no later insn in the
++   basic block reads it before setting it in full, nor is it live out of
++   the block.  */
++
++static bool
++ix86_knc_scratch_free_p (rtx insn, unsigned int regno)
++{
++  rtx_insn *start = as_a <rtx_insn *> (insn);
++  basic_block bb = BLOCK_FOR_INSN (start);
++  rtx reg = gen_rtx_REG (word_mode, regno);
++  rtx_insn *i;
++
++  if (reg_overlap_mentioned_p (reg, PATTERN (start)))
++    return false;
++  for (i = NEXT_INSN (start); i && i != NEXT_INSN (BB_END (bb));
++       i = NEXT_INSN (i))
++    {
++      const_rtx set;
++
++      if (!NONDEBUG_INSN_P (i))
++	continue;
++      if (reg_referenced_p (reg, PATTERN (i))
++	  || (CALL_P (i) && find_reg_fusage (i, USE, reg)))
++	return false;
++      if (CALL_P (i) && TEST_HARD_REG_BIT (regs_invalidated_by_call, regno))
++	return true;
++      set = set_of (reg, i);
++      if (set)
++	{
++	  const_rtx dest = GET_CODE (set) == CLOBBER ? XEXP (set, 0) : SET_DEST (set);
++	  /* Writing a register of 32 bits or more replaces all of it.  */
++	  return REG_P (dest) && GET_MODE_SIZE (GET_MODE (dest)) >= 4;
++	}
++    }
++  return !REGNO_REG_SET_P (DF_LR_OUT (bb), regno);
++}
++
+ /* Load CONST_INT into MASK register.  */
+ 
+ void
+@@ -278,37 +316,17 @@ ix86_split_load_mask_reg (rtx insn, rtx mask, rtx const_int)
+   enum machine_mode mode = GET_MODE (mask);
+   rtx scratch = NULL_RTX;
+   unsigned int regno;
+-  basic_block bb = BLOCK_FOR_INSN (insn);
+ 
+   /* Try to find a scratch register.  */
+   for (regno = 0; regno < FIRST_PSEUDO_REGISTER; regno++)
+     if (GENERAL_REGNO_P (regno)
+-	&& !REGNO_REG_SET_P (DF_LR_IN (bb), regno)
+-	&& !ix86_save_reg_1 (regno, true, true, true))
++	&& !fixed_regs[regno]
++	&& !(frame_pointer_needed && regno == HARD_FRAME_POINTER_REGNUM)
++	&& !ix86_save_reg_1 (regno, true, true, true)
++	&& ix86_knc_scratch_free_p (insn, regno))
+       {
+-	rtx_insn *next;
+-
+-	/* REGNO is dead when entering this basic block.  */
+-	for (next = BB_HEAD (bb); next != insn; next = NEXT_INSN (next))
+-	  if (NONDEBUG_INSN_P (next))
+-	    {
+-	      df_ref *def;
+-	      for (def = &DF_INSN_DEFS (next); *def; def++)
+-		if (DF_REF_TYPE (*def) == DF_REF_REG_DEF
+-		    && !(DF_REF_FLAGS (*def)
+-			 & (DF_REF_MUST_CLOBBER | DF_REF_MAY_CLOBBER))
+-		    && !DF_REF_IS_ARTIFICIAL (*def)
+-		    && regno == DF_REF_REGNO (*def))
+-		  break;
+-	    }
+-
+-	/* Use REGNO as scratch register if it isn't set before
+-	   INSN.  */
+-	if (next == insn)
+-	  {
+-	    scratch = gen_rtx_REG (mode, regno);
+-	    break;
+-	  }
++	scratch = gen_rtx_REG (mode, regno);
++	break;
+       }
+ 
+   if (scratch)
+@@ -318,13 +336,21 @@ ix86_split_load_mask_reg (rtx insn, rtx mask, rtx const_int)
+     }
+   else
+     {
+-      /* Use AX_REG for scratch register if we can't find one.  */
++      /* Borrow AX_REG.  The push writes below the stack pointer, so step
++	 over the red zone first.  */
+       rtx save = gen_rtx_REG (word_mode, AX_REG);
++      rtx sp = stack_pointer_rtx;
+       scratch = gen_rtx_REG (mode, AX_REG);
++      if (TARGET_RED_ZONE)
++	emit_insn (gen_rtx_fmt_ee (SET, VOIDmode, sp,
++				   plus_constant (Pmode, sp, -RED_ZONE_SIZE)));
+       emit_insn (gen_push (save));
+       emit_move_insn (scratch, const_int);
+       emit_move_insn (mask, scratch);
+       emit_insn (gen_pop (save));
++      if (TARGET_RED_ZONE)
++	emit_insn (gen_rtx_fmt_ee (SET, VOIDmode, sp,
++				   plus_constant (Pmode, sp, RED_ZONE_SIZE)));
+     }
+ }
+ 

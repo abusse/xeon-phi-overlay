@@ -1,0 +1,85 @@
+From 5a9d92f83561d738cd1414bea510e3c1331484ce Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Wed, 30 Sep 2026 09:13:19 +0200
+Subject: [PATCH 07/22] k1om as a host: native compiler
+
+From Intel MPSS 3.8.6, for a compiler that runs on the card: the driver
+gets the i386 host hooks (driver-i386.o), and libcpp takes the x86
+path: its SSE2 line scanner compiles to a stub when the host compiler
+has no SSE2 (it is never selected there; the SSSE3 probe fails on k1om
+anyway).  Intel's config.guess entry for k1om is dropped: config.guess
+already recognises k1om, in an earlier case.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gcc/config.host     | 4 ++--
+ libcpp/configure    | 2 +-
+ libcpp/configure.ac | 2 +-
+ libcpp/lex.cc       | 3 +++
+ 4 files changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/gcc/config.host b/gcc/config.host
+index 8b809a8d5dd..9bde1edb30b 100644
+--- a/gcc/config.host
++++ b/gcc/config.host
+@@ -125,10 +125,10 @@ case ${host} in
+     esac
+     ;;
+   i[34567]86-*-* \
+-  | x86_64-*-* )
++  | x86_64-*-* | k1om-*-*)
+     case ${target} in
+       i[34567]86-*-* \
+-      | x86_64-*-* )
++      | x86_64-*-* | k1om-*-*)
+ 	host_extra_gcc_objs="driver-i386.o"
+ 	host_xmake_file="${host_xmake_file} i386/x-i386"
+ 	;;
+diff --git a/libcpp/configure b/libcpp/configure
+index dea5ad963ca..8a8db2b7719 100755
+--- a/libcpp/configure
++++ b/libcpp/configure
+@@ -9135,7 +9135,7 @@ $as_echo "#define ENABLE_CANONICAL_SYSTEM_HEADERS 1" >>confdefs.h
+ fi
+ 
+ case $target in
+-  i?86-* | x86_64-*)
++  i?86-* | x86_64-* | k1om-*)
+     cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
+ 
+diff --git a/libcpp/configure.ac b/libcpp/configure.ac
+index 5f26356570d..53bf1aaca4d 100644
+--- a/libcpp/configure.ac
++++ b/libcpp/configure.ac
+@@ -196,7 +196,7 @@ if test $enable_canonical_system_headers != no; then
+ fi
+ 
+ case $target in
+-  i?86-* | x86_64-*)
++  i?86-* | x86_64-* | k1om-*)
+     AC_TRY_COMPILE([], [asm ("pshufb %xmm0, %xmm1")],
+       [AC_DEFINE([HAVE_SSSE3], [1],
+ 		 [Define to 1 if you can assemble SSSE3 insns.])])
+diff --git a/libcpp/lex.cc b/libcpp/lex.cc
+index 9652e7d5aae..d4eb572c8a9 100644
+--- a/libcpp/lex.cc
++++ b/libcpp/lex.cc
+@@ -296,6 +296,7 @@ __attribute__((__target__("sse2")))
+ #endif
+ search_line_sse2 (const uchar *s, const uchar *end ATTRIBUTE_UNUSED)
+ {
++#ifdef __SSE2__
+   typedef char v16qi __attribute__ ((__vector_size__ (16)));
+ 
+   const v16qi repl_nl = *(const v16qi *)repl_chars[0];
+@@ -339,6 +340,8 @@ search_line_sse2 (const uchar *s, const uchar *end ATTRIBUTE_UNUSED)
+      character.  Conversion to the byte index is trivial.  */
+   found = __builtin_ctz(found);
+   return (const uchar *)p + found;
++#endif
++  return 0;
+ }
+ 
+ #ifdef HAVE_SSSE3

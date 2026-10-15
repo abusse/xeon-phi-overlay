@@ -1,0 +1,72 @@
+From 5bbefed6cdf2190ebadc57071f9b15ae2457a279 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 11:04:53 +0200
+Subject: [PATCH 12/22] libgfortran: no AVX matmul variants for k1om
+
+libgfortran builds AVX, AVX2 and AVX-512 variants of matmul when its
+configure probes can compile them.  The AVX-512 probe only needs a
+masked vaddpd on zmm, which the k1om assembler accepts, so the variants
+were built and failed to assemble (vfmadd231sd and other instructions
+KNC does not have).  Skip the AVX, AVX2, AVX-512, FMA3 and FMA4 probes
+for k1om; the AVX128 probe stays, since it defines an automake
+conditional, and its matmul files compile empty without HAVE_AVX.
+
+libgfortran/configure regenerated with autoconf 2.69.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ libgfortran/configure    | 7 +++++++
+ libgfortran/configure.ac | 7 +++++++
+ 2 files changed, 14 insertions(+)
+
+diff --git a/libgfortran/configure b/libgfortran/configure
+index 26e92420693..3c822d6dec4 100755
+--- a/libgfortran/configure
++++ b/libgfortran/configure
+@@ -32351,6 +32351,11 @@ $as_echo "#define HAVE_CRLF 1" >>confdefs.h
+ 
+ fi
+ 
++# KNC has none of these, but the k1om assembler takes some of the
++# AVX-512 forms the probes use.
++case "$target" in
++  k1om-*) ;;
++  *)
+ # Check whether we support AVX extensions
+ 
+   ac_save_CFLAGS="$CFLAGS"
+@@ -32508,6 +32513,8 @@ fi
+ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+   CFLAGS="$ac_save_CFLAGS"
+ 
++    ;;
++esac
+ 
+ # Check if AVX128 works
+ 
+diff --git a/libgfortran/configure.ac b/libgfortran/configure.ac
+index da9ae604cab..680631fa90c 100644
+--- a/libgfortran/configure.ac
++++ b/libgfortran/configure.ac
+@@ -805,6 +805,11 @@ LIBGFOR_CHECK_UNLINK_OPEN_FILE
+ # Check whether line terminator is LF or CRLF
+ LIBGFOR_CHECK_CRLF
+ 
++# KNC has none of these, but the k1om assembler takes some of the
++# AVX-512 forms the probes use.
++case "$target" in
++  k1om-*) ;;
++  *)
+ # Check whether we support AVX extensions
+ LIBGFOR_CHECK_AVX
+ 
+@@ -819,6 +824,8 @@ LIBGFOR_CHECK_FMA3
+ 
+ # Check for FMA4 extensions
+ LIBGFOR_CHECK_FMA4
++    ;;
++esac
+ 
+ # Check if AVX128 works
+ LIBGFOR_CHECK_AVX128

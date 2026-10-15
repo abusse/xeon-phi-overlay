@@ -1,0 +1,39 @@
+From 0e3acb6ab4c5e26ab9a8f8fc30de58684d74ebc3 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 10:05:37 +0200
+Subject: [PATCH 11/22] libitm: no SSE barriers for KNC
+
+libitm's x86 port builds x86_sse.cc with -msse, which on k1om gives SSE
+moves the k1om assembler rejects.  KNC has no SSE or MMX, so the
+compiler never emits calls to the M64/M128 barriers there; compile the
+file empty for KNC.  The AVX barriers already cope: without an AVX
+assembler they are emitted as raw bytes and only reached on AVX
+hardware.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ libitm/config/x86/x86_sse.cc | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/libitm/config/x86/x86_sse.cc b/libitm/config/x86/x86_sse.cc
+index 5bd50e238c7..a13b54dfffb 100644
+--- a/libitm/config/x86/x86_sse.cc
++++ b/libitm/config/x86/x86_sse.cc
+@@ -25,6 +25,10 @@
+ #include "libitm_i.h"
+ #include "dispatch.h"
+ 
++// KNC has no SSE or MMX: nothing uses these barriers there, and the
++// k1om assembler rejects the SSE moves -msse makes of them.
++#ifndef __KNC__
++
+ // ??? Use memcpy for now, until we have figured out how to best instantiate
+ // these loads/stores.
+ CREATE_DISPATCH_FUNCTIONS_T_MEMCPY(M64, GTM::abi_disp()->, )
+@@ -41,3 +45,5 @@ _ITM_LM128 (const _ITM_TYPE_M128 *ptr)
+ {
+   GTM::GTM_LB (ptr, sizeof (*ptr));
+ }
++
++#endif // __KNC__

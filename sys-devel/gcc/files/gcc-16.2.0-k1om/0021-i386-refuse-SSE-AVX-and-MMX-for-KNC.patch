@@ -1,0 +1,72 @@
+From a31edbb7dbb9aa2f9c57e1fb423700b4e3879069 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Sun, 4 Oct 2026 09:24:18 +0200
+Subject: [PATCH 21/22] i386: refuse SSE, AVX and MMX for KNC
+
+-msse*, -mavx*, -mmmx and target("...") attributes asking for those
+ISAs were accepted on KNC and produced instructions the k1om assembler
+rejects, or internal errors; configure probes then took SSE/AVX for
+present.  Report an error for them on the command line and in target
+attributes.  #pragma GCC target, as used by the intrinsic headers,
+stays allowed: <immintrin.h> keeps working, and functions using its
+intrinsics fail to inline.  libcpp no longer builds its SSE line
+scanners for a KNC host, they were compiled through target attributes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gcc/config/i386/i386-options.cc | 20 ++++++++++++++++++++
+ libcpp/lex.cc                   |  2 +-
+ 2 files changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/gcc/config/i386/i386-options.cc b/gcc/config/i386/i386-options.cc
+index 3caf584a6a7..e3e7be9ee89 100644
+--- a/gcc/config/i386/i386-options.cc
++++ b/gcc/config/i386/i386-options.cc
+@@ -1579,6 +1579,20 @@ ix86_valid_target_attribute_p (tree fndecl,
+   if (new_target == error_mark_node)
+     ret = false;
+ 
++  /* Likewise for a function asking for them, unless a #pragma GCC target
++     (as in <immintrin.h>) is in effect: the front end merges its options
++     into the attribute.  Functions using such intrinsics then fail to
++     inline.  */
++  else if (current_target_pragma == NULL_TREE
++	   && (func_options.x_ix86_isa_flags2 & OPTION_MASK_ISA2_KNC)
++	   && (func_options.x_ix86_isa_flags
++	       & (OPTION_MASK_ISA_SSE | OPTION_MASK_ISA_MMX)))
++    {
++      error_at (fndecl ? DECL_SOURCE_LOCATION (fndecl) : input_location,
++		"SSE, AVX and MMX instructions are not supported for KNC");
++      ret = false;
++    }
++
+   else if (new_target)
+     {
+       if (DECL_FUNCTION_SPECIFIC_TARGET (fndecl) == NULL_TREE
+@@ -2864,6 +2878,12 @@ ix86_option_override_internal (bool main_args_p,
+   if (TARGET_KNC && main_args_p && !opts_set->x_dwarf_version)
+     opts->x_dwarf_version = 4;
+ 
++  /* KNC has none of the SSE, AVX or MMX instruction sets: refuse them
++     when asked for, so that configure probes for them fail.  */
++  if (main_args_p && TARGET_KNC
++      && (opts->x_ix86_isa_flags & (OPTION_MASK_ISA_SSE | OPTION_MASK_ISA_MMX)))
++    error ("SSE, AVX and MMX instructions are not supported for KNC");
++
+   /* For sane SSE instruction set generation we need fcomi instruction.
+      It is safe to enable all CMOVE instructions.  Also, RDRAND intrinsic
+      expands to a sequence that includes conditional move. */
+diff --git a/libcpp/lex.cc b/libcpp/lex.cc
+index d4eb572c8a9..823f3a61bf2 100644
+--- a/libcpp/lex.cc
++++ b/libcpp/lex.cc
+@@ -270,7 +270,7 @@ search_line_acc_char (const uchar *s, const uchar *end ATTRIBUTE_UNUSED)
+    extensions used, so SSE4.2 executables cannot run on machines that
+    don't support that extension.  */
+ 
+-#if (GCC_VERSION >= 4005) && (__GNUC__ >= 5 || !defined(__PIC__)) && (defined(__i386__) || defined(__x86_64__)) && !(defined(__sun__) && defined(__svr4__))
++#if (GCC_VERSION >= 4005) && (__GNUC__ >= 5 || !defined(__PIC__)) && (defined(__i386__) || defined(__x86_64__)) && !(defined(__sun__) && defined(__svr4__)) && !defined(__KNC__)
+ 
+ /* Replicated character data to be shared between implementations.
+    Recall that outside of a context with vector support we can't

@@ -1,0 +1,122 @@
+From 199aee0d843a776e30cb53d3b728f7d947806505 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 05:55:10 +0200
+Subject: [PATCH 10/22] i386: KNC misaligned __float128 loads
+
+A __float128 that is not 16-byte aligned (e.g. a packed struct member)
+was loaded into a vector register with vbroadcasti32x4, which faults
+(#GP) on such an address.  Intel's guard in *movtf_internal never took
+effect: it sat behind "TARGET_64BIT ||", which is always true on KNC,
+and tested SImode instead of TFmode alignment.
+
+Reject misaligned TFmode memory sources in *movtf_internal on KNC and
+let ix86_expand_move send such moves to movmisaligntf, as it already
+does for SFmode and DFmode (copy through an aligned stack slot and a
+general register).  Stores need no guard: they take the secondary
+reload path, where knc_reload_outtf already handles misaligned
+destinations.  Rejecting them as well would leave the store emitted by
+the KNC TF push split (before register allocation, with the push's
+8-byte MEM_ALIGN) unrecognizable.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gcc/config/i386/i386-expand.cc | 42 +++++++++++++++++++---------------
+ gcc/config/i386/i386.md        |  9 +++-----
+ 2 files changed, 26 insertions(+), 25 deletions(-)
+
+diff --git a/gcc/config/i386/i386-expand.cc b/gcc/config/i386/i386-expand.cc
+index 736233085cd..138b316443e 100644
+--- a/gcc/config/i386/i386-expand.cc
++++ b/gcc/config/i386/i386-expand.cc
+@@ -484,7 +484,7 @@ ix86_expand_move (machine_mode mode, rtx operands[])
+   op1 = operands[1];
+ 
+   if (TARGET_KNC
+-      && (mode == SFmode || mode == DFmode)
++      && (mode == SFmode || mode == DFmode || mode == TFmode)
+       && ((REG_P (op0)
+ 	   && MEM_P (op1)
+ 	   && MEM_ALIGN (op1) < GET_MODE_ALIGNMENT (mode))
+@@ -495,8 +495,10 @@ ix86_expand_move (machine_mode mode, rtx operands[])
+     {
+       if (mode == SFmode)
+ 	emit_insn (gen_movmisalignsf (op0, op1));
+-      else
++      else if (mode == DFmode)
+ 	emit_insn (gen_movmisaligndf (op0, op1));
++      else
++	emit_insn (gen_movmisaligntf (op0, op1));
+       return;
+     }
+ 
+@@ -699,6 +701,25 @@ ix86_expand_move (machine_mode mode, rtx operands[])
+ 		}
+ 	    }
+ 	}
++
++      if (TARGET_KNC
++	  && (mode == SFmode || mode == DFmode || mode == TFmode)
++	  && ((REG_P (op0)
++	       && MEM_P (op1)
++	       && MEM_ALIGN (op1) < GET_MODE_ALIGNMENT (mode))
++	      || (REG_P (op1)
++		  && MEM_P (op0)
++		  && MEM_ALIGN (op0) < GET_MODE_ALIGNMENT (mode)))
++	  && can_create_pseudo_p ())
++	{
++	  if (mode == SFmode)
++	    emit_insn (gen_movmisalignsf (op0, op1));
++	  else if (mode == DFmode)
++	    emit_insn (gen_movmisaligndf (op0, op1));
++	  else
++	    emit_insn (gen_movmisaligntf (op0, op1));
++	  return;
++	}
+     }
+ 
+   /* Special case inserting 64-bit values into a TImode register.  */
+@@ -736,23 +757,6 @@ ix86_expand_move (machine_mode mode, rtx operands[])
+ 	  op1 = gen_rtx_ASHIFT (TImode, op1, GEN_INT (64));
+ 	  op1 = gen_rtx_IOR (TImode, tmp, op1);
+ 	}
+-
+-      if (TARGET_KNC
+-	  && (mode == SFmode || mode == DFmode)
+-	  && ((REG_P (op0)
+-	       && MEM_P (op1)
+-	       && MEM_ALIGN (op1) < GET_MODE_ALIGNMENT (mode))
+-	      || (REG_P (op1)
+-		  && MEM_P (op0)
+-		  && MEM_ALIGN (op0) < GET_MODE_ALIGNMENT (mode)))
+-	  && can_create_pseudo_p ())
+-	{
+-	  if (mode == SFmode)
+-	    emit_insn (gen_movmisalignsf (op0, op1));
+-	  else
+-	    emit_insn (gen_movmisaligndf (op0, op1));
+-	  return;
+-	}
+     }
+ 
+   emit_insn (gen_rtx_SET (op0, op1));
+diff --git a/gcc/config/i386/i386.md b/gcc/config/i386/i386.md
+index f6cf9bd4c8a..5055edd7fa2 100644
+--- a/gcc/config/i386/i386.md
++++ b/gcc/config/i386/i386.md
+@@ -4170,12 +4170,9 @@
+ (define_insn "*movtf_internal"
+   [(set (match_operand:TF 0 "nonimmediate_operand" "=v,v ,m,?*r ,!o")
+ 	(match_operand:TF 1 "general_operand"	   "C ,vm,v,*roF,*rC"))]
+-  "(TARGET_64BIT || TARGET_SSE
+-    || (TARGET_KNC
+-	&& (!MEM_P (operands[0])
+-	    || !misaligned_operand(operands[0], SImode))
+-	&& (!MEM_P (operands[1])
+-	    || !misaligned_operand(operands[1], SImode))))
++  "(TARGET_64BIT || TARGET_SSE)
++   && !(TARGET_KNC
++	&& MEM_P (operands[1]) && misaligned_operand (operands[1], TFmode))
+    && !(MEM_P (operands[0]) && MEM_P (operands[1]))
+    && (lra_in_progress || reload_completed
+        || !CONST_DOUBLE_P (operands[1])

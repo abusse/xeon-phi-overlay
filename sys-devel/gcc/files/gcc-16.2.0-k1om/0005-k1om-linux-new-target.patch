@@ -1,0 +1,394 @@
+From ad8bbdddad9a294c152dc7786faa1ddfbff4afe1 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Tue, 29 Sep 2026 18:16:04 +0200
+Subject: [PATCH 05/22] k1om-*-linux: new target
+
+From Intel MPSS 3.8.6: the k1om-*-linux* target (and the older
+x86_64-k1om-linux* spelling) is x86_64-linux with linuxk1om.h on top:
+KNC as the default ISA for both -march and -mtune, 128-bit long double,
+the /lib64/ld-linux-k1om.so.2 dynamic linker, "as --march=k1om" and
+"ld -m elf_k1om".  TLS, PIE and assembler probes take the x86-64 path.
+
+gcc/configure is regenerated from its sources.  Intel's tree had it
+edited by hand: the --64 assembler probe flag for k1om is carried here
+in acinclude.m4, and instead of hard-wiring gcc_cv_ld_ro_rw_mix=
+read-write the read-only/read-write section mixing probe assembles its
+objects with --march=k1om (a bare gas 2.22 emits x86-64 objects, which
+the k1om ld rejects, so the probe came out "unknown" and
+.gcc_except_table became writable).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ gcc/acinclude.m4            |  4 ++--
+ gcc/config.gcc              | 39 ++++++++++++++++++++----------
+ gcc/config/i386/linuxk1om.h | 47 +++++++++++++++++++++++++++++++++++++
+ gcc/configure               | 23 +++++++++++-------
+ gcc/configure.ac            | 19 +++++++++------
+ 5 files changed, 102 insertions(+), 30 deletions(-)
+ create mode 100644 gcc/config/i386/linuxk1om.h
+
+diff --git a/gcc/acinclude.m4 b/gcc/acinclude.m4
+index a8962a9b29c..61d436e51f0 100644
+--- a/gcc/acinclude.m4
++++ b/gcc/acinclude.m4
+@@ -505,7 +505,7 @@ AC_DEFUN([gcc_GAS_FLAGS],
+     as_32_opt=-m32
+     as_64_opt=-m64
+     ;;
+-  i?86-*-*:* | x86_64-*-*:* | sparc*-*-*:*)
++  i?86-*-*:* | x86_64-*-*:* | k1om-*-*:* | sparc*-*-*:*)
+     dnl Otherwise x86 and SPARC use GNU assembler options --32/--64/--x32.
+     case "$target" in
+       i?86-*-* | sparc-*-*)
+@@ -517,7 +517,7 @@ AC_DEFUN([gcc_GAS_FLAGS],
+       x86_64-*-linux-gnuabi32 | x86_64-*-mingw32abi32)
+ 	gcc_cv_as_flags=--32
+ 	;;
+-      x86_64-*-* | sparcv9-*-* | sparc64-*-*)
++      x86_64-*-* | k1om-*-* | sparcv9-*-* | sparc64-*-*)
+ 	gcc_cv_as_flags=--64
+ 	;;
+     esac
+diff --git a/gcc/config.gcc b/gcc/config.gcc
+index bafae2dc883..379b41f586b 100644
+--- a/gcc/config.gcc
++++ b/gcc/config.gcc
+@@ -430,7 +430,7 @@ fido-*-*)
+ 	extra_headers=math-68881.h
+ 	extra_options="${extra_options} m68k/m68k-tables.opt"
+         ;;
+-i[34567]86-*-* | x86_64-*-*)
++i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+ 	cpu_type=i386
+ 	c_target_objs="i386-c.o"
+ 	cxx_target_objs="i386-c.o"
+@@ -688,7 +688,7 @@ i[34567]86-*-*)
+ 	;;
+ x86_64-*-darwin*)
+ 	;;
+-x86_64-*-*)
++x86_64-*-* | k1om-*-*)
+         # Pick a default with_abi and with_multilib_list for m32
+         # restricted toolchains
+         case ${target} in
+@@ -2120,11 +2120,11 @@ i[34567]86-*-linux* | i[34567]86-*-kfreebsd*-gnu | i[34567]86-*-gnu* | i[34567]8
+ 		;;
+ 	esac
+ 	;;
+-x86_64-*-linux* | x86_64-*-kfreebsd*-gnu | x86_64-*-gnu*)
++x86_64-*-linux* | x86_64-*-kfreebsd*-gnu | x86_64-*-gnu* | k1om-*-linux*)
+ 	tm_file="${tm_file} i386/unix.h i386/att.h elfos.h gnu-user.h glibc-stdint.h \
+ 		 i386/x86-64.h i386/gnu-user-common.h i386/gnu-user64.h"
+ 	case ${target} in
+-	x86_64-*-linux*)
++	x86_64-*-linux* | k1om-*-linux*)
+ 		tm_file="${tm_file} linux.h linux-android.h i386/linux-common.h i386/linux64.h"
+ 		extra_options="${extra_options} linux-android.opt"
+ 	  	;;
+@@ -2135,6 +2135,11 @@ x86_64-*-linux* | x86_64-*-kfreebsd*-gnu | x86_64-*-gnu*)
+ 		tm_file="${tm_file} gnu.h i386/gnu64.h"
+ 		;;
+ 	esac
++	case ${target} in
++	x86_64-k1om-linux* | k1om-*-linux*)
++	  tm_file="${tm_file} i386/linuxk1om.h"
++	  ;;
++	esac;
+ 	tmake_file="${tmake_file} i386/t-linux64"
+ 	x86_multilibs="${with_multilib_list}"
+ 	if test "$x86_multilibs" = "default"; then
+@@ -3716,10 +3721,10 @@ m32c-*-elf*)
+ esac
+ 
+ case ${target} in
+-i[34567]86-*-linux* | x86_64-*-linux*)
++i[34567]86-*-linux* | x86_64-*-linux* | k1om-*-linux*)
+ 	tmake_file="${tmake_file} i386/t-pmm_malloc i386/t-i386"
+ 	;;
+-i[34567]86-*-* | x86_64-*-*)
++i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+ 	tmake_file="${tmake_file} i386/t-gmm_malloc i386/t-i386"
+ 	;;
+ powerpc*-*-* | rs6000-*-*)
+@@ -4030,6 +4035,10 @@ case ${target} in
+ 	;;
+     esac
+     ;;
++  x86_64-k1om-linux* | k1om-*-linux*)
++    arch=knc
++    cpu=knc
++    ;;
+   x86_64-*-*)
+     case ${target_noncanonical} in
+       znver1-*)
+@@ -4155,6 +4164,9 @@ if test x$with_cpu = x ; then
+     i[34567]86-*-elfiamcu)
+       with_cpu=lakemont
+       ;;
++    k1om-*-*)
++      with_cpu=knc
++      ;;
+     i[34567]86-*-*|x86_64-*-*)
+       with_cpu=$cpu
+       ;;
+@@ -4255,6 +4267,9 @@ if test x$with_arch = x ; then
+ 	with_arch=pentium4
+       fi
+       ;;
++    k1om-*-*)
++      with_arch=knc
++      ;;
+     x86_64-*-*)
+       with_arch=$arch
+       ;;
+@@ -4275,7 +4290,7 @@ if test x$with_arch = x ; then
+       # Default arch is set via TARGET_SUBTARGET32_ISA_DEFAULT
+       # and TARGET_SUBTARGET64_ISA_DEFAULT in config/i386/darwin.h.
+       ;;
+-    i[34567]86-*-*|x86_64-*-*)
++    i[34567]86-*-*|x86_64-*-*|k1om-*-*)
+       if test x$with_arch_32 != x || test x$with_arch_64 != x; then
+ 	if test x$with_arch_32 = x; then
+ 	  with_arch_32=$with_arch
+@@ -4325,7 +4340,7 @@ fi
+ # Support --with-fpmath.
+ if test x$with_fpmath != x; then
+   case ${target} in
+-    i[34567]86-*-* | x86_64-*-*)
++    i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+       case ${with_fpmath} in
+       avx)
+ 	tm_file="${tm_file} i386/avxmath.h"
+@@ -4784,14 +4799,14 @@ case "${target}" in
+ 		esac
+ 		;;
+ 
+-	i[34567]86-*-* | x86_64-*-*)
++	i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+ 		supported_defaults="abi arch arch_32 arch_64 cpu cpu_32 cpu_64 tune tune_32 tune_64 tls"
+ 		for which in arch arch_32 arch_64 cpu cpu_32 cpu_64 tune tune_32 tune_64; do
+ 			eval "val=\$with_$which"
+ 			case " $x86_archs " in
+ 			*" ${val} "*)
+ 				case "${target}" in
+-				  x86_64-*-*)
++				  x86_64-*-* | k1om-*-*)
+ 				      case "x$which" in
+ 					*_32)
+ 						;;
+@@ -6120,7 +6135,7 @@ case ${target} in
+ 
+ 	i[34567]86-*-darwin* | x86_64-*-darwin*)
+ 		;;
+-	i[34567]86-*-linux* | x86_64-*-linux*)
++	i[34567]86-*-linux* | x86_64-*-linux* | k1om-*-linux*)
+ 		extra_objs="${extra_objs} gnu-property.o"
+ 		tmake_file="$tmake_file i386/t-linux i386/t-gnu-property"
+ 		;;
+@@ -6350,7 +6365,7 @@ then
+ fi
+ 
+ case ${target} in
+-i[34567]86-*-* | x86_64-*-*)
++i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+ 	if test x$enable_as_accelerator = xyes; then
+ 		extra_programs="mkoffload\$(exeext)"
+ 	fi
+diff --git a/gcc/config/i386/linuxk1om.h b/gcc/config/i386/linuxk1om.h
+new file mode 100644
+index 00000000000..f69b7422f2e
+--- /dev/null
++++ b/gcc/config/i386/linuxk1om.h
+@@ -0,0 +1,47 @@
++/* Definitions for Intel K1OM running Linux-based GNU systems with ELF
++   format.
++   Copyright (C) 2011
++   Free Software Foundation, Inc.
++
++This file is part of GCC.
++
++GCC is free software; you can redistribute it and/or modify
++it under the terms of the GNU General Public License as published by
++the Free Software Foundation; either version 3, or (at your option)
++any later version.
++
++GCC is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++#undef TARGET_SUBTARGET_ISA2_DEFAULT
++#define TARGET_SUBTARGET_ISA2_DEFAULT OPTION_MASK_ISA2_KNC
++
++#undef TARGET_SUBTARGET64_DEFAULT
++#define TARGET_SUBTARGET64_DEFAULT (MASK_128BIT_LONG_DOUBLE)
++
++#undef GLIBC_DYNAMIC_LINKER64
++#define GLIBC_DYNAMIC_LINKER64 "/lib64/ld-linux-k1om.so.2"
++
++#undef ASM_SPEC
++#define ASM_SPEC "%{" SPEC_32 ":--32} %{" SPEC_64 ":--march=k1om}"
++
++#undef	LINK_SPEC
++#define LINK_SPEC "%{" SPEC_64 ":-m elf_k1om} %{" SPEC_32 ":-m elf_i386} \
++  %{shared:-shared} \
++  %{!shared: \
++    %{!static: \
++      %{rdynamic:-export-dynamic} \
++      %{" SPEC_32 ":-dynamic-linker " GLIBC_DYNAMIC_LINKER32 "} \
++      %{" SPEC_64 ":-dynamic-linker " GLIBC_DYNAMIC_LINKER64 "}} \
++    %{static:-static}}"
+diff --git a/gcc/configure b/gcc/configure
+index 4a90e86ed9f..35260d8ebc2 100755
+--- a/gcc/configure
++++ b/gcc/configure
+@@ -26248,7 +26248,7 @@ else
+     as_32_opt=-m32
+     as_64_opt=-m64
+     ;;
+-  i?86-*-*:* | x86_64-*-*:* | sparc*-*-*:*)
++  i?86-*-*:* | x86_64-*-*:* | k1om-*-*:* | sparc*-*-*:*)
+         case "$target" in
+       i?86-*-* | sparc-*-*)
+ 	gcc_cv_as_flags=--32
+@@ -26259,7 +26259,7 @@ else
+       x86_64-*-linux-gnuabi32 | x86_64-*-mingw32abi32)
+ 	gcc_cv_as_flags=--32
+ 	;;
+-      x86_64-*-* | sparcv9-*-* | sparc64-*-*)
++      x86_64-*-* | k1om-*-* | sparcv9-*-* | sparc64-*-*)
+ 	gcc_cv_as_flags=--64
+ 	;;
+     esac
+@@ -26832,14 +26832,19 @@ if test $in_tree_ld = yes ; then
+     gcc_cv_ld_ro_rw_mix=read-write
+   fi
+ elif test x"$gcc_cv_as" != x -a x"$gcc_cv_ld" != x -a x"$gcc_cv_objdump" != x ; then
++  # A bare k1om gas emits x86-64 objects, which the k1om ld rejects.
++  case "$target" in
++    k1om-*) ro_rw_as_opt=--march=k1om ;;
++    *) ro_rw_as_opt= ;;
++  esac
+   echo '.section myfoosect, "a"' > conftest1.s
+   echo '.section myfoosect, "aw"' > conftest2.s
+   echo '.byte 1' >> conftest2.s
+   echo '.section myfoosect, "a"' > conftest3.s
+   echo '.byte 0' >> conftest3.s
+-  if $gcc_cv_as -o conftest1.o conftest1.s > /dev/null 2>&1 \
+-     && $gcc_cv_as -o conftest2.o conftest2.s > /dev/null 2>&1 \
+-     && $gcc_cv_as -o conftest3.o conftest3.s > /dev/null 2>&1; then
++  if $gcc_cv_as $ro_rw_as_opt -o conftest1.o conftest1.s > /dev/null 2>&1 \
++     && $gcc_cv_as $ro_rw_as_opt -o conftest2.o conftest2.s > /dev/null 2>&1 \
++     && $gcc_cv_as $ro_rw_as_opt -o conftest3.o conftest3.s > /dev/null 2>&1; then
+     # Note the Wild linker has --gc-sections on by default.
+     if $gcc_cv_ld -shared -o conftest1.so conftest1.o \
+           conftest2.o conftest3.o --no-gc-sections > /dev/null 2>&1 \
+@@ -28102,7 +28107,7 @@ foo:	.long	25
+ .word foo(tlsldm)
+ .word foo(tlsldo)'
+ 	;;
+-  i?86-*-* | x86_64-*-*)
++  i?86-*-* | x86_64-*-* | k1om-*-*)
+     case "$target:$gas" in
+       i?86-*-solaris2*:no | x86_64-*-solaris2*:no)
+ 	tls_section_flag=t
+@@ -28134,7 +28139,7 @@ foo:	.long	25
+ 	subl	\$foo@tpoff, %eax
+ 	leal	foo@ntpoff(%ecx), %eax"
+ 	;;
+-      x86_64-*-*)
++      x86_64-*-* | k1om-*-*)
+ 	tls_as_opt="$as_64_opt"
+ 	conftest_s="$conftest_s
+ foo:	.long	25
+@@ -29369,7 +29374,7 @@ fi
+ 
+     ;;
+ 
+-  i[34567]86-*-* | x86_64-*-*)
++  i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+     case $target_os in
+       cygwin*)
+ 	# Full C++ conformance when using a shared libstdc++-v3 requires some
+@@ -32770,7 +32775,7 @@ if test $gcc_cv_ld_pie = yes ; then
+   elif test x"$gcc_cv_as" != x -a x"$gcc_cv_ld" != x ; then
+     # Check if linker supports -pie option with copy reloc
+     case "$target" in
+-    i?86-*-linux* | x86_64-*-linux*)
++    i?86-*-linux* | x86_64-*-linux* | k1om-*-linux*)
+       cat > conftest1.s <<EOF
+ 	.globl	a_glob
+ 	.data
+diff --git a/gcc/configure.ac b/gcc/configure.ac
+index abf5e4f4e7e..496648b8133 100644
+--- a/gcc/configure.ac
++++ b/gcc/configure.ac
+@@ -3414,14 +3414,19 @@ if test $in_tree_ld = yes ; then
+     gcc_cv_ld_ro_rw_mix=read-write
+   fi
+ elif test x"$gcc_cv_as" != x -a x"$gcc_cv_ld" != x -a x"$gcc_cv_objdump" != x ; then
++  # A bare k1om gas emits x86-64 objects, which the k1om ld rejects.
++  case "$target" in
++    k1om-*) ro_rw_as_opt=--march=k1om ;;
++    *) ro_rw_as_opt= ;;
++  esac
+   echo '.section myfoosect, "a"' > conftest1.s
+   echo '.section myfoosect, "aw"' > conftest2.s
+   echo '.byte 1' >> conftest2.s
+   echo '.section myfoosect, "a"' > conftest3.s
+   echo '.byte 0' >> conftest3.s
+-  if $gcc_cv_as -o conftest1.o conftest1.s > /dev/null 2>&1 \
+-     && $gcc_cv_as -o conftest2.o conftest2.s > /dev/null 2>&1 \
+-     && $gcc_cv_as -o conftest3.o conftest3.s > /dev/null 2>&1; then
++  if $gcc_cv_as $ro_rw_as_opt -o conftest1.o conftest1.s > /dev/null 2>&1 \
++     && $gcc_cv_as $ro_rw_as_opt -o conftest2.o conftest2.s > /dev/null 2>&1 \
++     && $gcc_cv_as $ro_rw_as_opt -o conftest3.o conftest3.s > /dev/null 2>&1; then
+     # Note the Wild linker has --gc-sections on by default.
+     if $gcc_cv_ld -shared -o conftest1.so conftest1.o \
+           conftest2.o conftest3.o --no-gc-sections > /dev/null 2>&1 \
+@@ -3992,7 +3997,7 @@ foo:	.long	25
+ .word foo(tlsldm)
+ .word foo(tlsldo)'
+ 	;;
+-  i?86-*-* | x86_64-*-*)
++  i?86-*-* | x86_64-*-* | k1om-*-*)
+     case "$target:$gas" in
+       i?86-*-solaris2*:no | x86_64-*-solaris2*:no)
+ 	tls_section_flag=t
+@@ -4025,7 +4030,7 @@ foo:	.long	25
+ 	subl	\$foo@tpoff, %eax
+ 	leal	foo@ntpoff(%ecx), %eax"
+ 	;;
+-      x86_64-*-*)
++      x86_64-*-* | k1om-*-*)
+ 	tls_as_opt="$as_64_opt"
+ 	conftest_s="$conftest_s
+ foo:	.long	25
+@@ -4807,7 +4812,7 @@ EOF
+     ;;
+ 
+ changequote(,)dnl
+-  i[34567]86-*-* | x86_64-*-*)
++  i[34567]86-*-* | x86_64-*-* | k1om-*-*)
+ changequote([,])dnl
+     case $target_os in
+       cygwin*)
+@@ -6142,7 +6147,7 @@ if test $gcc_cv_ld_pie = yes ; then
+   elif test x"$gcc_cv_as" != x -a x"$gcc_cv_ld" != x ; then
+     # Check if linker supports -pie option with copy reloc
+     case "$target" in
+-    i?86-*-linux* | x86_64-*-linux*)
++    i?86-*-linux* | x86_64-*-linux* | k1om-*-linux*)
+       cat > conftest1.s <<EOF
+ 	.globl	a_glob
+ 	.data
