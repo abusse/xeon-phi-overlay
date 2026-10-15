@@ -1,0 +1,172 @@
+From c95e0aedf3d31d1b1993a2f33d3df44b6780fbee Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 28 Sep 2026 09:57:32 +0200
+Subject: [PATCH 05/16] x86/mic: early boot and CPU setup for KNC
+
+From Intel MPSS 3.8.6:
+ - CR4: the KNF/KNC silicon bug that makes CR4.PSE on the BSP break
+   TLB sharing between the threads of a core, so PSE stays off (2M
+   and 64k pages are handled by the KNC pte helpers); CR4.PGE is a
+   reserved bit (no global pages).
+ - cpu/intel.c, cpu/common.c: family 11 has no MSR_IA32_MISC_ENABLE
+   and no MSR_IA32_UCODE_REV (the accesses #GP), no usable rep string
+   microcode (REP_GOOD cleared), no CPUID brand string (model name by
+   stepping: B0/B1/C0).
+ - tsc.c: no PIT/HPET/PM timer on the card; the TSC is calibrated
+   from the SBOX reference through the platform hooks.
+
+Adaptations for 6.18:
+ - head_64.S: the CR4 setup is mask based since 6.12; KNC skips the
+   PSE set and the PGE set after the CR3 switch. 6.15 made PGE a
+   genuinely required feature (Kconfig.cpufeatures), so
+   init_mem_mapping() wrote CR4.PGE unconditionally (#GP in
+   native_write_cr4 from setup_arch); X86_REQUIRED_FEATURE_PGE is
+   gated on !X86_EARLYMIC.
+ - intel.c: the family guards are expressed on x86_vfm.
+ - tsc.c: since 4.15 calibration is split into tsc_early_init() (runs
+   before the SBOX is mappable, the hook returns 0) and a late retry
+   that hard-codes PIT/HPET/PM-timer; on EARLYMIC the retry uses the
+   platform hooks.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ arch/x86/Kconfig.cpufeatures |  2 +-
+ arch/x86/kernel/cpu/common.c | 19 +++++++++++++++++++
+ arch/x86/kernel/cpu/intel.c  | 13 ++++++++++---
+ arch/x86/kernel/head_64.S    |  5 ++++-
+ arch/x86/mm/init.c           |  7 +++++++
+ 5 files changed, 41 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/Kconfig.cpufeatures b/arch/x86/Kconfig.cpufeatures
+index c85bf3e281b0..9f9b7c9c4632 100644
+--- a/arch/x86/Kconfig.cpufeatures
++++ b/arch/x86/Kconfig.cpufeatures
+@@ -78,7 +78,7 @@ config X86_REQUIRED_FEATURE_PSE
+ 
+ config X86_REQUIRED_FEATURE_PGE
+ 	def_bool y
+-	depends on X86_64 && !PARAVIRT_XXL
++	depends on X86_64 && !PARAVIRT_XXL && !X86_EARLYMIC	# CR4.PGE is reserved on KNC
+ 
+ config X86_REQUIRED_FEATURE_MSR
+ 	def_bool y
+diff --git a/arch/x86/kernel/cpu/common.c b/arch/x86/kernel/cpu/common.c
+index 02d97834a1d4..fae8948a6c9b 100644
+--- a/arch/x86/kernel/cpu/common.c
++++ b/arch/x86/kernel/cpu/common.c
+@@ -2043,6 +2043,25 @@ static void identify_cpu(struct cpuinfo_x86 *c)
+ 		p = table_lookup_model(c);
+ 		if (p)
+ 			strcpy(c->x86_model_id, p);
++#ifdef CONFIG_MK1OM
++		else if (c->x86 == 0x0b && c->x86_model == 0x01) {
++			/* KNC exposes no CPUID brand string; name it by stepping. */
++			switch (c->x86_stepping) {
++			case 1:
++				strcpy(c->x86_model_id, "Intel Xeon Phi x100 Coprocessor (Knights Corner B0)");
++				break;
++			case 3:
++				strcpy(c->x86_model_id, "Intel Xeon Phi x100 Coprocessor (Knights Corner B1)");
++				break;
++			case 4:
++				strcpy(c->x86_model_id, "Intel Xeon Phi x100 Coprocessor (Knights Corner C0)");
++				break;
++			default:
++				strcpy(c->x86_model_id, "Intel Xeon Phi x100 Coprocessor (Knights Corner)");
++				break;
++			}
++		}
++#endif
+ 		else
+ 			/* Last resort... */
+ 			sprintf(c->x86_model_id, "%02x/%02x",
+diff --git a/arch/x86/kernel/cpu/intel.c b/arch/x86/kernel/cpu/intel.c
+index 98ae4c37c93e..db628a058cdb 100644
+--- a/arch/x86/kernel/cpu/intel.c
++++ b/arch/x86/kernel/cpu/intel.c
+@@ -188,7 +188,8 @@ void intel_unlock_cpuid_leafs(struct cpuinfo_x86 *c)
+ 	if (boot_cpu_data.x86_vendor != X86_VENDOR_INTEL)
+ 		return;
+ 
+-	if (c->x86_vfm < INTEL_PENTIUM_M_DOTHAN)
++	/* k1om (family 11) has no MSR_IA32_MISC_ENABLE */
++	if (c->x86_vfm < INTEL_PENTIUM_M_DOTHAN || c->x86 == 11)
+ 		return;
+ 
+ 	/*
+@@ -203,7 +204,8 @@ static void early_init_intel(struct cpuinfo_x86 *c)
+ {
+ 	u64 misc_enable;
+ 
+-	if (c->x86 >= 6 && !cpu_has(c, X86_FEATURE_IA64))
++	/* k1om (family 11) has no MSR_IA32_UCODE_REV; the access #GPs */
++	if (c->x86 >= 6 && c->x86 != 11 && !cpu_has(c, X86_FEATURE_IA64))
+ 		c->microcode = intel_get_microcode_revision();
+ 
+ 	/* Now if any of them are set, check the blacklist and clear the lot */
+@@ -300,7 +302,7 @@ static void early_init_intel(struct cpuinfo_x86 *c)
+ 	 * Adhere to the preference and program the Linux-defined fast
+ 	 * string flag and enhanced fast string capabilities accordingly.
+ 	 */
+-	if (c->x86_vfm >= INTEL_PENTIUM_M_DOTHAN) {
++	if (c->x86_vfm >= INTEL_PENTIUM_M_DOTHAN && c->x86 != 11) {	/* k1om: no MISC_ENABLE */
+ 		rdmsrq(MSR_IA32_MISC_ENABLE, misc_enable);
+ 		if (misc_enable & MSR_IA32_MISC_ENABLE_FAST_STRING) {
+ 			/* X86_FEATURE_ERMS is set based on CPUID */
+@@ -575,6 +577,11 @@ static void init_intel(struct cpuinfo_x86 *c)
+ #ifdef CONFIG_X86_64
+ 	if (c->x86 == 15)
+ 		c->x86_cache_alignment = c->x86_clflush_size * 2;
++#ifdef CONFIG_MK1OM
++	/* De-select rep string ops microcode for K1OM */
++	clear_cpu_cap(c, X86_FEATURE_REP_GOOD);
++#endif
++
+ #else
+ 	/*
+ 	 * Names for the Pentium II/Celeron processors
+diff --git a/arch/x86/kernel/head_64.S b/arch/x86/kernel/head_64.S
+index 1f02bbddf75c..665b35f70fa9 100644
+--- a/arch/x86/kernel/head_64.S
++++ b/arch/x86/kernel/head_64.S
+@@ -250,15 +250,18 @@ SYM_INNER_LABEL(common_startup_64, SYM_L_LOCAL)
+ 	movq	%cr4, %rcx
+ 	andl	%edx, %ecx
+ 
+-	/* Even if ignored in long mode, set PSE uniformly on all logical CPUs. */
++#ifndef CONFIG_X86_EARLYMIC	/* KNC: CR4.PSE erratum */
+ 	btsl	$X86_CR4_PSE_BIT, %ecx
++#endif
+ 	movq	%rcx, %cr4
+ 
+ 	/*
+ 	 * Set CR4.PGE to re-enable global translations.
+ 	 */
++#ifndef CONFIG_X86_EARLYMIC	/* CR4.PGE is reserved on KNC (no global pages) */
+ 	btsl	$X86_CR4_PGE_BIT, %ecx
+ 	movq	%rcx, %cr4
++#endif
+ 
+ #ifdef CONFIG_SMP
+ 	/*
+diff --git a/arch/x86/mm/init.c b/arch/x86/mm/init.c
+index 8bf6ad4b9400..ecd688512a54 100644
+--- a/arch/x86/mm/init.c
++++ b/arch/x86/mm/init.c
+@@ -235,8 +235,15 @@ static void __init probe_page_size_mask(void)
+ 		direct_gbpages = 0;
+ 
+ 	/* Enable PSE if available */
++	/*
++	 * KNF/KNC Si bug: setting CR4.PSE on the BSP prevents TLB-entry sharing
++	 * between the BSP thread and the other threads on the same core, so leave
++	 * PSE off on MIC (2M/64k huge pages are handled via the KNC pte helpers).
++	 */
++#if !defined(CONFIG_ML1OM) && !defined(CONFIG_MK1OM)
+ 	if (boot_cpu_has(X86_FEATURE_PSE))
+ 		cr4_set_bits_and_update_boot(X86_CR4_PSE);
++#endif
+ 
+ 	/* Enable PGE if available */
+ 	__supported_pte_mask &= ~_PAGE_GLOBAL;

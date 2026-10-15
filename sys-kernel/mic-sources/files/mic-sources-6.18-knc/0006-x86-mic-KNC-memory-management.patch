@@ -1,0 +1,677 @@
+From ffa6e58eb0e7f5ca7ebfb30562a44c4103baf55d Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 28 Sep 2026 09:57:32 +0200
+Subject: [PATCH 06/16] x86/mic: KNC memory management
+
+From Intel MPSS 3.8.6:
+ - 64k pages: native_set_pte() replicates a 64k mapping over its 16
+   4k slots, the KNC _PAGE_* bits (pgtable_types.h) and the hugetlb
+   arch_make_huge_pte() for 2M/64k pages.
+ - Instruction-cache coherence: KNC does not snoop the icache on
+   stores, so mapping a page executable flushes it
+   (mic_flush_icache_nonx from mk_pte(), the cacheflush syscall in
+   mic_cacheflush.c, decompressor stub).
+
+Adaptations for 6.18:
+ - mk_pte()/folio_mk_pte() are generic in mm.h since 6.x; the
+   EARLYMIC variants keep the icache flush there.
+ - __native_tlb_flush_global() (5.17/6.0) toggles CR4.PGE, which is
+   reserved on KNC: it is a CR3 reload on EARLYMIC (flushes everything
+   without global pages). 5.15 never hit this because every flush
+   path was guarded by X86_FEATURE_PGE.
+ - arch_make_huge_pte(entry, shift, flags) (5.14); native_set_pte 64k
+   expansion folded into upstream's WRITE_ONCE variant (4.19).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ arch/x86/boot/compressed/ident_map_64.c |   5 +
+ arch/x86/include/asm/cacheflush.h       |   4 +
+ arch/x86/include/asm/hugetlb.h          |  12 +
+ arch/x86/include/asm/pgtable.h          |  59 +++++
+ arch/x86/include/asm/pgtable_64.h       |  86 ++++++-
+ arch/x86/include/asm/pgtable_types.h    |   6 +
+ arch/x86/include/asm/tlbflush.h         |   5 +
+ arch/x86/kernel/Makefile                |   1 +
+ arch/x86/kernel/mic_cacheflush.c        | 290 ++++++++++++++++++++++++
+ include/linux/mm.h                      |   6 +
+ 10 files changed, 468 insertions(+), 6 deletions(-)
+ create mode 100644 arch/x86/kernel/mic_cacheflush.c
+
+diff --git a/arch/x86/boot/compressed/ident_map_64.c b/arch/x86/boot/compressed/ident_map_64.c
+index dfb9c2deb77c..1b884fe3e18e 100644
+--- a/arch/x86/boot/compressed/ident_map_64.c
++++ b/arch/x86/boot/compressed/ident_map_64.c
+@@ -29,6 +29,11 @@
+ #include <asm/setup.h>	/* For COMMAND_LINE_SIZE */
+ #undef _SETUP
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/* the decompressor uses native_set_pte(); no icache maintenance needed here */
++void mic_flush_icache_nx(pte_t *ptep, pte_t pte) { }
++#endif
++
+ extern unsigned long get_cmd_line_ptr(void);
+ 
+ /* Used by PAGE_KERN* macros: */
+diff --git a/arch/x86/include/asm/cacheflush.h b/arch/x86/include/asm/cacheflush.h
+index b192d917a6d0..161b6debc72e 100644
+--- a/arch/x86/include/asm/cacheflush.h
++++ b/arch/x86/include/asm/cacheflush.h
+@@ -3,6 +3,10 @@
+ #define _ASM_X86_CACHEFLUSH_H
+ 
+ #include <linux/mm.h>
++#ifdef CONFIG_X86_EARLYMIC
++void mic_flush_icache(void);
++void mic_icache_dirty(struct page *page);
++#endif
+ 
+ /* Caches aren't brain-dead on the intel. */
+ #include <asm-generic/cacheflush.h>
+diff --git a/arch/x86/include/asm/hugetlb.h b/arch/x86/include/asm/hugetlb.h
+index 1721b1aadeb1..3ee600c6f742 100644
+--- a/arch/x86/include/asm/hugetlb.h
++++ b/arch/x86/include/asm/hugetlb.h
+@@ -7,4 +7,16 @@
+ 
+ #define hugepages_supported() boot_cpu_has(X86_FEATURE_PSE)
+ 
++#ifdef CONFIG_X86_EARLYMIC
++static inline pte_t arch_make_huge_pte(pte_t entry, unsigned int shift,
++				       vm_flags_t flags)
++{
++	if (shift == PMD_SHIFT)
++		entry = pte_mkpmd(entry);
++	else
++		entry = pte_mk64k(entry);
++	return entry;
++}
++#define arch_make_huge_pte arch_make_huge_pte
++#endif
+ #endif /* _ASM_X86_HUGETLB_H */
+diff --git a/arch/x86/include/asm/pgtable.h b/arch/x86/include/asm/pgtable.h
+index e33df3da6980..37b3aa1c4f79 100644
+--- a/arch/x86/include/asm/pgtable.h
++++ b/arch/x86/include/asm/pgtable.h
+@@ -1,4 +1,27 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
+ #ifndef _ASM_X86_PGTABLE_H
+ #define _ASM_X86_PGTABLE_H
+ 
+@@ -239,6 +262,21 @@ static inline int pte_huge(pte_t pte)
+ 	return pte_flags(pte) & _PAGE_PSE;
+ }
+ 
++#define set_pte(ptep, pte)		native_set_pte(ptep, pte)
++
++#define set_pte(ptep, pte)		native_set_pte(ptep, pte)
++
++#define set_pte(ptep, pte)		native_set_pte(ptep, pte)
++
++#ifdef CONFIG_X86_EARLYMIC
++static inline int pte_64k(pte_t pte)
++{
++	return !!(pte_flags(pte) & _PAGE_SIZE_64K);
++}
++#else
++static inline int pte_64k(pte_t pte) { return 0; }
++#endif
++
+ static inline int pte_global(pte_t pte)
+ {
+ 	return pte_flags(pte) & _PAGE_GLOBAL;
+@@ -477,10 +515,27 @@ struct vm_area_struct;
+ pte_t pte_mkwrite(pte_t pte, struct vm_area_struct *vma);
+ #define pte_mkwrite pte_mkwrite
+ 
++#ifdef CONFIG_X86_EARLYMIC
++static inline pte_t pte_mkpmd(pte_t pte)
++{
++	return pte_set_flags(pte, _PAGE_PSE);
++}
++
++static inline pte_t pte_mk64k(pte_t pte)
++{
++	return pte_set_flags(pte, _PAGE_SIZE_64K);
++}
++
++static inline pte_t pte_mkhuge(pte_t pte)
++{
++	return pte;
++}
++#else
+ static inline pte_t pte_mkhuge(pte_t pte)
+ {
+ 	return pte_set_flags(pte, _PAGE_PSE);
+ }
++#endif
+ 
+ static inline pte_t pte_clrhuge(pte_t pte)
+ {
+@@ -1029,6 +1084,10 @@ static inline unsigned long pmd_page_vaddr(pmd_t pmd)
+  */
+ #define pmd_page(pmd)	pfn_to_page(pmd_pfn(pmd))
+ 
++#ifdef CONFIG_X86_EARLYMIC
++extern void mic_flush_icache_nonx(struct page *page, pgprotval_t protval);
++#endif
++
+ static inline int pmd_bad(pmd_t pmd)
+ {
+ 	return (pmd_flags(pmd) & ~(_PAGE_USER | _PAGE_ACCESSED)) !=
+diff --git a/arch/x86/include/asm/pgtable_64.h b/arch/x86/include/asm/pgtable_64.h
+index f06e5d6a2747..3e716ed073c1 100644
+--- a/arch/x86/include/asm/pgtable_64.h
++++ b/arch/x86/include/asm/pgtable_64.h
+@@ -1,4 +1,27 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
+ #ifndef _ASM_X86_PGTABLE_64_H
+ #define _ASM_X86_PGTABLE_64_H
+ 
+@@ -60,15 +83,47 @@ static inline bool mm_p4d_folded(struct mm_struct *mm)
+ void set_pte_vaddr_p4d(p4d_t *p4d_page, unsigned long vaddr, pte_t new_pte);
+ void set_pte_vaddr_pud(pud_t *pud_page, unsigned long vaddr, pte_t new_pte);
+ 
+-static inline void native_set_pte(pte_t *ptep, pte_t pte)
++static inline void native_pte_clear(struct mm_struct *mm, unsigned long addr,
++				    pte_t *ptep)
++{
++	int i;
++	if (pte_64k(*ptep)) {
++		BUG_ON(PTR_ALIGN(ptep, 0x40) != ptep);
++		for (i = 0; i < 16; i++)
++			*ptep++ = native_make_pte(0);
++	} else {
++		*ptep = native_make_pte(0);
++	}
++}
++
++#ifdef CONFIG_X86_EARLYMIC
++void mic_flush_icache_nx(pte_t *ptep, pte_t pte);
++#endif
++
++static inline void _native_set_pte(pte_t *ptep, pte_t pte)
+ {
+ 	WRITE_ONCE(*ptep, pte);
+ }
+ 
+-static inline void native_pte_clear(struct mm_struct *mm, unsigned long addr,
+-				    pte_t *ptep)
++static inline void native_set_pte(pte_t *ptep, pte_t pte)
+ {
+-	native_set_pte(ptep, native_make_pte(0));
++	int i;
++	unsigned long pfn;
++	pteval_t val;
++
++#ifdef CONFIG_X86_EARLYMIC
++	mic_flush_icache_nx(ptep, pte);
++#endif
++	if (pte_64k(pte)) {
++		BUG_ON(PTR_ALIGN(ptep, 0x40) != ptep);
++		pfn = pte_pfn(pte);
++		for (i = 0; i < 16; i++) {
++			val = ((pfn + i) << PAGE_SHIFT) | pte_flags(pte);
++			_native_set_pte(ptep + i, native_make_pte(val));
++		}
++	} else {
++		_native_set_pte(ptep, pte);
++	}
+ }
+ 
+ static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
+@@ -88,13 +143,32 @@ static inline void native_pmd_clear(pmd_t *pmd)
+ 
+ static inline pte_t native_ptep_get_and_clear(pte_t *xp)
+ {
++	int i;
++	pteval_t flags = 0;
++	pte_t pte;
++
+ #ifdef CONFIG_SMP
+-	return native_make_pte(xchg(&xp->pte, 0));
++	if (pte_64k(*xp)) {
++		BUG_ON(PTR_ALIGN(xp, 0x40) != xp);
++		for (i = 1; i < 16; i++) {
++			pte = native_make_pte(xchg(&xp->pte + i, 0));
++			flags |= pte_flags(pte);
++		}
++		return native_make_pte(xchg(&xp->pte, 0) | flags);
++	} else {
++		return native_make_pte(xchg(&xp->pte, 0));
++	}
+ #else
+ 	/* native_local_ptep_get_and_clear,
+ 	   but duplicated because of cyclic dependency */
+ 	pte_t ret = *xp;
+-	native_pte_clear(NULL, 0, xp);
++	if (pte_64k(*xp)) {
++		BUG_ON(PTR_ALIGN(xp, 0x40) != xp);
++		for (i = 1; i < 16; i++) {
++			ret |= pte_flags(*(xp + i));
++			native_pte_clear(NULL, 0, xp + i);
++		}
++	native_pte_clear(NULL, 0 , xp);
+ 	return ret;
+ #endif
+ }
+diff --git a/arch/x86/include/asm/pgtable_types.h b/arch/x86/include/asm/pgtable_types.h
+index 2ec250ba467e..43a59625887e 100644
+--- a/arch/x86/include/asm/pgtable_types.h
++++ b/arch/x86/include/asm/pgtable_types.h
+@@ -34,6 +34,9 @@
+ #define _PAGE_BIT_UFFD_WP	_PAGE_BIT_SOFTW2 /* userfaultfd wrprotected */
+ #define _PAGE_BIT_SOFT_DIRTY	_PAGE_BIT_SOFTW3 /* software dirty tracking */
+ #define _PAGE_BIT_KERNEL_4K	_PAGE_BIT_SOFTW3 /* page must not be converted to large */
++#ifdef CONFIG_X86_EARLYMIC
++#define _PAGE_BIT_64K		51	/* KNC 64K page PTE bit */
++#endif
+ 
+ #ifdef CONFIG_X86_64
+ #define _PAGE_BIT_SAVED_DIRTY	_PAGE_BIT_SOFTW5 /* Saved Dirty bit (leaf) */
+@@ -138,6 +141,9 @@
+ 
+ #define _PAGE_DIRTY_BITS (_PAGE_DIRTY | _PAGE_SAVED_DIRTY)
+ 
++#ifdef CONFIG_X86_EARLYMIC
++#define _PAGE_SIZE_64K	(_AT(pteval_t, 1) << _PAGE_BIT_64K)
++#endif
+ #define _PAGE_PROTNONE	(_AT(pteval_t, 1) << _PAGE_BIT_PROTNONE)
+ 
+ #define _PAGE_NOPTISHADOW (_AT(pteval_t, 1) << _PAGE_BIT_NOPTISHADOW)
+diff --git a/arch/x86/include/asm/tlbflush.h b/arch/x86/include/asm/tlbflush.h
+index 00daedfefc1b..0cbd0c6b2b6f 100644
+--- a/arch/x86/include/asm/tlbflush.h
++++ b/arch/x86/include/asm/tlbflush.h
+@@ -485,7 +485,12 @@ static inline void cpu_tlbstate_update_lam(unsigned long lam, u64 untag_mask)
+ 
+ static inline void __native_tlb_flush_global(unsigned long cr4)
+ {
++#ifdef CONFIG_X86_EARLYMIC
++	/* CR4.PGE is reserved on KNC (no global pages): a CR3 reload flushes everything */
++	native_write_cr3(__native_read_cr3());
++#else
+ 	native_write_cr4(cr4 ^ X86_CR4_PGE);
+ 	native_write_cr4(cr4);
++#endif
+ }
+ #endif /* _ASM_X86_TLBFLUSH_H */
+diff --git a/arch/x86/kernel/Makefile b/arch/x86/kernel/Makefile
+index bc184dd38d99..9d4ce1fae4b5 100644
+--- a/arch/x86/kernel/Makefile
++++ b/arch/x86/kernel/Makefile
+@@ -134,6 +134,7 @@ obj-$(CONFIG_JAILHOUSE_GUEST)	+= jailhouse.o
+ 
+ obj-$(CONFIG_EISA)		+= eisa.o
+ obj-$(CONFIG_PCSPKR_PLATFORM)	+= pcspeaker.o
++obj-$(CONFIG_X86_EARLYMIC)	+= mic_cacheflush.o
+ 
+ obj-$(CONFIG_X86_CHECK_BIOS_CORRUPTION) += check.o
+ 
+diff --git a/arch/x86/kernel/mic_cacheflush.c b/arch/x86/kernel/mic_cacheflush.c
+new file mode 100644
+index 000000000000..b19bca2f1b25
+--- /dev/null
++++ b/arch/x86/kernel/mic_cacheflush.c
+@@ -0,0 +1,290 @@
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
++#include <linux/smp.h>
++#include <linux/fs.h>
++#include <linux/page-flags.h>
++#include <linux/mm.h>
++#include <linux/module.h>
++#include <linux/debugfs.h>
++
++#include <asm/pgtable.h>
++#include <asm/vsyscall.h>
++#include <asm/cacheflush.h>
++
++#define CBOX_TR5_MSR		0x00000007
++#define CBOX_TR12_MSR		0x0000000E
++#define TR5_CMD_INVL		0x00000003 /* Invalidate */
++#define DIS_ICACHE_SNOOP	0x00010000
++#define ENB_ICACHE_SNOOP	~(DIS_ICACHE_SNOOP)
++
++#define	ICACHE		(1<<0)		/* flush instruction cache        */
++#define	DCACHE		(1<<1)		/* writeback and flush data cache */
++#define	BCACHE		(ICACHE|DCACHE)	/* flush both caches              */
++#define ICACHE_CMDLINE	"icache_snoop_off"
++
++#define is_nx_support (__supported_pte_mask & _PAGE_NX)
++#define pte_user(pte) (pte_flags(pte) & _PAGE_USER)
++#define pte_no_exec(pte)  (pte_flags(pte) & _PAGE_NX)
++#define IS_READONLY_EXEC(val) ((val) & (_PAGE_PRESENT | \
++		_PAGE_USER | _PAGE_ACCESSED))
++
++/* 0 - OFF, 1 - ON*/
++static int icache_snoop = 1;
++static int cmd_parsed = 0;
++static void icache_flush_handler(void);
++static void icache_flush(void *unused);
++
++/*
++ * Parse the kernel command line to check if icache snoop
++ * needs to be disabled or not.
++ */
++static void parse_cmdline_icache(const char *cmd_line)
++{
++	char *parsed;
++	int len = strlen(ICACHE_CMDLINE);
++
++	if (!cmd_parsed) {
++		parsed = strstr(cmd_line, ICACHE_CMDLINE);
++		if (parsed) {
++			if (!strncmp(parsed, ICACHE_CMDLINE, len)) {
++				icache_snoop = 0;
++			}
++		}
++		cmd_parsed = 1;
++	}
++}
++
++/*
++ * Disable or enable icache snoop
++ */
++void set_icache_snoop_handler(void)
++{
++	uint32_t tr12;
++
++	rdmsrl(CBOX_TR12_MSR, tr12);
++
++	if (!icache_snoop)
++		tr12 |= DIS_ICACHE_SNOOP;
++	else
++		tr12 &= ENB_ICACHE_SNOOP;
++
++	wrmsrl(CBOX_TR12_MSR, tr12);
++	/* Without the flush below an AP can hang at boot time */
++	icache_flush_handler();
++}
++
++void set_icache_snoop(void *unused)
++{
++	set_icache_snoop_handler();
++}
++
++/*
++ * This is called by BSP and the APs during initialization
++ * to disable icache. Only disable if the command line ICACHE_CMDLINE
++ * is present
++ */
++void disable_icache_snoop(void)
++{
++	if (!cmd_parsed)
++		parse_cmdline_icache(saved_command_line);
++
++	set_icache_snoop_handler();
++}
++
++/*
++ * IPI handler to flush icache. Executed on each CPU
++ */
++static void icache_flush_handler(void)
++{
++	uint32_t tr5;
++
++	rdmsrl(CBOX_TR5_MSR, tr5);
++	tr5 |= TR5_CMD_INVL;
++	wrmsrl(CBOX_TR5_MSR, tr5);
++}
++
++static void icache_flush(void *unused)
++{
++	icache_flush_handler();
++}
++
++/*
++ * This function initiates iCache flush. Call this function to
++ * to flush icaches on MIC
++ */
++void mic_flush_icache(void)
++{
++	if (icache_snoop)
++		return;
++
++	preempt_disable();
++	/* flush icache on the current CPU */
++	icache_flush_handler();
++	smp_call_function_many(cpu_online_mask, icache_flush, NULL, 1);
++	preempt_enable();
++}
++
++EXPORT_SYMBOL(mic_flush_icache);
++
++static __always_inline void mic_flush_icache_lazy(struct page *page)
++{
++	/*
++	 * PG_arch_1 is cleared when flush dcache is called
++	 */
++	if (test_bit(PG_arch_1, &page->flags.f))
++		return;
++
++	mic_flush_icache();
++
++	/* mark the page as clean */
++	set_bit(PG_arch_1, &page->flags.f);
++}
++
++/*
++ * This is lazy way to flush icache when the CPU has no NX feature enabled.
++ * This is called from mk_pte.
++ *
++ * Note:mic_flush_icache_nx and mic_flush_icache_nonx are not completely
++ * equivalent in their functionality because the previous pte value
++ * could not be passed as an argument to this function, so condition
++ * (page swapin or new page or page migration ||
++ * copy_on_write with page copying) will not be checked, resulting
++ * in extra icache flushes.
++ */
++void mic_flush_icache_nonx(struct page *page, pgprotval_t protval)
++{
++	if (icache_snoop ||  is_nx_support)
++		return;
++
++	/*
++	 * Refer asm/pgtable_types.h
++	 * Flush if the page is of PAGE_READONLY_EXEC
++	 */
++	if (IS_READONLY_EXEC(protval))
++		mic_flush_icache_lazy(page);
++ }
++
++/*
++ * This is lazy way to flush icache provided the CPU has the NX feature enabled.
++ * This is called from set_pte.
++ */
++void mic_flush_icache_nx(pte_t *ptep, pte_t pte)
++{
++	/*
++	 * Donot continue if the icache snoop is enabled
++	 * or if the NX feature doesnt exist
++	 */
++	if(icache_snoop || !is_nx_support)
++		return;
++
++	/*
++	 * Similar to the ia64 set_pte code
++	 * We only flush and set PG_arch_1 bit if the page is
++	 * present && page is user page && has backing page struct
++	 * && page is executable &&
++	 * (page swapin or new page or page migration ||
++	 * copy_on_write with page copying)
++	 */
++	if (pte_present(pte) && pte_user(pte) && pfn_valid(pte_pfn(pte)) &&
++		!pte_no_exec(pte) && (!pte_present(*ptep) ||
++		pte_pfn(*ptep) != pte_pfn(pte)))
++		mic_flush_icache_lazy(pte_page(pte));
++}
++
++/* mark the page dirty w.r.t the icache so that next set_pte flushes the cache*/
++void mic_icache_dirty(struct page *page)
++{
++	if(icache_snoop || !is_nx_support)
++		return;
++
++	clear_bit(PG_arch_1, &(page)->flags.f);
++}
++
++EXPORT_SYMBOL(mic_icache_dirty);
++
++/*
++ * Get the current icache snoop status 0 - off, 1 - on
++ */
++static int icache_snoop_get (void *data, u64 *val)
++{
++	*val = icache_snoop;
++	return 0;
++}
++
++/*
++ * Set the icache snoop  0 - off, 1 - on
++ */
++static int icache_snoop_set (void *data, u64 val)
++{
++	if (icache_snoop != (!!val)) {
++		preempt_disable();
++		icache_snoop = !!val;
++		set_icache_snoop_handler();
++		smp_call_function_many(cpu_online_mask, set_icache_snoop, NULL, 1);
++		preempt_enable();
++	}
++
++	return 0;
++}
++
++DEFINE_SIMPLE_ATTRIBUTE(icache_snoop_fops, icache_snoop_get,
++			icache_snoop_set, "%llu\n");
++
++/*
++ * Initialize the debugfs to enable/disable icache snoop during runtime
++ */
++static int __init icache_init(void)
++{
++	struct dentry *entry;
++
++	entry = debugfs_create_file("icache_snoop", 0600, NULL, NULL,
++					 &icache_snoop_fops);
++
++	if (!IS_ERR_OR_NULL(entry))
++		 return 0;
++
++	return entry ? PTR_ERR(entry) : -ENODEV;
++}
++
++arch_initcall(icache_init);
++
++/*
++ * Syscall implementation for icache flush
++ */
++asmlinkage int sys_cacheflush(void *__addr, __const int __nbytes, __const int __op)
++{
++	int ret = 0;
++
++	switch (__op) {
++		case ICACHE:
++			flush_icache_range((unsigned long)__addr,
++				 (unsigned long)__addr + __nbytes);
++			break;
++		default:
++			ret = -EINVAL;
++	}
++
++	return ret;
++}
+diff --git a/include/linux/mm.h b/include/linux/mm.h
+index 7c79b3369b82..8fb9df944ac3 100644
+--- a/include/linux/mm.h
++++ b/include/linux/mm.h
+@@ -1862,6 +1862,9 @@ static inline struct folio *pfn_folio(unsigned long pfn)
+ #ifdef CONFIG_MMU
+ static inline pte_t mk_pte(const struct page *page, pgprot_t pgprot)
+ {
++#ifdef CONFIG_X86_EARLYMIC
++	mic_flush_icache_nonx((struct page *)page, pgprot_val(pgprot));
++#endif
+ 	return pfn_pte(page_to_pfn(page), pgprot);
+ }
+ 
+@@ -1877,6 +1880,9 @@ static inline pte_t mk_pte(const struct page *page, pgprot_t pgprot)
+  */
+ static inline pte_t folio_mk_pte(const struct folio *folio, pgprot_t pgprot)
+ {
++#ifdef CONFIG_X86_EARLYMIC
++	mic_flush_icache_nonx((struct page *)&folio->page, pgprot_val(pgprot));
++#endif
+ 	return pfn_pte(folio_pfn(folio), pgprot);
+ }
+ 

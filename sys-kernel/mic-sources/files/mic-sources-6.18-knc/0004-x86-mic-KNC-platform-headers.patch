@@ -1,0 +1,1437 @@
+From eb5c9b0d84b1b0afffecea0cf040e94017d6b8f2 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 28 Sep 2026 09:57:32 +0200
+Subject: [PATCH 04/16] x86/mic: KNC platform headers
+
+From Intel MPSS 3.8.6, unchanged: the SBOX/GBOX register maps and
+their helpers (asm/mic/mic_knc/*, micreghelper.h), the platform
+interface used by the KNC arch code (mic_def.h, mic_common.h), the
+micpm device interface, and the mic_dma headers shared with the
+out-of-tree card modules.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ arch/x86/include/asm/mic/mic_common.h         | 100 ++++
+ .../include/asm/mic/mic_knc/autobaseaddress.h |  71 +++
+ .../include/asm/mic/mic_knc/micgboxdefine.h   |  48 ++
+ .../include/asm/mic/mic_knc/micgboxstruct.h   | 133 +++++
+ .../include/asm/mic/mic_knc/micsboxdefine.h   | 271 +++++++++++
+ .../include/asm/mic/mic_knc/micsboxstruct.h   | 454 ++++++++++++++++++
+ arch/x86/include/asm/mic/micpm_device.h       |  76 +++
+ arch/x86/include/asm/mic/micreghelper.h       |  40 ++
+ arch/x86/include/asm/mic_def.h                |  70 +++
+ include/linux/mic_dma/mic_dma_callback.h      |  51 ++
+ include/linux/mic_dma/mic_dma_local.h         |  19 +
+ 11 files changed, 1333 insertions(+)
+ create mode 100644 arch/x86/include/asm/mic/mic_common.h
+ create mode 100644 arch/x86/include/asm/mic/mic_knc/autobaseaddress.h
+ create mode 100644 arch/x86/include/asm/mic/mic_knc/micgboxdefine.h
+ create mode 100644 arch/x86/include/asm/mic/mic_knc/micgboxstruct.h
+ create mode 100644 arch/x86/include/asm/mic/mic_knc/micsboxdefine.h
+ create mode 100644 arch/x86/include/asm/mic/mic_knc/micsboxstruct.h
+ create mode 100644 arch/x86/include/asm/mic/micpm_device.h
+ create mode 100644 arch/x86/include/asm/mic/micreghelper.h
+ create mode 100644 arch/x86/include/asm/mic_def.h
+ create mode 100644 include/linux/mic_dma/mic_dma_callback.h
+ create mode 100644 include/linux/mic_dma/mic_dma_local.h
+
+diff --git a/arch/x86/include/asm/mic/mic_common.h b/arch/x86/include/asm/mic/mic_common.h
+new file mode 100644
+index 000000000000..8f0aa4356e5b
+--- /dev/null
++++ b/arch/x86/include/asm/mic/mic_common.h
+@@ -0,0 +1,100 @@
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++#ifndef MIC_COMMON_H
++#define MIC_COMMON_H
++
++#define U32 uint32_t
++#define U64 uint64_t
++
++#define MIC_MBYTES(x) (x*1024*1024)
++
++#ifndef KASSERT
++#define KASSERT(x, y, args...)		\
++	do {				\
++		if(!x)			\
++			printk(y, ## args);\
++		BUG_ON(!x);		\
++	} while(0)			
++#endif
++
++/* vnet/mic_shutdown/hvc/virtio */
++#define VNET_SBOX_INT_IDX	0
++#define MIC_SHT_SBOX_INT_IDX	1
++#define HVC_SBOX_INT_IDX	2
++#define VIRTIO_SBOX_INT_IDX	3
++
++int get_sbox_irq(int index);
++
++enum
++{
++	KNC_A_STEP = 0,
++	KNC_B0_STEP,
++	KNC_C_STEP,
++	KNC_B1_STEP
++};
++
++enum
++{
++	FAMILY_UNKNOWN = 0,
++	FAMILY_ABR,
++	FAMILY_KNC
++};
++
++/*------------------------------------------------------------------------------
++ *  FUNCTION: mic_hw_family
++ *
++ *  DESCRIPTION: Obtains MIC Silicon Family.
++ *
++ *  PARAMETERS: unused. Useful to have same definition as Host Driver.
++ *
++ *  RETURNS: family.
++*------------------------------------------------------------------------------*/
++static __always_inline int mic_hw_family(int unused)
++{
++	struct cpuinfo_x86 *c = &cpu_data(0);
++	switch (c->x86_model) {
++	case 0:
++		return FAMILY_ABR;
++	case 1:
++		return FAMILY_KNC;
++	default:
++		return FAMILY_UNKNOWN;
++	}
++}
++
++/*------------------------------------------------------------------------------
++ *  FUNCTION: mic_hw_stepping
++ *
++ *  DESCRIPTION: Obtains MIC Silicon Stepping.
++ *
++ *  PARAMETERS: unused. Useful to have same definition as Host Driver.
++ *
++ *  RETURNS: stepping.
++*------------------------------------------------------------------------------*/
++static __always_inline int mic_hw_stepping(int unused)
++{
++	struct cpuinfo_x86 *c = &cpu_data(0);
++	return c->x86_stepping;
++}
++#endif
+diff --git a/arch/x86/include/asm/mic/mic_knc/autobaseaddress.h b/arch/x86/include/asm/mic/mic_knc/autobaseaddress.h
+new file mode 100644
+index 000000000000..df8c56d2a018
+--- /dev/null
++++ b/arch/x86/include/asm/mic/mic_knc/autobaseaddress.h
+@@ -0,0 +1,71 @@
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++/******************************************************************************
++File Name: autobaseaddress.h
++Description:  "Raw" register offsets & bit specifications for MIC
++Notes:
++*******************************************************************************/
++#ifndef _MIC_AUTOBASEDEFINE_REGISTERS_H_
++#define _MIC_AUTOBASEDEFINE_REGISTERS_H_
++
++
++#define CBOX_BASE           0x0ULL              /* P54C Core */
++//#define APIC_BASE           0xFEE00000ULL       /* Separate "box" for local apic registers which are at a completely different base_address */
++#define TXS0_BASE           0x0800780000ULL     /* Texture Sampler */
++#define TXS1_BASE           0x0800770000ULL     /* Texture Sampler */
++#define TXS2_BASE           0x0800760000ULL     /* Texture Sampler */
++#define TXS3_BASE           0x0800750000ULL     /* Texture Sampler */
++#define TXS4_BASE           0x0800740000ULL     /* Texture Sampler */
++#define TXS5_BASE           0x0800730000ULL     /* Texture Sampler */
++#define TXS6_BASE           0x0800720000ULL     /* Texture Sampler */
++#define TXS7_BASE           0x0800710000ULL     /* Texture Sampler */
++#define DBOX0_BASE          0x08007C0000ULL     /* Display Box Registers */
++#define DBOX1_BASE          0x0800620000ULL     /* Display Box Registers */
++#define TD0_BASE            0x08007C0000ULL     /* Dbox Tag Directory TD */
++#define TD1_BASE            0x0800620000ULL     /* Dbox Tag Directory TD */
++#define VBOX_BASE           0x08007B0000ULL     /* Video Box Registers */
++#define SBOX_BASE           0x08007D0000ULL     /* PCIE Box Registers */
++#define GBOX0_BASE          0x08007A0000ULL     /* Gbox Front Box Registers */
++#define GBOX1_BASE          0x0800790000ULL     /* Gbox Front Box Registers */
++#define GBOX2_BASE          0x0800700000ULL     /* Gbox Front Box Registers */
++#define GBOX3_BASE          0x08006F0000ULL     /* Gbox Front Box Registers */
++#define GBOX4_BASE          0x08006D0000ULL     /* Gbox Front Box Registers */
++#define GBOX5_BASE          0x08006C0000ULL     /* Gbox Front Box Registers */
++#define GBOX6_BASE          0x08006B0000ULL     /* Gbox Front Box Registers */
++#define GBOX7_BASE          0x08006A0000ULL     /* Gbox Front Box Registers */
++#define REUT0_BASE          0x08007A0000ULL     /* Gbox REUT interface Registers */
++#define REUT1_BASE          0x0800790000ULL     /* Gbox REUT interface Registers */
++#define REUT2_BASE          0x0800700000ULL     /* Gbox REUT interface Registers */
++#define REUT3_BASE          0x08006F0000ULL     /* Gbox REUT interface Registers */
++#define REUT4_BASE          0x08006D0000ULL     /* Gbox REUT interface Registers */
++#define REUT5_BASE          0x08006C0000ULL     /* Gbox REUT interface Registers */
++#define REUT6_BASE          0x08006B0000ULL     /* Gbox REUT interface Registers */
++#define REUT7_BASE          0x08006A0000ULL     /* Gbox REUT interface Registers */
++
++#define GBOX_CHANNEL0_BASE  0x0
++#define GBOX_CHANNEL1_BASE  0x800
++#define GBOX_CHANNEL2_BASE  0x800
++#define GBOX_CHANNEL3_BASE  0x1000
++
++#endif
+diff --git a/arch/x86/include/asm/mic/mic_knc/micgboxdefine.h b/arch/x86/include/asm/mic/mic_knc/micgboxdefine.h
+new file mode 100644
+index 000000000000..e37000d46b15
+--- /dev/null
++++ b/arch/x86/include/asm/mic/mic_knc/micgboxdefine.h
+@@ -0,0 +1,48 @@
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++/******************************************************************************
++File Name: micgboxdefine.h
++Description:  "Raw" register offsets & bit specifications for Intel MIC (KNC)
++Notes:
++    Auto gen gbox register header
++*******************************************************************************/
++#ifndef _MIC_GBOXDEFINE_REGISTERS_H_
++#define _MIC_GBOXDEFINE_REGISTERS_H_
++
++#define GBOX_FBOX_PM_STATE					0x00000060
++#define GBOX_FBOX_MCA_STATUS_LO					0x00000064
++#define GBOX_FBOX_MCA_ADDR_LO					0x0000006C
++#define GBOX_FBOX_MCA_MISC					0x00000074
++#define GBOX_FBOX_PM_CONFIGURATION				0x00000098
++#define GBOX_FBOX_PM_CONTROL					0x0000009C
++#define GBOX_FBOX_PM_COUNTERS					0x000000C0
++#define GBOX_MBOX_PM_CONFIG_VALID				0x000001B4
++#define GBOX_MBOX_UC_RW_ADDR					0x00000700
++#define GBOX_MBOX_UC_START_IP_ADDR				0x00000720
++#define GBOX_MBOX_UC_CMD_START					0x00000724
++#define GBOX_CBOX_AGF_MASTER_DELAY_OUT				0x00001138
++#define GBOX_CBOX_AGF_MASTER_DELAY_IN				0x0000113C
++#define GBOX_CBOX_AGF_MASTER_MCLK_RANGE				0x00001140
++
++#endif
+diff --git a/arch/x86/include/asm/mic/mic_knc/micgboxstruct.h b/arch/x86/include/asm/mic/mic_knc/micgboxstruct.h
+new file mode 100644
+index 000000000000..443924e30f8c
+--- /dev/null
++++ b/arch/x86/include/asm/mic/mic_knc/micgboxstruct.h
+@@ -0,0 +1,133 @@
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++/******************************************************************************
++File Name: micgboxstruct.h
++Description:  "Raw" register offsets & bit specifications for Intel MIC (KNC)
++Notes:
++    Auto gen gbox register header
++*******************************************************************************/
++#ifndef _MIC_GBOXSTRUCT_REGISTERS_H_
++#define _MIC_GBOXSTRUCT_REGISTERS_H_
++
++#include "../micreghelper.h"
++
++
++/************************************************************************* 
++    PM status register for FBox 
++*************************************************************************/
++typedef union _gboxFboxPmStateReg
++{
++    U32 value;
++    struct
++    {
++	U32 statech0					   : 4; // bit 0-3 Indicates the state of Channel 0
++	U32 statech1					   : 4; // bit 4-7 Indicates the state of Channel 1
++	U32 rsvd0					   :24; // bit 8-31
++    } bits;
++} gboxFboxPmStateReg;
++
++STATIC_ASSERT(sizeof(gboxFboxPmStateReg) == sizeof(U32));
++
++/************************************************************************* 
++    PM register for FBox 
++*************************************************************************/
++typedef union _gboxFboxPmConfigurationReg
++{
++    U32 value;
++    struct
++    {
++	U32 powermanagement_enable			   : 1; // bit 0 Indicates whether PM is enabled
++	U32 m1_enable					   : 1; // bit 1 Indicates whether M1 is enabled
++	U32 m2_enable					   : 1; // bit 2 Indicates whether M2 is enabled
++	U32 m3_enable					   : 1; // bit 3 Indicates whether M3 is enabled
++	U32 cke_enable					   : 1; // bit 4 Indicates whether CKE is enabled
++	U32 pm_mode					   : 1; // bit 5 Indicates the behaviour of the PM logic
++	U32 fboxdfxclkgateen				   : 1; // bit 6 Indicates whether DFX on demand clk gating is enabled
++	U32 fboxclkgateen				   : 1; // bit 7 Indicates whether on demand clk gating is enabled
++	U32 m2_timerenable				   : 1; // bit 8 Indicates whether M2 Timer is enabled. Needs to be qualified with M2_Enable
++	U32 m3_timerenable				   : 1; // bit 9 Indicates whether M3 Timer is enabled. Needs to be qualified with M2_Enable, M3_Enable
++	U32 fboxarbiterlock				   : 1; // bit 10 If set, will lock Fbox Arbiter after Gbox detect Idle in both channels. 
++								// After that, Gbox will remain as idle and subsequent wakeup event from Ring will be ignored until this bit is cleared.
++	U32 rsvd0					   :21; // bit 11-31
++    } bits;
++} gboxFboxPmConfigurationReg;
++
++STATIC_ASSERT(sizeof(gboxFboxPmConfigurationReg) == sizeof(U32));
++/************************************************************************* 
++    PM control register for FBox 
++*************************************************************************/
++typedef union _gboxFboxPmControlReg
++{
++    U32 value;
++    struct
++    {
++	U32 enablech0					   : 1; // bit 0 Indicates whether channel 0 is enabled
++	U32 enablech1					   : 1; // bit 1 Indicates whether channel 1 is enabled
++	U32 enablech0valid				   : 1; // bit 2 Indicates whether channel 0 enabled is valid
++	U32 enablech1valid				   : 1; // bit 3 Indicates whether channel 1 enabled is valid
++	U32 nextstatech0				   : 4; // bit 4-7 Indicates next state for Ch0
++	U32 nextstatech1				   : 4; // bit 8-11 Indicates next state for Ch1
++	U32 forcem2					   : 1; // bit 12 Force M2 state
++	U32 forcem3					   : 1; // bit 13 Force M3 state
++	U32 exitmemprsv					   : 1; // bit 14 Signal Config Done, will trigger Memory Preservation Interrupt
++	U32 forcewakeup					   : 1; // bit 15 WakeUp all the channels
++	U32 rsvd0					   :16; // bit 16-31
++    } bits;
++} gboxFboxPmControlReg;
++
++STATIC_ASSERT(sizeof(gboxFboxPmControlReg) == sizeof(U32));
++
++/************************************************************************* 
++    PM control register for FBox with values for the counters 
++*************************************************************************/
++typedef union _gboxFboxPmCountersReg
++{
++    U32 value;
++    struct
++    {
++	U32 idlesignaldelay				   : 8; // bit 0-7 Number of cycles of delay for the Idle signal
++	U32 idlecondition				   : 2; // bit 8-9 PM Status linking to the Idle signal
++	U32 earlyidlesignaldelay			   : 8; // bit 10-17 Number of cycles of delay for the Early Idle signal
++	U32 rsvd0					   :14; // bit 18-31
++    } bits;
++} gboxFboxPmCountersReg;
++
++STATIC_ASSERT(sizeof(gboxFboxPmCountersReg) == sizeof(U32));
++
++/************************************************************************* 
++    
++	      Trigger to latch FBOX Power Management CR values used in MBOX.
++	     
++*************************************************************************/
++typedef union _gboxMboxPmConfigValidReg
++{
++    U32 value;
++    struct
++    {
++	U32 unused					   :32; // bit 0-31 unused
++    } bits;
++} gboxMboxPmConfigValidReg;
++
++STATIC_ASSERT(sizeof(gboxMboxPmConfigValidReg) == sizeof(U32));
++#endif
+diff --git a/arch/x86/include/asm/mic/mic_knc/micsboxdefine.h b/arch/x86/include/asm/mic/mic_knc/micsboxdefine.h
+new file mode 100644
+index 000000000000..33a08a67e6b3
+--- /dev/null
++++ b/arch/x86/include/asm/mic/mic_knc/micsboxdefine.h
+@@ -0,0 +1,271 @@
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++/******************************************************************************
++File Name: micsboxdefine.h
++Description:  "Raw" register offsets & bit specifications for Intel MIC (KNC)
++Notes:
++    Auto gen sbox register header
++*******************************************************************************/
++#ifndef _MIC_SBOXDEFINE_REGISTERS_H_
++#define _MIC_SBOXDEFINE_REGISTERS_H_
++
++#define SBOX_DCAR_0						0x00000000
++#define SBOX_DHPR_0						0x00000004
++#define SBOX_DTPR_0						0x00000008
++#define SBOX_DAUX_LO_0						0x0000000C
++#define SBOX_DAUX_HI_0						0x00000010
++#define SBOX_DRAR_LO_0						0x00000014
++#define SBOX_DRAR_HI_0						0x00000018
++#define SBOX_DITR_0						0x0000001C
++#define SBOX_DTPWBR_LO_0					0x00000024
++#define SBOX_DTPWBR_HI_0					0x00000028
++#define SBOX_DCAR_1						0x00000040
++#define SBOX_DHPR_1						0x00000044
++#define SBOX_DTPR_1						0x00000048
++#define SBOX_DAUX_LO_1						0x0000004C
++#define SBOX_DAUX_HI_1						0x00000050
++#define SBOX_DRAR_LO_1						0x00000054
++#define SBOX_DRAR_HI_1						0x00000058
++#define SBOX_DITR_1						0x0000005C
++#define SBOX_DTPWBR_LO_1					0x00000064
++#define SBOX_DTPWBR_HI_1					0x00000068
++#define SBOX_DCAR_2						0x00000080
++#define SBOX_DHPR_2						0x00000084
++#define SBOX_DTPR_2						0x00000088
++#define SBOX_DAUX_LO_2						0x0000008C
++#define SBOX_DAUX_HI_2						0x00000090
++#define SBOX_DRAR_LO_2						0x00000094
++#define SBOX_DRAR_HI_2						0x00000098
++#define SBOX_DITR_2						0x0000009C
++#define SBOX_DTPWBR_LO_2					0x000000A4
++#define SBOX_DTPWBR_HI_2					0x000000A8
++#define SBOX_DCAR_3						0x000000C0
++#define SBOX_DHPR_3						0x000000C4
++#define SBOX_DTPR_3						0x000000C8
++#define SBOX_DAUX_LO_3						0x000000CC
++#define SBOX_DAUX_HI_3						0x000000D0
++#define SBOX_DRAR_LO_3						0x000000D4
++#define SBOX_DRAR_HI_3						0x000000D8
++#define SBOX_DITR_3						0x000000DC
++#define SBOX_DTPWBR_LO_3					0x000000E4
++#define SBOX_DTPWBR_HI_3					0x000000E8
++#define SBOX_DCAR_4						0x00000100
++#define SBOX_DHPR_4						0x00000104
++#define SBOX_DTPR_4						0x00000108
++#define SBOX_DAUX_LO_4						0x0000010C
++#define SBOX_DAUX_HI_4						0x00000110
++#define SBOX_DRAR_LO_4						0x00000114
++#define SBOX_DRAR_HI_4						0x00000118
++#define SBOX_DITR_4						0x0000011C
++#define SBOX_DTPWBR_LO_4					0x00000124
++#define SBOX_DTPWBR_HI_4					0x00000128
++#define SBOX_DCAR_5						0x00000140
++#define SBOX_DHPR_5						0x00000144
++#define SBOX_DTPR_5						0x00000148
++#define SBOX_DAUX_LO_5						0x0000014C
++#define SBOX_DAUX_HI_5						0x00000150
++#define SBOX_DRAR_LO_5						0x00000154
++#define SBOX_DRAR_HI_5						0x00000158
++#define SBOX_DITR_5						0x0000015C
++#define SBOX_DTPWBR_LO_5					0x00000164
++#define SBOX_DTPWBR_HI_5					0x00000168
++#define SBOX_DCAR_6						0x00000180
++#define SBOX_DHPR_6						0x00000184
++#define SBOX_DTPR_6						0x00000188
++#define SBOX_DAUX_LO_6						0x0000018C
++#define SBOX_DAUX_HI_6						0x00000190
++#define SBOX_DRAR_LO_6						0x00000194
++#define SBOX_DRAR_HI_6						0x00000198
++#define SBOX_DITR_6						0x0000019C
++#define SBOX_DTPWBR_LO_6					0x000001A4
++#define SBOX_DTPWBR_HI_6					0x000001A8
++#define SBOX_DCAR_7						0x000001C0
++#define SBOX_DHPR_7						0x000001C4
++#define SBOX_DTPR_7						0x000001C8
++#define SBOX_DAUX_LO_7						0x000001CC
++#define SBOX_DAUX_HI_7						0x000001D0
++#define SBOX_DRAR_LO_7						0x000001D4
++#define SBOX_DRAR_HI_7						0x000001D8
++#define SBOX_DITR_7						0x000001DC
++#define SBOX_DTPWBR_LO_7					0x000001E4
++#define SBOX_DTPWBR_HI_7					0x000001E8
++#define SBOX_DCR						0x00000280
++#define SBOX_OC_I2C_ICR						0x00001000
++#define SBOX_THERMAL_STATUS					0x00001018
++#define SBOX_THERMAL_INTERRUPT_ENABLE				0x0000101C
++#define SBOX_STATUS_FAN1					0x00001024
++#define SBOX_STATUS_FAN2					0x00001028
++#define SBOX_SPEED_OVERRIDE_FAN					0x0000102C
++#define SBOX_BOARD_TEMP1					0x00001030
++#define SBOX_BOARD_TEMP2					0x00001034
++#define SBOX_BOARD_VOLTAGE_SENSE				0x00001038
++#define SBOX_CURRENT_DIE_TEMP0					0x0000103C
++#define SBOX_CURRENT_DIE_TEMP1					0x00001040
++#define SBOX_CURRENT_DIE_TEMP2					0x00001044
++#define SBOX_MAX_DIE_TEMP0					0x00001048
++#define SBOX_MAX_DIE_TEMP1					0x0000104C
++#define SBOX_MAX_DIE_TEMP2					0x00001050
++#define SBOX_GPU_HOT_CONFIG                                     0x00001068
++#define SBOX_ELAPSED_TIME_LOW					0x00001074
++#define SBOX_ELAPSED_TIME_HIGH					0x00001078
++#define SBOX_THERMAL_STATUS_INTERRUPT				0x0000107C
++#define SBOX_SICR0						0x00002004
++#define SBOX_SICE0						0x0000200C
++#define SBOX_SICC0						0x00002010
++#define SBOX_SDBIC0						0x00002030
++#define SBOX_SDBIC1						0x00002034
++#define SBOX_SDBIC2						0x00002038
++#define SBOX_SDBIC3						0x0000203C
++#define SBOX_SDBIC4						0x00002040
++#define SBOX_MXAR0						0x00002044
++#define SBOX_MXAR1						0x00002048
++#define SBOX_MXAR2						0x0000204C
++#define SBOX_MXAR3						0x00002050
++#define SBOX_MXAR4						0x00002054
++#define SBOX_MXAR5						0x00002058
++#define SBOX_MXAR6						0x0000205C
++#define SBOX_MXAR7						0x00002060
++#define SBOX_MXAR8						0x00002064
++#define SBOX_MXAR9						0x00002068
++#define SBOX_MXAR10						0x0000206C
++#define SBOX_MXAR11						0x00002070
++#define SBOX_MXAR12						0x00002074
++#define SBOX_MXAR13						0x00002078
++#define SBOX_MXAR14						0x0000207C
++#define SBOX_MXAR15						0x00002080
++#define SBOX_MSIXPBACR						0x00002084
++#define SBOX_MCX_CTL_LO						0x00003090
++#define SBOX_MCX_STATUS_LO					0x00003098
++#define SBOX_MCX_STATUS_HI					0x0000309C
++#define SBOX_MCX_ADDR_LO					0x000030A0
++#define SBOX_MCX_ADDR_HI					0x000030A4
++#define SBOX_MCX_MISC						0x000030A8
++#define SBOX_MCX_MISC2						0x000030AC
++#define SBOX_SMPT00						0x00003100
++#define SBOX_SMPT02						0x00003108
++#define SBOX_RGCR						0x00004010
++#define SBOX_DSTAT						0x00004014
++#define SBOX_CURRENTRATIO					0x0000402C
++#define SBOX_COREFREQ						0x00004100
++#define SBOX_COREVOLT						0x00004104
++#define SBOX_MEMORYFREQ						0x00004108
++#define SBOX_MEMVOLT						0x0000410C
++#define SBOX_SVIDCONTROL					0x00004110
++#define SBOX_PCUCONTROL						0x00004114
++#define SBOX_HOSTPMSTATE					0x00004118
++#define SBOX_UOSPMSTATE						0x0000411C
++#define SBOX_C3WAKEUP_TIMER					0x00004120
++#define SBOX_C3_TIMERS						0x00004128
++#define SBOX_UOS_PCUCONTROL					0x0000412C
++#define SBOX_PCIE_VENDOR_ID_DEVICE_ID				0x00005800
++#define SBOX_PCIE_PCI_REVISION_ID_AND_C_0X8			0x00005808
++#define SBOX_PCIE_BAR_ENABLE					0x00005CD4
++#define SBOX_APICIDR						0x0000A800
++#define SBOX_APICVER						0x0000A804
++#define SBOX_APICAPR						0x0000A808
++#define SBOX_APICRT0						0x0000A840
++#define SBOX_APICRT1						0x0000A848
++#define SBOX_APICRT2						0x0000A850
++#define SBOX_APICRT3						0x0000A858
++#define SBOX_APICRT4						0x0000A860
++#define SBOX_APICRT5						0x0000A868
++#define SBOX_APICRT6						0x0000A870
++#define SBOX_APICRT7						0x0000A878
++#define SBOX_APICRT8						0x0000A880
++#define SBOX_APICRT9						0x0000A888
++#define SBOX_APICRT10						0x0000A890
++#define SBOX_APICRT11						0x0000A898
++#define SBOX_APICRT12						0x0000A8A0
++#define SBOX_APICRT13						0x0000A8A8
++#define SBOX_APICRT14						0x0000A8B0
++#define SBOX_APICRT15						0x0000A8B8
++#define SBOX_APICRT16						0x0000A8C0
++#define SBOX_APICRT17						0x0000A8C8
++#define SBOX_APICRT18						0x0000A8D0
++#define SBOX_APICRT19						0x0000A8D8
++#define SBOX_APICRT20						0x0000A8E0
++#define SBOX_APICRT21						0x0000A8E8
++#define SBOX_APICRT22						0x0000A8F0
++#define SBOX_APICRT23						0x0000A8F8
++#define SBOX_APICRT24						0x0000A900
++#define SBOX_APICRT25						0x0000A908
++#define SBOX_APICICR0						0x0000A9D0
++#define SBOX_APICICR1						0x0000A9D8
++#define SBOX_APICICR2						0x0000A9E0
++#define SBOX_APICICR3						0x0000A9E8
++#define SBOX_APICICR4						0x0000A9F0
++#define SBOX_APICICR5						0x0000A9F8
++#define SBOX_APICICR6						0x0000AA00
++#define SBOX_APICICR7						0x0000AA08
++#define SBOX_MCA_INT_STAT					0x0000AB00
++#define SBOX_MCA_INT_EN						0x0000AB04
++#define SBOX_SCRATCH0						0x0000AB20
++#define SBOX_SCRATCH1						0x0000AB24
++#define SBOX_SCRATCH2						0x0000AB28
++#define SBOX_SCRATCH3						0x0000AB2C
++#define SBOX_SCRATCH4						0x0000AB30
++#define SBOX_SCRATCH5						0x0000AB34
++#define SBOX_SCRATCH6						0x0000AB38
++#define SBOX_SCRATCH7						0x0000AB3C
++#define SBOX_SCRATCH8						0x0000AB40
++#define SBOX_SCRATCH9						0x0000AB44
++#define SBOX_SCRATCH10						0x0000AB48
++#define SBOX_SCRATCH11						0x0000AB4C
++#define SBOX_SCRATCH12						0x0000AB50
++#define SBOX_SCRATCH13						0x0000AB54
++#define SBOX_SCRATCH14						0x0000AB58
++#define SBOX_SCRATCH15						0x0000AB5C
++#define SBOX_SBQ_FLUSH						0x0000B1A0
++#define SBOX_TLB_FLUSH						0x0000B1A4
++#define SBOX_C6_SCRATCH0					0x0000C000
++#define SBOX_C6_SCRATCH1					0x0000C004
++#define SBOX_C6_SCRATCH2					0x0000C008
++#define SBOX_C6_SCRATCH3					0x0000C00C
++#define SBOX_C6_SCRATCH4					0x0000C010
++#define SBOX_C6_SCRATCH5					0x0000C014
++#define SBOX_C6_SCRATCH6					0x0000C018
++#define SBOX_C6_SCRATCH7					0x0000C01C
++#define SBOX_C6_SCRATCH8					0x0000C020
++#define SBOX_C6_SCRATCH9					0x0000C024
++#define SBOX_C6_SCRATCH10					0x0000C028
++#define SBOX_C6_SCRATCH11					0x0000C02C
++#define SBOX_C6_SCRATCH12					0x0000C030
++#define SBOX_C6_SCRATCH13					0x0000C034
++#define SBOX_C6_SCRATCH14					0x0000C038
++#define SBOX_C6_SCRATCH15					0x0000C03C
++#define SBOX_C6_SCRATCH16					0x0000C040
++#define SBOX_C6_SCRATCH17					0x0000C044
++#define SBOX_C6_SCRATCH18					0x0000C048
++#define SBOX_C6_SCRATCH19					0x0000C04C
++#define SBOX_C6_SCRATCH20					0x0000C050
++#define SBOX_C6_SCRATCH21					0x0000C054
++#define SBOX_GTT_PHY_BASE					0x0000C118
++#define SBOX_EMON_CNT0						0x0000CC28
++#define SBOX_EMON_CNT1						0x0000CC2C
++#define SBOX_EMON_CNT2						0x0000CC30
++#define SBOX_EMON_CNT3						0x0000CC34
++#define SBOX_RSC0						0x0000CC54
++#define SBOX_RSC1						0x0000CC58
++
++#endif
+diff --git a/arch/x86/include/asm/mic/mic_knc/micsboxstruct.h b/arch/x86/include/asm/mic/mic_knc/micsboxstruct.h
+new file mode 100644
+index 000000000000..a3ef1d046ff9
+--- /dev/null
++++ b/arch/x86/include/asm/mic/mic_knc/micsboxstruct.h
+@@ -0,0 +1,454 @@
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++/******************************************************************************
++File Name: micsboxstruct.h
++Description:  "Raw" register offsets & bit specifications for Intel MIC (KNC)
++Notes:
++    Auto gen sbox register header
++*******************************************************************************/
++#ifndef _MIC_SBOXSTRUCT_REGISTERS_H_
++#define _MIC_SBOXSTRUCT_REGISTERS_H_
++
++#include "../micreghelper.h"
++
++/************************************************************************* 
++    DMA Configuration Register 
++*************************************************************************/
++typedef union _sboxDcrReg
++{
++    U32 value;
++    struct
++    {
++	U32 co0						   : 1; // bit 0 DMA Channel 0 Owner
++	U32 ce0						   : 1; // bit 1 DMA Channel 0 Enable
++	U32 co1						   : 1; // bit 2 DMA Channel 1 Owner
++	U32 ce1						   : 1; // bit 3 DMA Channel 1 Enable
++	U32 co2						   : 1; // bit 4 DMA Channel 2 Owner
++	U32 ce2						   : 1; // bit 5 DMA Channel 2 Enable
++	U32 co3						   : 1; // bit 6 DMA Channel 3 Owner
++	U32 ce3						   : 1; // bit 7 DMA Channel 3 Enable
++	U32 co4						   : 1; // bit 8 DMA Channel 4 Owner
++	U32 ce4						   : 1; // bit 9 DMA Channel 4 Enable
++	U32 co5						   : 1; // bit 10 DMA Channel 5 Owner
++	U32 ce5						   : 1; // bit 11 DMA Channel 5 Enable
++	U32 co6						   : 1; // bit 12 DMA Channel 6 Owner
++	U32 ce6						   : 1; // bit 13 DMA Channel 6 Enable
++	U32 co7						   : 1; // bit 14 DMA AES Endianess - 0b1 = Big Endian. 0b0 = Little Endian
++	U32 ce7						   : 1; // bit 15 DMA Channel 7 Enable
++	U32 arb_h					   : 8; // bit 16-23 Arb H
++	U32 arb_l					   : 7; // bit 24-30 Arb L
++	U32 p						   : 1; // bit 31 Priority EN
++    } bits;
++} sboxDcrReg;
++
++STATIC_ASSERT(sizeof(sboxDcrReg) == sizeof(U32));
++
++/************************************************************************* 
++    Register that controls the interrupt response to thermal events 
++*************************************************************************/
++typedef union _sboxThermalInterruptEnableReg
++{
++    U32 value;
++    struct
++    {
++	U32 high_temp_interrupt_enable			   : 1; // bit 0 This bit enables/disables the s/w programmed HIGH temp interrupt 
++	U32 low_temp_interrupt_enable			   : 1; // bit 1 This bit enables/disables the s/w programmed  LOW temp interrupt 
++	U32 out_of_spec_interrupt_enable		   : 1; // bit 2 This bit enables/disables the Out of Spec Temp interrupt 
++	U32 fan_monitor_interrupt_enable		   : 1; // bit 3 This bit enables/disables the interrupt from Fan Control Unit	  
++	U32 system_monitor_interrupt_enable		   : 1; // bit 4 This bit enables/disables the system hot interrupts 
++	U32 mclk_ratio_interrupt_enable			   : 1; // bit 5 This bit enables/disables the mclk ratio interrupts 
++	U32 alert_interrupt_enable			   : 1; // bit 6 This bit enables/disables the ALERT# interrupts 
++	U32 gpuhot_interrupt_enable			   : 1; // bit 7 This bit enables/disables the GPUHOT# interrupts 
++	U32 pwralert_interrupt_enable			   : 1; // bit 8 This bit enables/disables the PWRALERT# interrupt 
++	U32 rsvd0					   : 1; // bit 9
++	U32 sw_threshold1_temp				   :10; // bit 10-19 Software Programmable Thermal Threshold #1 
++	U32 sw_threshold1_enable			   : 1; // bit 20 This bit enables/disables the sw threshold #1 interrupts 
++	U32 sw_threshold2_temp				   :10; // bit 21-30 Software Programmable Thermal Threshold #2 
++	U32 sw_threshold2_enable			   : 1; // bit 31 This bit enables/disables the sw threshold #2 interrupts 
++    } bits;
++} sboxThermalInterruptEnableReg;
++
++STATIC_ASSERT(sizeof(sboxThermalInterruptEnableReg) == sizeof(U32));
++
++
++/************************************************************************* 
++    Status and Log info for all the thermal interrupts 
++*************************************************************************/
++typedef union _sboxThermalStatusReg
++{
++    U32 value;
++    struct
++    {
++        U32 thermal_monitor_status                         : 1; // bit 0 This bit is set whenever the current die temp exceeds the thermal monitor control temperature 
++        U32 thermal_monitor_log                            : 1; // bit 1 This bit is a sticky version of Thermal_Monitor_Status, cleared by s/w or by reset 
++        U32 out_of_spec_status                             : 1; // bit 2 This bit is set whenever the current die temp exceeds the Out of Spec temperature; is sticky 
++        U32 out_of_spec_log                                : 1; // bit 3 This bit is also a sticky version of Out_Of_Spec_Status 
++        U32 thermal_threshold1_status                      : 1; // bit 4 This bit is set whenever the current die temp exceeds the software programmed thermal threshold
++        U32 thermal_threshold1_log                         : 1; // bit 5 This bit is a sticky version of Thermal_Threshold1_Status, cleared by s/w or by reset 
++        U32 thermal_threshold2_status                      : 1; // bit 6 This bit is set whenever the current die temp exceeds the software programmed thermal threshold
++        U32 thermal_threshold2_log                         : 1; // bit 7 This bit is a sticky version of Thermal_Threshold2_Status, cleared by s/w or by reset 
++        U32 fan_monitor_status                             : 1; // bit 8 This bit is an indication if there was an error/fail condition with the Off-chip Fan  
++        U32 fan_monitor_log                                : 1; // bit 9 This bit is a sticky version of Fan_Monitor_Status, cleared by s/w or by reset 
++        U32 system_hot_status                              : 1; // bit 10 This bit is an indication if any other device on the MIC Card is hot 
++        U32 system_hot_log                                 : 1; // bit 11 This bit is a sticky version of System_Hot_Status, cleared by s/w or by reset 
++        U32 rsvd0                                          :20; // bit 12-31
++    } bits;
++} sboxThermalStatusReg;
++
++STATIC_ASSERT(sizeof(sboxThermalStatusReg) == sizeof(U32));
++
++
++/************************************************************************* 
++    "Elapsed Time Clock" Timer - lower 32 bits 
++*************************************************************************/
++typedef union _sboxElapsedTimeLowReg
++{
++    U32 value;
++    struct
++    {
++	U32 elapsed_time_low				   :32; // bit 0-31 "Elapsed Time Clock" Timer - lower 32 bits 
++    } bits;
++} sboxElapsedTimeLowReg;
++
++STATIC_ASSERT(sizeof(sboxElapsedTimeLowReg) == sizeof(U32));
++/************************************************************************* 
++    "Elapsed Time Clock" Timer - higher 32 bits 
++*************************************************************************/
++typedef union _sboxElapsedTimeHighReg
++{
++    U32 value;
++    struct
++    {
++	U32 elapsed_time_high				   :32; // bit 0-31 "Elapsed Time Clock" Timer - higher 32 bits 
++    } bits;
++} sboxElapsedTimeHighReg;
++
++STATIC_ASSERT(sizeof(sboxElapsedTimeHighReg) == sizeof(U32));
++/************************************************************************* 
++    Status and Log info for KNC new thermal interrupts
++*************************************************************************/
++typedef union _sboxThermalStatusInterruptReg
++{
++    U32 value;
++    struct
++    {
++	U32 mclk_ratio_status				   : 1; // bit 0 This bit is set whenever MCLK Ratio Changes. Cleared by SW writing. 
++	U32 mclk_ratio_log				   : 1; // bit 1 This bit is also a sticky version of MCLK_Ratio_Status 
++	U32 alert_status				   : 1; // bit 2 This bit is set whenever ALERT# pin is asserted. Cleared by SW writing. 
++	U32 alert_log					   : 1; // bit 3 This bit is a sticky version of Alert_Status, cleared by s/w or by reset 
++	U32 gpuhot_status				   : 1; // bit 4 This bit reflects the real-time value of the GPUHOT# pin (synchronized to SCLK domain). 
++	U32 gpuhot_log					   : 1; // bit 5 This bit is set on the assertion edge of GPUHOT# and remains set until software clears it by doing a write. 
++	U32 pwralert_status				   : 1; // bit 6 This bit reflects the real-time value of the PWRALERT# pin (synchronized to SCLK domain). 
++	U32 pwralert_log				   : 1; // bit 7 This bit is set on the assertion edge of PWRALERT# and remains set until software clears it by doing a write. 
++	U32 rsvd0					   :23; // bit 8-30
++	U32 etc_freeze					   : 1; // bit 31 This bit freeze the increment of elapsed-time counter 
++    } bits;
++} sboxThermalStatusInterruptReg;
++
++STATIC_ASSERT(sizeof(sboxThermalStatusInterruptReg) == sizeof(U32));
++
++/************************************************************************* 
++    Consists of Current Die Temperatures of sensors 0 thru 2 
++*************************************************************************/
++typedef union _sboxCurrentDieTemp0Reg
++{
++    U32 value;
++    struct
++    {
++        U32 sensor0_temp                                   :10; // bit 0-9 current Temperature of Sensor0
++        U32 sensor1_temp                                   :10; // bit 10-19 current Temperature of Sensor1
++        U32 sensor2_temp                                   :10; // bit 20-29 current Temperature of Sensor2
++        U32 rsvd0                                          : 2; // bit 30-31
++    } bits;
++} sboxCurrentDieTemp0Reg;
++
++STATIC_ASSERT(sizeof(sboxCurrentDieTemp0Reg) == sizeof(U32));
++
++/************************************************************************* 
++    Configuration CSR for GPU HOT 
++*************************************************************************/
++typedef union _sboxGpuHotConfigReg
++{
++    U32 value;
++    struct
++    {
++        U32 enable_freq_throttle                           : 1; // bit 0 Enables Frequency Throttling initiated by someone outside MIC 
++        U32 xxgpuhot_enable                                : 1; // bit 1 Enable MIC Assertion of XXGPUHOT 
++        U32 rsvd0                                          :30; // bit 2-31
++    } bits;
++} sboxGpuHotConfigReg;
++
++STATIC_ASSERT(sizeof(sboxGpuHotConfigReg) == sizeof(U32));
++
++/************************************************************************* 
++    System Interrupt Cause Read Register 0 
++*************************************************************************/
++typedef union _sboxSicr0Reg
++{
++    U32 value;
++    struct
++    {
++	U32 dbr						   : 5; // bit 0-4 This bit is set whenever the uOS requests an interrupt service from the host driver thru one of the four doorbells 
++	U32 rsvd0					   : 3; // bit 5-7
++	U32 dma						   : 8; // bit 8-15 DMA Channels 7:0 - This bit is set whenever the uOS or the host driver configures the DMA engine to issue an interrupt upon a DMA Transfer completion on one of the channels
++	U32 rsvd1					   : 8; // bit 16-23
++	U32 disprra					   : 1; // bit 24 Alloocation bit for Display Rendering Event Interrupt A
++	U32 disprrb					   : 1; // bit 25 Alloocation bit for Display Rendering Event Interrupt B
++	U32 dispnrr					   : 1; // bit 26 Display Non-Rendering Event Interrupt - This bit is set whenever the Dbox detects a non-rendering interrupt condition, which are display pipeline errors i.e. overrun and underruns and hot-plug detect. 
++	U32 rsvd2					   : 3; // bit 27-29
++	U32 sboxerr					   : 1; // bit 30 LEP Error interrupts like the PCU
++	U32 spidone					   : 1; // bit 31 SPI Done Interrupt - This bit is set when the Sbox SPI controller is done with it's programmming operaiton
++    } bits;
++} sboxSicr0Reg;
++
++STATIC_ASSERT(sizeof(sboxSicr0Reg) == sizeof(U32));
++
++
++/************************************************************************* 
++    The expected MCLK Ratio that is sent to the corepll 
++*************************************************************************/
++typedef union _sboxCurrentratioReg
++{
++    U32 value;
++    struct
++    {
++	U32 mclkratio					   :12; // bit 0-11 This field contrains the actual MCLK ratio that the core is currently running at.  This may differ from the value programmed into the COREFREQ register due to thermal throttling or other events which force the MCLK ratio to a fixed value.
++	U32 rsvd0					   : 4; // bit 12-15
++	U32 goalratio					   :12; // bit 16-27 This field contrains the goal for the MCLK ratio..	 This may differ from the value programmed into the COREFREQ register due to thermal throttling or other events which force the MCLK ratio to a fixed value.  reset value needs to match corefreq.ratio RTL will use the corefreq.ratio reset value
++	U32 rsvd1					   : 4; // bit 28-31
++    } bits;
++} sboxCurrentratioReg;
++
++STATIC_ASSERT(sizeof(sboxCurrentratioReg) == sizeof(U32));
++
++
++
++
++/************************************************************************* 
++    Core Frequency 
++*************************************************************************/
++typedef union _sboxCorefreqReg
++{
++    U32 value;
++    struct
++    {
++	U32 ratio					   :12; // bit 0-11 Ratio
++	U32 rsvd0					   : 3; // bit 12-14
++	U32 fuseratio					   : 1; // bit 15 If overclocking is enabled, setting this bit will default the goal ratio to the fuse value.
++	U32 asyncmode					   : 1; // bit 16 Async Mode Bit 16, Reserved Bits 20:17 used to be ExtClkFreq, 
++	U32 rsvd1					   : 9; // bit 17-25
++	U32 ratiostep					   : 4; // bit 26-29 Power throttle ratio-step
++	U32 jumpratio					   : 1; // bit 30 Power throttle jump at once
++	U32 booted					   : 1; // bit 31 Booted: This bit selects between the default MCLK Ratio (600MHz) and the programmable MCLK ratio. 0=default 1=programmable.
++    } bits;
++} sboxCorefreqReg;
++
++STATIC_ASSERT(sizeof(sboxCorefreqReg) == sizeof(U32));
++/************************************************************************* 
++    Core Voltage 
++*************************************************************************/
++typedef union _sboxCorevoltReg
++{
++    U32 value;
++    struct
++    {
++	U32 vid						   : 8; // bit 0-7 VID
++	U32 rsvd0					   :24; // bit 8-31
++    } bits;
++} sboxCorevoltReg;
++
++STATIC_ASSERT(sizeof(sboxCorevoltReg) == sizeof(U32));
++
++
++/************************************************************************* 
++    SVID VR12/MVP7 Control Interace Register 
++*************************************************************************/
++typedef union _sboxSvidcontrolReg
++{
++    U32 value;
++    struct
++    {
++	U32 svid_dout					   : 9; // bit 0-8 SVID DATA OUT Field
++	U32 svid_cmd					   : 9; // bit 9-17 SVID Command Field
++	U32 svid_din					   :11; // bit 18-28 SVID DATA IN Field
++	U32 svid_error					   : 1; // bit 29 error indicator bit
++	U32 svid_idle					   : 1; // bit 30 svid idle
++	U32 cmd_start					   : 1; // bit 31 cmd start
++    } bits;
++} sboxSvidcontrolReg;
++
++STATIC_ASSERT(sizeof(sboxSvidcontrolReg) == sizeof(U32));
++/************************************************************************* 
++    Power Control Unit Register 
++*************************************************************************/
++typedef union _sboxPcucontrolReg
++{
++    U32 value;
++    struct
++    {
++	U32 enablemclkpllshutdown			   : 1; // bit 0 This bit is set by Host OS to allow disabling of MCLK PLL to enter C3-state.  It is cleared by the Host OS to prevent the MCLK PLL from being shutdown by the PCU.  MCLK PLL will only be disabled if this bit is set AND all internal idle requirements have been met. 0=Disable MCLK Shutdown, 1-Allow MCLK Shutdown
++	U32 mclk_enabled				   : 1; // bit 1 (read-only)This bit reflects the state of the PCU MCLK-Enable FSM.  It can be used as explicit feedback by SW to verify that successfully shutdown the MCLK PLL. 0=FSM not in MCLK_ENABLED state and MCLK is off.  1=FSM is in MCLK_ENABLED state and MCLK is running.
++	U32 ring_active					   : 1; // bit 2 (read-only)This bit reflects the state of the ring-idle indicator coming from the Ring Box.  0=All Agents Idle, 1=At least one agent active
++	U32 preventautoc3exit				   : 1; // bit 3 This bit is set by Host SW whenever it sets the VID value lower than it was when KNC entered Pkg-C3.	When set, any ring-bound PCIe transactions received by KNC will be completed without actually being sent to KNC ring, and an interrupt can be generated to the Host indicating this as an error condition.  This bit must be cleared for KNC to re-enable MCLK and exit C3. 0=Allow C3 Exit, 1=Prevent C3 Exit, Generate Error
++	U32 ghost_active				   : 1; // bit 4 (read-only)This bit reflects the state of the Ghost Downstream Arbiter.  0=Idle, 1=At least one agent active
++	U32 tcu_active					   : 1; // bit 5 (read-only) This bit reflects the state of the TCU(SBQ or DMA).  0=Idle, 1=At least one agent active
++	U32 itp_sclkgatedisable				   : 1; // bit 6 (read-only)Status of the ITP sClk clock-gate disable, 1=disabled 
++	U32 itp_pkgc3disable				   : 1; // bit 7 (read-only) Status of the ITP Pkg-C3 clock-gate disable, 1=disabled
++	U32 c3mclkgateen				   : 1; // bit 8 This bit, when set, will cause the MCLK to be gated at each individual Ring Agent when KNC is in C3.	It should be set only when the EnableMclkPllShutdown (bit 0) is not set.  Disabling MCLK when in C3 can only occur when the correct idle conditions are true and this or EnableMclkPllShutdown fields are set.	1=Gate Mclk, 0=Do Not Gate MCLK
++	U32 c3waketimer_en				   : 1; // bit 9 This bit, when set, loads the C3WakeUp timer with the 16-bit C3WakeTime field and enables the C3WakeUp timer to begin decrementing  while in AutoC3.  Clearing the disables the timer.	 HW will automatically clear this bit when the timer reaches zero or if AutoC3 exits. Writing a value of 0xFFFF to the C3WakeTimer will also clear this bit.
++	U32 sysint_active				   : 1; // bit 10 (read-only) This bit reflects the state of the SYSINT.  0=Idle, 1=At least one pending interrupt
++	U32 sclk_grid_off_disable			   : 1; // bit 11 Setting this bit will prevent the PCU logic from instructing the sclk PLL from gating the clock.
++	U32 icc_dvo_ssc_cg_enable			   : 1; // bit 12 Clock gate:: ICC logic related to DVO SSC buffer for ssc clock for d2d 1=clock gated
++	U32 icc_core_ref_clock_cg_enable		   : 1; // bit 13 Clock gate: ICC logic related to Core Reference clock:  1=clock gated 
++	U32 icc_gddr_ssc_cg_enable			   : 1; // bit 14 Clock Gate: ICC Logic relted to GDDR SSC buffer 1=clock gated
++	U32 icc_pll_disable				   : 1; // bit 15 This bit can be set by Host SW to shutdown the ICC PLL.  This should only be done once MCLK PLL is already shutdown.	This bit must be cleared at least 50us before reenabling MCLK.
++	U32 mclk_pll_lock				   : 1; // bit 16 This bit contains the value of hte actual MCLK PLL lock bit. Primarily for debug.  1=locked
++	U32 groupb_pwrgood_mask				   : 1; // bit 17 Clock Gate: ICC Logic relted to GDDR SSC buffer 1=clock gated
++	U32 rsvd0					   :14; // bit 18-31
++    } bits;
++} sboxPcucontrolReg;
++
++STATIC_ASSERT(sizeof(sboxPcucontrolReg) == sizeof(U32));
++/************************************************************************* 
++    Host PM scratch registers 
++*************************************************************************/
++typedef union _sboxHostpmstateReg
++{
++    U32 value;
++    struct
++    {
++	U32 host_pm_status				   : 7; // bit 0-6 This 7-bit value is writeable/readable by Host to communicate any PM information that the uOS might need to know.
++	U32 abort_not_processed				   : 1;	// bit 8. This bit is used by the Host to tell the card that it has processed the last abort message it received.
++	U32 minvid					   : 8; // bit 8-15 This 8-bit value is readable by Host to communicate what the fuse-programmed minimum VID that indicates the minimum VID for reliable operation at min MCLK Ratio.
++	U32 tdp_vid					   : 8; // bit 16-23 This 8-bit value is readable by SW and represents the fuse-programmed nominal VID for TDP operating point.	 Will be used by Host SW for restoring VID to a good point for C6-Exit.
++	U32 rsvd0					   : 8; // bit 24-31
++    } bits;
++} sboxHostpmstateReg;
++
++STATIC_ASSERT(sizeof(sboxHostpmstateReg) == sizeof(U32));
++/************************************************************************* 
++    uOS PM Scratch registers 
++*************************************************************************/
++typedef union _sboxUospmstateReg
++{
++    U32 value;
++    struct
++    {
++	U32 uos_pm_status				   : 8; // bit 0-7 This 7-bit value is writeable/readable by uOS to communicate any PM information that the Host might need to know.
++	U32 rsvd0					   :24; // bit 8-31
++    } bits;
++} sboxUospmstateReg;
++
++STATIC_ASSERT(sizeof(sboxUospmstateReg) == sizeof(U32));
++/************************************************************************* 
++    C3 WakeUp Timer Control for autoC3 
++*************************************************************************/
++typedef union _sboxC3wakeupTimerReg
++{
++    U32 value;
++    struct
++    {
++	U32 c3waketime					   :16; // bit 0-15 This 16-bit field represents the load value, in ~31.25us granularity, of the C3WakeUp timer.  This value must be non-zero, and the enable bit must be set(1) for the timer to begin counting down. Values of 0xFFFF will essentially disable the timer along with C3WakeTimer_En.
++	U32 rsvd0					   : 1; // bit 16
++	U32 c3wake_timeout				   : 1; // bit 17 When this read-only bit is set, it means that the timer has counted down and reached 0.  Once this bit is set, it can only be cleared by reloading and restarting the timer.	While this bit is set, KNC cannot enter C3.  If PcuControl.PreventAutoC3 bit is set, for example Deeper C3, this field will never assert. 
++	U32 rsvd1					   :14; // bit 18-31
++    } bits;
++} sboxC3wakeupTimerReg;
++
++STATIC_ASSERT(sizeof(sboxC3wakeupTimerReg) == sizeof(U32));
++
++/************************************************************************* 
++    C3 Entry and Exit Timers 
++*************************************************************************/
++typedef union _sboxC3TimersReg
++{
++    U32 value;
++    struct
++    {
++	U32 c3_entry_timer				   : 8; // bit 0-7 Programmable 8-bit timer with a 1us granularity which blocks C3 entry.  Value of 0=1us
++	U32 rsvd0					   : 8; // bit 8-15
++	U32 c3_exit_timer				   : 3; // bit 16-18 Programmable 8-bit timer with a 4us granularity which blocks C3 entry.  Value of 0=4us
++	U32 rsvd1					   :13; // bit 19-31
++    } bits;
++} sboxC3TimersReg;
++
++STATIC_ASSERT(sizeof(sboxC3TimersReg) == sizeof(U32));
++/************************************************************************* 
++    uOS PCU Control CSR.. i.e. not for host consumption 
++*************************************************************************/
++typedef union _sboxUosPcucontrolReg
++{
++    U32 value;
++    struct
++    {
++	U32 rsvd0					   : 2; // bit 0-1
++	U32 spi_clk_disable				   : 1; // bit 2 Clock gate: This bit shutsdown the SPI Clock output to Flash component. 1=SPI Flash Clock Off
++	U32 rsvd1					   :29; // bit 3-31
++    } bits;
++} sboxUosPcucontrolReg;
++
++STATIC_ASSERT(sizeof(sboxUosPcucontrolReg) == sizeof(U32));
++
++/************************************************************************* 
++    EMON Counter 0 
++*************************************************************************/
++typedef union _sboxEmonCounter0Reg
++{
++    U32 value;
++    struct
++    {
++	U32 emon_counter0				   :32; // bit 0-31 EMON counter 0
++    } bits;
++} sboxEmonCounter0Reg;
++
++STATIC_ASSERT(sizeof(sboxEmonCounter0Reg) == sizeof(U32));
++
++/************************************************************************* 
++    Scratch Pad registers for package-C6 
++*************************************************************************/
++typedef union _sboxC6ScratchReg
++{
++    U32 value;
++    struct
++    {
++	U32 pad						   :32; // bit 0-31 Scratch Pad bits
++    } bits;
++} sboxC6ScratchReg;
++
++/************************************************************************* 
++     
++*************************************************************************/
++typedef union _sboxPcieVendorIdDeviceIdReg
++{
++    U32 value;
++    struct
++    {
++        U32 vendor_id                                      :16; // bit 0-15 
++        U32 device_id                                      :16; // bit 16-31 
++    } bits;
++} sboxPcieVendorIdDeviceIdReg;
++
++STATIC_ASSERT(sizeof(sboxPcieVendorIdDeviceIdReg) == sizeof(U32));
++
++#endif
+diff --git a/arch/x86/include/asm/mic/micpm_device.h b/arch/x86/include/asm/mic/micpm_device.h
+new file mode 100644
+index 000000000000..b7aa48862d0f
+--- /dev/null
++++ b/arch/x86/include/asm/mic/micpm_device.h
+@@ -0,0 +1,76 @@
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++#ifndef _MICPM_DEVICE_H_
++#define _MICPM_DEVICE_H_
++
++#define MICPM_DEVEVENT_SUSPEND		1
++#define MICPM_DEVEVENT_RESUME		2
++#define MICPM_DEVEVENT_FAIL_SUSPEND	3
++
++/* Event ids for power and thermal event notifications */
++//PROCHOT event caused either by thermal or by the SMC when 
++//PL0 power limit is caused. Do we care which of these caused it ??
++#define EVENT_PROCHOT_ON			1
++
++//PROCHOT condition off event
++#define EVENT_PROCHOT_OFF		2
++//Event raised by the SMC when PL_1 card power limit is crossed
++#define EVENT_PWR_ALERT_ON		3
++
++#define EVENT_PWR_ALERT_OFF		4
++#define	EVENT_TURBO_CTRL		6
++
++#ifdef PARTIAL_CORE_TURBO
++//Event raised to  initialize turbo 
++#define EVENT_TURBO_INIT		5
++//Event raised to toggle turbo state
++//Event raised to change turbo point
++#define EVENT_TURBO_LIMIT		7
++#endif
++
++#define EVENT_MCLK			8
++#define EVENT_ALERT			9
++#define EVENT_PROCHOT_VIDCHANGE		10
++#define EVENT_PC3_ENTRY			11
++#define EVENT_PC3_EXIT			12
++#define EVENT_LAST			EVENT_PC3_EXIT
++
++enum notifier_type {BLOCKING,ATOMIC};
++
++/*These are for atomic event notifications */
++void micpm_atomic_notifier_register(struct notifier_block *n);
++void micpm_atomic_notifier_unregister(struct notifier_block *n);
++
++/*These are for blocking event notifications */
++void micpm_notifier_register(struct notifier_block *n);
++void micpm_notifier_unregister(struct notifier_block *n);
++
++/*These are for pm suspend/resume notofications */
++void micpm_device_register(struct notifier_block *n);
++void micpm_device_unregister(struct notifier_block *n);
++
++int micevent_notify(int event, void *v,enum notifier_type type);
++
++#endif //_MICPM_DEVICE_H_
++
+diff --git a/arch/x86/include/asm/mic/micreghelper.h b/arch/x86/include/asm/mic/micreghelper.h
+new file mode 100644
+index 000000000000..aaff139b526f
+--- /dev/null
++++ b/arch/x86/include/asm/mic/micreghelper.h
+@@ -0,0 +1,40 @@
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++/******************************************************************************
++File Name: micreghelper.h
++Description:  "Raw" register offsets & bit specifications for MIC
++Notes:
++*******************************************************************************/
++#ifndef _MIC_MICREGHELPERDEFINE_REGISTERS_H_
++#define _MIC_MICREGHELPERDEFINE_REGISTERS_H_
++
++#include <linux/types.h>
++
++#define _UNIQUE(x, y)           x##y
++#define UNIQUE(x)               _UNIQUE(__unique_name_,x)
++
++// Compile-time assert. This is always enabled.
++#define STATIC_ASSERT(exp)      typedef char UNIQUE(__LINE__)[(exp)?1:-1];
++
++#endif
+diff --git a/arch/x86/include/asm/mic_def.h b/arch/x86/include/asm/mic_def.h
+new file mode 100644
+index 000000000000..5ddbb099e443
+--- /dev/null
++++ b/arch/x86/include/asm/mic_def.h
+@@ -0,0 +1,70 @@
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++/*
++ * mic_def.h: Header file for Intel MIC devices
++ *
++ * (C) Copyright 2009 Intel Corporation
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; version 2
++ * of the License.
++ *
++ */
++#include <linux/irqreturn.h>
++#ifndef	ASM_X86_MIC_DEF_H
++#define	ASM_X86_MIC_DEF_
++#include "mic/mic_common.h"
++#include "mic/micreghelper.h"
++#ifdef CONFIG_MK1OM
++#include <linux/clocksource.h>
++/*
++ * SBOX ETC is a 64-bit counter with the LSB 5 bits hardwired to zero.
++ * The input clock is 15.625MHz and the counter increments by 100000b
++ * every 64nsecs.
++ */
++#define ETC_TICK_RATE           15625000
++extern	int etc_comp;
++u64 mic_etc_read(struct clocksource *cs);
++extern struct clocksource clocksource_micetc;
++#endif
++
++#define MIC_NUM_IOAPIC_ENTRIES	25
++void arch_setup_sbox_irqs(unsigned int *irqs, int n);
++void __init mic_construct_default_ioirq_mptable(int mpc_default_type);
++void save_APICICR_setup(uint64_t *apicicr);
++void restore_APICICR_setup(uint64_t *apicicr);
++extern void __iomem *mic_sbox_mmio_va;
++#define SBOX_BASE           0x08007D0000ULL     /* PCIE Box Registers */
++#define MIC_SBOX_MMIO_SIZE	(64*1024) // 64 KB = 2^16 // already defined ?
++
++#include "mic/mic_knc/micsboxdefine.h"
++#include "mic/mic_knc/micsboxstruct.h"
++#include "mic/mic_knc/micgboxdefine.h"
++#include "mic/mic_knc/micgboxstruct.h"
++#include "mic/mic_knc/autobaseaddress.h"
++
++#endif 
++
++
+diff --git a/include/linux/mic_dma/mic_dma_callback.h b/include/linux/mic_dma/mic_dma_callback.h
+new file mode 100644
+index 000000000000..0c8cdec4cbf4
+--- /dev/null
++++ b/include/linux/mic_dma/mic_dma_callback.h
+@@ -0,0 +1,51 @@
++#ifndef MIC_DMA_H
++#define MIC_DMA_H
++
++#ifdef CONFIG_PAGE_CACHE_DMA
++struct dma_channel;
++struct dma_completion_cb;
++
++struct dma_operations {
++	int (*do_dma) (struct dma_channel *chan, int flags, uint64_t src,
++		uint64_t dst, size_t len, struct dma_completion_cb *comp_cb);
++	int (*poll_dma_completion)(int poll_cookie, struct dma_channel *chan);
++	int (*free_dma_channel)(struct dma_channel *chan);
++	int (*open_dma_device)(int device_num, uint8_t *mmio_va_base,
++		 void **dma_handle);
++	void (*close_dma_device)(int device_num, void **dma_handle);
++	int (*allocate_dma_channel)(void *dma_handle,
++		 struct dma_channel **chan);
++	int (*program_descriptors)(struct dma_channel *chan, uint64_t src,
++			 uint64_t dst, size_t len);
++	int do_dma_polling;	/* value indicates that the dma engine
++				* must be polled to ensure completion.
++				*/
++};
++
++struct file_dma {
++	const struct dma_operations *dmaops;
++};
++
++void register_dma_for_fast_copy(const struct file_dma *fdma_callback);
++void  unregister_dma_for_fast_copy(void);
++
++extern int wait_for_dma_finish(struct dma_channel *chan,
++		read_descriptor_t *desc);
++
++extern struct page **prepare_for_dma_read(read_descriptor_t *desc,
++		unsigned long nrpages, struct dma_channel **chan,
++		int *upages_pinned);
++
++extern struct page **prepare_for_dma_write(struct iov_iter *i, loff_t pos,
++		unsigned int *nr);
++
++extern unsigned long fast_copy_to_user(read_descriptor_t *desc,
++		struct page **upages, unsigned long *uidx, struct page *page,
++		unsigned long offset, unsigned long size,
++		struct dma_channel *chan);
++
++extern size_t fast_copy_from_user(struct iov_iter *i, loff_t pos,
++				struct page **pages, int nr_pages);
++#endif
++
++#endif
+diff --git a/include/linux/mic_dma/mic_dma_local.h b/include/linux/mic_dma/mic_dma_local.h
+new file mode 100644
+index 000000000000..6f5643bb4dbe
+--- /dev/null
++++ b/include/linux/mic_dma/mic_dma_local.h
+@@ -0,0 +1,19 @@
++#ifndef MIC_DMA_LOCAL
++#define MIC_DMA_LOCAL
++
++#include <asm/i387.h>
++#include <linux/mm.h>
++
++#define VFS_OPT_READ  0x1
++#define VFS_OPT_WRITE 0x2
++
++#define kernel_client segment_eq(get_fs(), KERNEL_DS)
++
++/* read optimized */
++#define vfs_opt_read_enabled(x) ((vfs_optimization & VFS_OPT_READ) &&  \
++		!bdi_cap_writeback_dirty(x) && !kernel_client)
++/* write optimized */
++#define vfs_opt_write_enabled(x) ((vfs_optimization & VFS_OPT_WRITE) && \
++		!bdi_cap_writeback_dirty(x) && !kernel_client)
++size_t calculate_pages(unsigned long len, unsigned long offset);
++#endif

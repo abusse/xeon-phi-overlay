@@ -1,0 +1,795 @@
+From 37fafc9eb74cba4ad125a1faf7340a15ab094a23 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 28 Sep 2026 09:57:33 +0200
+Subject: [PATCH 07/16] x86/mic: KNC vector-unit (VPU) state handling
+
+From Intel MPSS 3.8.6. KNC has no SSE and no XSAVE; its 512-bit
+vector registers, mask registers and VXCSR are saved and restored by
+hand next to the fxsave x87 state, in the xstate layout so the signal
+frame and the ptrace NT_X86_XSTATE regset carry them:
+ - fpu/types.h: struct vpustate in xregs_state, XFEATURE_MASK_ZMM in
+   the MPX slot; uapi sigcontext.h: struct _vpustate in _xstate.
+ - fpu/core.c, xstate.h: save = fxsave + save_init_vpu(), restore =
+   fxrstor + VPU reload (os_xrstor{,_safe} EARLYMIC versions); the
+   mask registers are reloaded on every context switch (kmov ignores
+   CR0.TS).
+ - MXCSR.DUE errata: fxsave to the user sigframe forces DUE
+   (legacy.h); VXCSR_DEFAULT instead of 0x1f80 (MBZ on KNC).
+ - fpu/init.c: no CR4.OSFXSR/OSXMMEXCPT; fpu/xstate.c: no XSAVE, so
+   fpu__init_system_xstate() sets the feature mask and sizes by hand.
+ - mic_ni.h: the VPU save/restore/mask helpers; no emms (no MMX).
+
+Adaptations for 6.18: rebuilt on the 6.x FPU core (struct fpstate,
+fpu_kernel_cfg/fpu_user_cfg, fpstate_init_user(), x86_task_fpu(),
+kernel/fpu/{internal,legacy,xstate}.h after the 5.16 split of
+asm/fpu/internal.h). init_fpstate is __ro_after_init since 5.14: the
+MK1OM LDVXCSR macro normalizes VXCSR in a register and loads from the
+stack. 6.15 dropped the FPU state of kernel threads: the idle task is
+no longer reset from the KNC xstate init. The VPU helpers emit
+relative (_ASM_EXTABLE) exception-table entries; the 2.6-era 16-byte
+absolute ones corrupted the sorted table (#GP storm from the
+CSTAR/SYSENTER wrmsrl_safe fixups).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ arch/x86/include/asm/fpu/types.h       |  17 ++
+ arch/x86/include/asm/fpu/xstate.h      |   8 +
+ arch/x86/include/asm/mic_ni.h          | 341 +++++++++++++++++++++++++
+ arch/x86/include/uapi/asm/sigcontext.h |  11 +
+ arch/x86/kernel/fpu/core.c             |  20 ++
+ arch/x86/kernel/fpu/init.c             |  11 +
+ arch/x86/kernel/fpu/internal.h         |   8 +
+ arch/x86/kernel/fpu/legacy.h           |  18 +-
+ arch/x86/kernel/fpu/regset.c           |   4 +
+ arch/x86/kernel/fpu/signal.c           |  24 ++
+ arch/x86/kernel/fpu/xstate.c           |  24 ++
+ arch/x86/kernel/fpu/xstate.h           |  20 ++
+ 12 files changed, 503 insertions(+), 3 deletions(-)
+ create mode 100644 arch/x86/include/asm/mic_ni.h
+
+diff --git a/arch/x86/include/asm/fpu/types.h b/arch/x86/include/asm/fpu/types.h
+index 93e99d2583d6..c34c3f7e60eb 100644
+--- a/arch/x86/include/asm/fpu/types.h
++++ b/arch/x86/include/asm/fpu/types.h
+@@ -149,6 +149,10 @@ enum xfeature {
+ #define XFEATURE_MASK_APX		(1 << XFEATURE_APX)
+ 
+ #define XFEATURE_MASK_FPSSE		(XFEATURE_MASK_FP | XFEATURE_MASK_SSE)
++#ifdef CONFIG_X86_EARLYMIC
++/* KNC: the VPU block takes the slot MPX uses elsewhere. */
++#define XFEATURE_MASK_ZMM		(1 << XFEATURE_BNDREGS)
++#endif
+ #define XFEATURE_MASK_AVX512		(XFEATURE_MASK_OPMASK \
+ 					 | XFEATURE_MASK_ZMM_Hi256 \
+ 					 | XFEATURE_MASK_Hi16_ZMM)
+@@ -336,6 +340,16 @@ struct xstate_header {
+ 	u64				reserved[6];
+ } __attribute__((packed));
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/* KNC VPU: 32 x 512-bit vector registers, 8 mask registers, VXCSR. */
++struct vpustate_struct {
++	u32				vector_space[512];
++	u16				k[8];
++	u32				vxcsr;
++	u32				reserved2[27];
++};
++#endif
++
+ /*
+  * xstate_header.xcomp_bv[63] indicates that the extended_state_area
+  * is in compacted format.
+@@ -354,6 +368,9 @@ struct xstate_header {
+ struct xregs_state {
+ 	struct fxregs_state		i387;
+ 	struct xstate_header		header;
++#ifdef CONFIG_X86_EARLYMIC
++	struct vpustate_struct		vpu;
++#endif
+ 	u8				extended_state_area[];
+ } __attribute__ ((packed, aligned (64)));
+ 
+diff --git a/arch/x86/include/asm/fpu/xstate.h b/arch/x86/include/asm/fpu/xstate.h
+index 7a7dc9d56027..2f536a488d59 100644
+--- a/arch/x86/include/asm/fpu/xstate.h
++++ b/arch/x86/include/asm/fpu/xstate.h
+@@ -22,6 +22,13 @@
+ 
+ #define XSAVE_ALIGNMENT     64
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/* KNC: FP/SSE/YMM plus the VPU block (rides in the MPX slot) */
++#define XFEATURE_MASK_USER_SUPPORTED (XFEATURE_MASK_FP | \
++				      XFEATURE_MASK_SSE | \
++				      XFEATURE_MASK_YMM | \
++				      XFEATURE_MASK_ZMM)
++#else
+ /* All currently supported user features */
+ #define XFEATURE_MASK_USER_SUPPORTED (XFEATURE_MASK_FP | \
+ 				      XFEATURE_MASK_SSE | \
+@@ -34,6 +41,7 @@
+ 				      XFEATURE_MASK_BNDCSR | \
+ 				      XFEATURE_MASK_XTILE | \
+ 				      XFEATURE_MASK_APX)
++#endif
+ 
+ /*
+  * Features which are restored when returning to user space.
+diff --git a/arch/x86/include/asm/mic_ni.h b/arch/x86/include/asm/mic_ni.h
+new file mode 100644
+index 000000000000..7380271a8389
+--- /dev/null
++++ b/arch/x86/include/asm/mic_ni.h
+@@ -0,0 +1,341 @@
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
++/*
++ * include/asm-x86_64/vpu.h
++ *
++ * Save/Restore VPU State
++ *
++ * Author: Stephan.Zeisset@intel.com
++ *
++ */
++
++#ifndef __ASM_X86_MIC_NI_H
++#define __ASM_X86_MIC_NI_H
++#include <linux/sched.h>
++#include <linux/stringify.h>
++#include <asm/processor.h>
++#include <asm/asm.h>
++#include <asm/fpu/types.h>
++#include <asm/sigcontext.h>
++#include <asm/user.h>
++#include <asm/thread_info.h>
++#include <asm/uaccess.h>
++
++#ifdef CONFIG_MK1OM
++
++/*
++ *  VXCSR initialization values.
++ *  The "invalid" value will cause us to take #UD exceptions
++ *  when any VPU instruction is executed.
++ *  Note: DUE bit(bit21) has to be 1 for K1OM
++ */
++#define VXCSR_INVALID 0x00200000
++#define VXCSR_DEFAULT 0x00200000
++
++// These bits are reserved and must be zero.  Debuggers using ptrace can change these bits.
++// 7-12, 16-19, 20 DDO (POC only), 22-31
++#define VXCSR_MBZ 0xffdf1f80
++
++#define VSTORED_DISP32_EAX(v, disp32) ".byte 0x62, 0xf1 ^ (" #v " & 0x10) ^ ((" #v " & 0x8) << 4), 0x78, 0x08, 0x29, 0x80 + ((" #v " & 0x7) << 3); .long " #disp32 "\n"
++
++#define VLOADD_DISP32_EAX(v, disp32) ".byte 0x62, 0xf1 ^ (" #v " & 0x10) ^ ((" #v " & 0x8) << 4), 0x78, 0x08, 0x28, 0x80 + ((" #v " & 0x7) << 3); .long " #disp32 "\n"
++
++#define VKMOV_TO_EBX(k) ".byte 0xc5, 0xf8, 0x93, 0xd8 + (" #k ")\n"
++
++#define VKMOV_FROM_EBX(k) ".byte 0xc5, 0xf8, 0x92, 0xc3 + (" #k " << 3)\n"
++
++#define STVXCSR_DISP32_EAX(disp32) ".byte 0x0f, 0xae, 0x98; .long " #disp32 "\n"
++
++/* normalize in a register: the fpstate may be read-only (init_fpstate is __ro_after_init since 5.14) */
++#define LDVXCSR_DISP32_EAX(disp32) "movl "#disp32"(%%rax), %%ebx\n\t" \
++				   "orl $"__stringify(VXCSR_DEFAULT)", %%ebx\n\t" \
++				   "andl $~"__stringify(VXCSR_MBZ)", %%ebx\n\t" \
++				   "pushq %%rbx\n\t" \
++				   "ldmxcsr (%%rsp)\n\t" \
++				   "popq %%rbx\n"
++
++#else
++
++/*
++ *  VXCSR initialization values.
++ *  The "invalid" value will cause us to take #UD exceptions
++ *  when any VPU instruction is executed.
++ */
++#define VXCSR_INVALID 0
++#define VXCSR_DEFAULT 0x9fc0
++
++#define VSTORED_DISP32_EAX(v, disp32) ".byte 0xd6, (" #v " >> 1) & 0xc, 0x0, 0x14, 0x80 + ((" #v " & 0x7) << 3); .long " #disp32 "\n"
++
++#define VLOADD_DISP32_EAX(v, disp32) ".byte 0xd6, (" #v " >> 1) & 0xc, 0x0, 0x10, 0x80 + ((" #v " & 0x7) << 3); .long " #disp32 "\n"
++
++#define VKMOV_TO_EBX(k) ".byte 0x62, 0xdc, 0xc3 + (" #k " << 3)\n"
++
++#define VKMOV_FROM_EBX(k) ".byte 0x62, 0xec, 0xd8 + (" #k ")\n"
++
++#define STVXCSR_DISP32_EAX(disp32) ".byte 0x62, 0xeb, 0x98; .long " #disp32 "\n"
++
++#define LDVXCSR_DISP32_EAX(disp32) ".byte 0x62, 0xeb, 0x90; .long " #disp32 "\n"
++
++#endif
++
++
++#define CHK_VSTORED_DISP32_EAX(v, disp32)	\
++	"1: "					\
++	VSTORED_DISP32_EAX(v, disp32)		\
++	_ASM_EXTABLE(1b, 3f)
++
++#define CHK_VLOADD_DISP32_EAX(v, disp32)	\
++	"1: "					\
++	VLOADD_DISP32_EAX(v, disp32)		\
++	_ASM_EXTABLE(1b, 3f)
++
++#define VKSTORE_DISP32_EAX(k, disp32)		\
++	VKMOV_TO_EBX(k)				\
++	"movw %%bx, " #disp32 "(%%rax)\n"
++
++#define VKLOAD_DISP32_EAX(k, disp32)		\
++	"movw " #disp32 "(%%rax), %%bx\n"	\
++	VKMOV_FROM_EBX(k)
++
++#define CHK_VKSTORE_DISP32_EAX(k, disp32)	\
++	VKMOV_TO_EBX(k)				\
++	"1: movw %%bx, " #disp32 "(%%rax)\n"	\
++	_ASM_EXTABLE(1b, 3f)
++
++#define CHK_VKLOAD_DISP32_EAX(k, disp32)	\
++	"1: movw " #disp32 "(%%rax), %%bx\n"	\
++	VKMOV_FROM_EBX(k)			\
++	_ASM_EXTABLE(1b, 3f)
++
++#define CHK_STVXCSR_DISP32_EAX(disp32)		\
++	"1: "					\
++	STVXCSR_DISP32_EAX(disp32)		\
++	_ASM_EXTABLE(1b, 3f)
++
++#define CHK_LDVXCSR_DISP32_EAX(disp32)		\
++	"1: "					\
++	LDVXCSR_DISP32_EAX(disp32)		\
++	_ASM_EXTABLE(1b, 3f)
++
++
++static inline int __mic_restore_mask_regs(struct vpustate_struct *vpustate)
++{
++	int err;
++
++	asm volatile(
++		CHK_VKLOAD_DISP32_EAX(0, 0x800)
++		CHK_VKLOAD_DISP32_EAX(1, 0x802)
++		CHK_VKLOAD_DISP32_EAX(2, 0x804)
++		CHK_VKLOAD_DISP32_EAX(3, 0x806)
++		CHK_VKLOAD_DISP32_EAX(4, 0x808)
++		CHK_VKLOAD_DISP32_EAX(5, 0x80a)
++		CHK_VKLOAD_DISP32_EAX(6, 0x80c)
++		CHK_VKLOAD_DISP32_EAX(7, 0x80e)
++		"2:\n"
++		".section .fixup,\"ax\"\n"
++		"3:  movl $-1,%[err]\n"
++		"    jmp  2b\n"
++		".previous\n"
++		: [err] "=r" (err)
++		: [fx] "a" (vpustate), "m" (*vpustate), "0" (0) : "ebx"
++	);
++	return err;
++}
++
++static inline int restore_vpu_checking_nomask(struct vpustate_struct *vpustate)
++{
++	int err;
++
++	asm volatile(
++		CHK_VLOADD_DISP32_EAX(0, 0x00)
++		CHK_VLOADD_DISP32_EAX(1, 0x40)
++		CHK_VLOADD_DISP32_EAX(2, 0x80)
++		CHK_VLOADD_DISP32_EAX(3, 0xc0)
++		CHK_VLOADD_DISP32_EAX(4, 0x100)
++		CHK_VLOADD_DISP32_EAX(5, 0x140)
++		CHK_VLOADD_DISP32_EAX(6, 0x180)
++		CHK_VLOADD_DISP32_EAX(7, 0x1c0)
++		CHK_VLOADD_DISP32_EAX(8, 0x200)
++		CHK_VLOADD_DISP32_EAX(9, 0x240)
++		CHK_VLOADD_DISP32_EAX(10, 0x280)
++		CHK_VLOADD_DISP32_EAX(11, 0x2c0)
++		CHK_VLOADD_DISP32_EAX(12, 0x300)
++		CHK_VLOADD_DISP32_EAX(13, 0x340)
++		CHK_VLOADD_DISP32_EAX(14, 0x380)
++		CHK_VLOADD_DISP32_EAX(15, 0x3c0)
++		CHK_VLOADD_DISP32_EAX(16, 0x400)
++		CHK_VLOADD_DISP32_EAX(17, 0x440)
++		CHK_VLOADD_DISP32_EAX(18, 0x480)
++		CHK_VLOADD_DISP32_EAX(19, 0x4c0)
++		CHK_VLOADD_DISP32_EAX(20, 0x500)
++		CHK_VLOADD_DISP32_EAX(21, 0x540)
++		CHK_VLOADD_DISP32_EAX(22, 0x580)
++		CHK_VLOADD_DISP32_EAX(23, 0x5c0)
++		CHK_VLOADD_DISP32_EAX(24, 0x600)
++		CHK_VLOADD_DISP32_EAX(25, 0x640)
++		CHK_VLOADD_DISP32_EAX(26, 0x680)
++		CHK_VLOADD_DISP32_EAX(27, 0x6c0)
++		CHK_VLOADD_DISP32_EAX(28, 0x700)
++		CHK_VLOADD_DISP32_EAX(29, 0x740)
++		CHK_VLOADD_DISP32_EAX(30, 0x780)
++		CHK_VLOADD_DISP32_EAX(31, 0x7c0)
++		CHK_LDVXCSR_DISP32_EAX(0x810)
++		"2:\n"
++		".section .fixup,\"ax\"\n"
++		"3:  movl $-1,%[err]\n"
++		"    jmp  2b\n"
++		".previous\n"
++		: [err] "=r" (err)
++		: [fx] "a" (vpustate), "m" (*vpustate), "0" (0) : "ebx"
++	);
++
++	return err;
++}
++
++static inline int restore_vpu_checking(struct vpustate_struct *vpustate)
++{
++	int err;
++
++	err = restore_vpu_checking_nomask(vpustate);
++	if (!err)
++		err = __mic_restore_mask_regs(vpustate);
++	return err;
++}
++
++static inline int save_vpu_checking(struct vpustate_struct *vpustate)
++{
++	int err;
++
++	asm volatile(
++		CHK_VSTORED_DISP32_EAX(0, 0x00)
++		CHK_VSTORED_DISP32_EAX(1, 0x40)
++		CHK_VSTORED_DISP32_EAX(2, 0x80)
++		CHK_VSTORED_DISP32_EAX(3, 0xc0)
++		CHK_VSTORED_DISP32_EAX(4, 0x100)
++		CHK_VSTORED_DISP32_EAX(5, 0x140)
++		CHK_VSTORED_DISP32_EAX(6, 0x180)
++		CHK_VSTORED_DISP32_EAX(7, 0x1c0)
++		CHK_VSTORED_DISP32_EAX(8, 0x200)
++		CHK_VSTORED_DISP32_EAX(9, 0x240)
++		CHK_VSTORED_DISP32_EAX(10, 0x280)
++		CHK_VSTORED_DISP32_EAX(11, 0x2c0)
++		CHK_VSTORED_DISP32_EAX(12, 0x300)
++		CHK_VSTORED_DISP32_EAX(13, 0x340)
++		CHK_VSTORED_DISP32_EAX(14, 0x380)
++		CHK_VSTORED_DISP32_EAX(15, 0x3c0)
++		CHK_VSTORED_DISP32_EAX(16, 0x400)
++		CHK_VSTORED_DISP32_EAX(17, 0x440)
++		CHK_VSTORED_DISP32_EAX(18, 0x480)
++		CHK_VSTORED_DISP32_EAX(19, 0x4c0)
++		CHK_VSTORED_DISP32_EAX(20, 0x500)
++		CHK_VSTORED_DISP32_EAX(21, 0x540)
++		CHK_VSTORED_DISP32_EAX(22, 0x580)
++		CHK_VSTORED_DISP32_EAX(23, 0x5c0)
++		CHK_VSTORED_DISP32_EAX(24, 0x600)
++		CHK_VSTORED_DISP32_EAX(25, 0x640)
++		CHK_VSTORED_DISP32_EAX(26, 0x680)
++		CHK_VSTORED_DISP32_EAX(27, 0x6c0)
++		CHK_VSTORED_DISP32_EAX(28, 0x700)
++		CHK_VSTORED_DISP32_EAX(29, 0x740)
++		CHK_VSTORED_DISP32_EAX(30, 0x780)
++		CHK_VSTORED_DISP32_EAX(31, 0x7c0)
++		CHK_VKSTORE_DISP32_EAX(0, 0x800)
++		CHK_VKSTORE_DISP32_EAX(1, 0x802)
++		CHK_VKSTORE_DISP32_EAX(2, 0x804)
++		CHK_VKSTORE_DISP32_EAX(3, 0x806)
++		CHK_VKSTORE_DISP32_EAX(4, 0x808)
++		CHK_VKSTORE_DISP32_EAX(5, 0x80a)
++		CHK_VKSTORE_DISP32_EAX(6, 0x80c)
++		CHK_VKSTORE_DISP32_EAX(7, 0x80e)
++		CHK_STVXCSR_DISP32_EAX(0x810)
++		"2:\n"
++		".section .fixup,\"ax\"\n"
++		"3:  movl $-1,%[err]\n"
++		"    jmp  2b\n"
++		".previous\n"
++		: [err] "=r" (err), "=m" (*vpustate)
++		: [fx] "a" (vpustate), "0" (0) : "ebx"
++	);
++
++	if (unlikely(err) && __clear_user(vpustate, sizeof(struct vpustate_struct)))
++		err = -EFAULT;
++	/* No need to clear here because the caller clears USED_MATH */
++	return err;
++}
++
++static inline void __vpu_clear(struct xregs_state *fx)
++{
++	__asm__ __volatile__(
++		VSTORED_DISP32_EAX(0, 0x00)
++		VSTORED_DISP32_EAX(1, 0x40)
++		VSTORED_DISP32_EAX(2, 0x80)
++		VSTORED_DISP32_EAX(3, 0xc0)
++		VSTORED_DISP32_EAX(4, 0x100)
++		VSTORED_DISP32_EAX(5, 0x140)
++		VSTORED_DISP32_EAX(6, 0x180)
++		VSTORED_DISP32_EAX(7, 0x1c0)
++		VSTORED_DISP32_EAX(8, 0x200)
++		VSTORED_DISP32_EAX(9, 0x240)
++		VSTORED_DISP32_EAX(10, 0x280)
++		VSTORED_DISP32_EAX(11, 0x2c0)
++		VSTORED_DISP32_EAX(12, 0x300)
++		VSTORED_DISP32_EAX(13, 0x340)
++		VSTORED_DISP32_EAX(14, 0x380)
++		VSTORED_DISP32_EAX(15, 0x3c0)
++		VSTORED_DISP32_EAX(16, 0x400)
++		VSTORED_DISP32_EAX(17, 0x440)
++		VSTORED_DISP32_EAX(18, 0x480)
++		VSTORED_DISP32_EAX(19, 0x4c0)
++		VSTORED_DISP32_EAX(20, 0x500)
++		VSTORED_DISP32_EAX(21, 0x540)
++		VSTORED_DISP32_EAX(22, 0x580)
++		VSTORED_DISP32_EAX(23, 0x5c0)
++		VSTORED_DISP32_EAX(24, 0x600)
++		VSTORED_DISP32_EAX(25, 0x640)
++		VSTORED_DISP32_EAX(26, 0x680)
++		VSTORED_DISP32_EAX(27, 0x6c0)
++		VSTORED_DISP32_EAX(28, 0x700)
++		VSTORED_DISP32_EAX(29, 0x740)
++		VSTORED_DISP32_EAX(30, 0x780)
++		VSTORED_DISP32_EAX(31, 0x7c0)
++		VKSTORE_DISP32_EAX(0, 0x800)
++		VKSTORE_DISP32_EAX(1, 0x802)
++		VKSTORE_DISP32_EAX(2, 0x804)
++		VKSTORE_DISP32_EAX(3, 0x806)
++		VKSTORE_DISP32_EAX(4, 0x808)
++		VKSTORE_DISP32_EAX(5, 0x80a)
++		VKSTORE_DISP32_EAX(6, 0x80c)
++		VKSTORE_DISP32_EAX(7, 0x80e)
++		STVXCSR_DISP32_EAX(0x810)
++
++		:: "a" (&fx->vpu) : "ebx"
++	);
++}
++
++static inline void save_init_vpu(struct xregs_state *fx)
++{
++	__vpu_clear(fx);
++}
++#endif /* __ASM_X86_64_VPU_H */
+diff --git a/arch/x86/include/uapi/asm/sigcontext.h b/arch/x86/include/uapi/asm/sigcontext.h
+index d0d9b331d3a1..4e6a9db3ede0 100644
+--- a/arch/x86/include/uapi/asm/sigcontext.h
++++ b/arch/x86/include/uapi/asm/sigcontext.h
+@@ -177,6 +177,13 @@ struct _header {
+ 	__u64				reserved2[5];
+ };
+ 
++struct _vpustate {
++	__u32 vector_space[512];	/* Vector Registers (32x64 bytes) */
++	__u16 k[8];			/* Mask Registers */
++	__u32 vxcsr;
++	__u32 reserved2[27];
++};
++
+ struct _ymmh_state {
+ 	/* 16x YMM registers, 16 bytes each: */
+ 	__u32				ymmh_space[64];
+@@ -192,8 +199,12 @@ struct _ymmh_state {
+ struct _xstate {
+ 	struct _fpstate			fpstate;
+ 	struct _header			xstate_hdr;
++#ifdef CONFIG_X86_EARLYMIC
++	struct _vpustate		vpustate;
++#else
+ 	struct _ymmh_state		ymmh;
+ 	/* New processor state extensions go here: */
++#endif
+ };
+ 
+ /*
+diff --git a/arch/x86/kernel/fpu/core.c b/arch/x86/kernel/fpu/core.c
+index 0c1b27d9d4f2..a6d48d2ec19a 100644
+--- a/arch/x86/kernel/fpu/core.c
++++ b/arch/x86/kernel/fpu/core.c
+@@ -139,6 +139,12 @@ static void update_avx_timestamp(struct fpu *fpu)
+  */
+ void save_fpregs_to_fpstate(struct fpu *fpu)
+ {
++#ifdef CONFIG_X86_EARLYMIC
++	/* KNC: fxsave the x87 state, then store the vector/mask/VXCSR block. */
++	fxsave(&fpu->fpstate->regs.fxsave);
++	save_init_vpu(&fpu->fpstate->regs.xsave);
++	return;
++#endif
+ 	if (likely(use_xsave())) {
+ 		os_xsave(fpu->fpstate);
+ 		update_avx_timestamp(fpu);
+@@ -160,6 +166,12 @@ void save_fpregs_to_fpstate(struct fpu *fpu)
+ 
+ void restore_fpregs_from_fpstate(struct fpstate *fpstate, u64 mask)
+ {
++#ifdef CONFIG_X86_EARLYMIC
++	/* no XRSTOR; the VPU data and mask registers ride along with the fx state */
++	fxrstor(&fpstate->regs.fxsave);
++	WARN_ON_FPU(restore_vpu_checking(&fpstate->regs.xsave.vpu));
++	return;
++#endif
+ 	/*
+ 	 * AMD K7/K8 and later CPUs up to Zen don't save/restore
+ 	 * FDP/FIP/FOP unless an exception is pending. Clear the x87 state
+@@ -512,7 +524,12 @@ static inline unsigned int init_fpstate_copy_size(void)
+ static inline void fpstate_init_fxstate(struct fpstate *fpstate)
+ {
+ 	fpstate->regs.fxsave.cwd = 0x37f;
++#ifdef CONFIG_MK1OM
++	/* KNC VXCSR: the 0x1f80 default bits are MBZ, DUE (bit 21) must be set. */
++	fpstate->regs.fxsave.mxcsr = VXCSR_DEFAULT;
++#else
+ 	fpstate->regs.fxsave.mxcsr = MXCSR_DEFAULT;
++#endif
+ }
+ 
+ /*
+@@ -544,6 +561,9 @@ void fpstate_init_user(struct fpstate *fpstate)
+ 		fpstate_init_fxstate(fpstate);
+ 	else
+ 		fpstate_init_fstate(fpstate);
++#ifdef CONFIG_X86_EARLYMIC
++	fpstate->regs.xsave.vpu.vxcsr = VXCSR_DEFAULT;
++#endif
+ }
+ 
+ static void __fpstate_reset(struct fpstate *fpstate)
+diff --git a/arch/x86/kernel/fpu/init.c b/arch/x86/kernel/fpu/init.c
+index ff988b9ea39f..29494c589d3a 100644
+--- a/arch/x86/kernel/fpu/init.c
++++ b/arch/x86/kernel/fpu/init.c
+@@ -20,6 +20,7 @@
+ static void fpu__init_cpu_generic(void)
+ {
+ 	unsigned long cr0;
++#ifndef CONFIG_X86_EARLYMIC
+ 	unsigned long cr4_mask = 0;
+ 
+ 	if (boot_cpu_has(X86_FEATURE_FXSR))
+@@ -28,6 +29,7 @@ static void fpu__init_cpu_generic(void)
+ 		cr4_mask |= X86_CR4_OSXMMEXCPT;
+ 	if (cr4_mask)
+ 		cr4_set_bits(cr4_mask);
++#endif
+ 
+ 	cr0 = read_cr0();
+ 	cr0 &= ~(X86_CR0_TS|X86_CR0_EM); /* clear TS and EM */
+@@ -119,6 +121,15 @@ static void __init fpu__init_system_mxcsr(void)
+ 		 */
+ 		if (mask == 0)
+ 			mask = 0x0000ffbf;
++#ifdef CONFIG_MK1OM
++		{
++			/* KNC: DUE (bit 21) must be set to avoid GP# on vector register access. */
++			unsigned int vxcsr = VXCSR_DEFAULT;
++
++			asm volatile("ldmxcsr %0" :: "m" (vxcsr));
++			mask |= vxcsr;
++		}
++#endif
+ 	}
+ 	mxcsr_feature_mask &= mask;
+ }
+diff --git a/arch/x86/kernel/fpu/internal.h b/arch/x86/kernel/fpu/internal.h
+index 975de070c9c9..56e99b6e92d4 100644
+--- a/arch/x86/kernel/fpu/internal.h
++++ b/arch/x86/kernel/fpu/internal.h
+@@ -2,11 +2,19 @@
+ #ifndef __X86_KERNEL_FPU_INTERNAL_H
+ #define __X86_KERNEL_FPU_INTERNAL_H
+ 
++#ifdef CONFIG_X86_EARLYMIC
++#include <asm/mic_ni.h>
++#endif
++
+ extern struct fpstate init_fpstate;
+ 
+ /* CPU feature check wrappers */
+ static __always_inline __pure bool use_xsave(void)
+ {
++#ifdef CONFIG_X86_EARLYMIC
++	/* No XSAVE, but the VPU state rides in the xstate layout/sigframe. */
++	return 1;
++#endif
+ 	return cpu_feature_enabled(X86_FEATURE_XSAVE);
+ }
+ 
+diff --git a/arch/x86/kernel/fpu/legacy.h b/arch/x86/kernel/fpu/legacy.h
+index 098f367bb8a7..c6082f7beeec 100644
+--- a/arch/x86/kernel/fpu/legacy.h
++++ b/arch/x86/kernel/fpu/legacy.h
+@@ -54,11 +54,23 @@ static inline int fnsave_to_user_sigframe(struct fregs_state __user *fx)
+ 
+ static inline int fxsave_to_user_sigframe(struct fxregs_state __user *fx)
+ {
++	int err;
++
+ 	if (IS_ENABLED(CONFIG_X86_32))
+-		return user_insn(fxsave %[fx], [fx] "=m" (*fx), "m" (*fx));
++		err = user_insn(fxsave %[fx], [fx] "=m" (*fx), "m" (*fx));
+ 	else
+-		return user_insn(fxsaveq %[fx], [fx] "=m" (*fx), "m" (*fx));
+-
++		err = user_insn(fxsaveq %[fx], [fx] "=m" (*fx), "m" (*fx));
++#ifdef CONFIG_MK1OM
++	/* KNC errata: MXCSR.DUE (bit 21) must be 1 or the later fxrstor faults. */
++	if (!err) {
++		u32 mxcsr;
++
++		if (__get_user(mxcsr, &fx->mxcsr) ||
++		    __put_user(mxcsr | VXCSR_DEFAULT, &fx->mxcsr))
++			err = -EFAULT;
++	}
++#endif
++	return err;
+ }
+ 
+ static inline void fxrstor(struct fxregs_state *fx)
+diff --git a/arch/x86/kernel/fpu/regset.c b/arch/x86/kernel/fpu/regset.c
+index 0986c2200adc..5c25dbaf15e3 100644
+--- a/arch/x86/kernel/fpu/regset.c
++++ b/arch/x86/kernel/fpu/regset.c
+@@ -130,8 +130,10 @@ int xfpregs_set(struct task_struct *target, const struct user_regset *regset,
+ int xstateregs_get(struct task_struct *target, const struct user_regset *regset,
+ 		struct membuf to)
+ {
++#ifndef CONFIG_X86_EARLYMIC
+ 	if (!cpu_feature_enabled(X86_FEATURE_XSAVE))
+ 		return -ENODEV;
++#endif
+ 
+ 	sync_fpstate(x86_task_fpu(target));
+ 
+@@ -147,8 +149,10 @@ int xstateregs_set(struct task_struct *target, const struct user_regset *regset,
+ 	struct xregs_state *tmpbuf = NULL;
+ 	int ret;
+ 
++#ifndef CONFIG_X86_EARLYMIC
+ 	if (!cpu_feature_enabled(X86_FEATURE_XSAVE))
+ 		return -ENODEV;
++#endif
+ 
+ 	/*
+ 	 * A whole standard-format XSAVE buffer is needed:
+diff --git a/arch/x86/kernel/fpu/signal.c b/arch/x86/kernel/fpu/signal.c
+index c3ec2512f2bb..fbc23fe43aec 100644
+--- a/arch/x86/kernel/fpu/signal.c
++++ b/arch/x86/kernel/fpu/signal.c
+@@ -144,6 +144,19 @@ static inline bool save_xstate_epilog(void __user *buf, int ia32_frame,
+ 
+ static inline int copy_fpregs_to_sigframe(struct xregs_state __user *buf, u32 pkru)
+ {
++#ifdef CONFIG_X86_EARLYMIC
++	int err;
++
++	/* KNC: fxsave plus the VPU block; zero the header like xsave would. */
++	err = __clear_user(&buf->header, sizeof(buf->header));
++	if (!err)
++		err = fxsave_to_user_sigframe(&buf->i387);
++	if (!err)
++		err = save_vpu_checking((struct vpustate_struct __force *)&buf->vpu);
++	if (unlikely(err) && __clear_user(buf, fpu_user_cfg.max_size))
++		err = -EFAULT;
++	return err;
++#endif
+ 	if (use_xsave())
+ 		return xsave_to_user_sigframe(buf, pkru);
+ 
+@@ -238,6 +251,17 @@ bool copy_fpstate_to_sigframe(void __user *buf, void __user *buf_fx, int size, u
+ static int __restore_fpregs_from_user(void __user *buf, u64 ufeatures,
+ 				      u64 xrestore, bool fx_only)
+ {
++#ifdef CONFIG_X86_EARLYMIC
++	struct xregs_state __user *xbuf = buf;
++	int err = fxrstor_from_user_sigframe(buf);
++
++	if (err)
++		return err;
++	/* a frame without the xstate part (fx_only) carries no VPU block */
++	if (fx_only)
++		return restore_vpu_checking(&init_fpstate.regs.xsave.vpu);
++	return restore_vpu_checking((struct vpustate_struct __force *)&xbuf->vpu);
++#endif
+ 	if (use_xsave()) {
+ 		u64 init_bv = ufeatures & ~xrestore;
+ 		int ret;
+diff --git a/arch/x86/kernel/fpu/xstate.c b/arch/x86/kernel/fpu/xstate.c
+index 28e4fd65c9da..16134c02ee0d 100644
+--- a/arch/x86/kernel/fpu/xstate.c
++++ b/arch/x86/kernel/fpu/xstate.c
+@@ -814,6 +814,30 @@ void __init fpu__init_system_xstate(unsigned int legacy_size)
+ 		return;
+ 	}
+ 
++#ifdef CONFIG_X86_EARLYMIC
++	/*
++	 * KNC has no XSAVE. The VPU state is stored by hand into the fixed
++	 * xregs_state layout (i387 + header + vpu) and advertised as the
++	 * xstate features FP|SSE|YMM|ZMM so ptrace and the signal frame
++	 * carry it (same ABI as the MPSS kernel).
++	 */
++	fpu_kernel_cfg.max_features = XFEATURE_MASK_FP | XFEATURE_MASK_SSE |
++				      XFEATURE_MASK_YMM | XFEATURE_MASK_ZMM;
++	fpu_kernel_cfg.default_features = fpu_kernel_cfg.max_features;
++	fpu_user_cfg.max_features = fpu_kernel_cfg.max_features;
++	fpu_user_cfg.default_features = fpu_kernel_cfg.max_features;
++	fpu_kernel_cfg.max_size = sizeof(struct xregs_state);
++	fpu_kernel_cfg.default_size = fpu_kernel_cfg.max_size;
++	fpu_user_cfg.max_size = fpu_kernel_cfg.max_size;
++	fpu_user_cfg.default_size = fpu_kernel_cfg.max_size;
++	/* 6.15: kernel threads (the idle task here) carry no FPU state to reset */
++	update_regset_xstate_info(fpu_user_cfg.max_size, fpu_user_cfg.max_features);
++	init_fpstate.size = fpu_kernel_cfg.default_size;
++	init_fpstate.xfeatures = fpu_kernel_cfg.default_features;
++	pr_info("x86/fpu: KNC VPU state as xstate 0x%llx, context size is %d bytes.\n",
++		fpu_kernel_cfg.max_features, fpu_kernel_cfg.max_size);
++	return;
++#endif
+ 	if (!boot_cpu_has(X86_FEATURE_XSAVE)) {
+ 		pr_info("x86/fpu: x87 FPU will use %s\n",
+ 			boot_cpu_has(X86_FEATURE_FXSR) ? "FXSAVE" : "FSAVE");
+diff --git a/arch/x86/kernel/fpu/xstate.h b/arch/x86/kernel/fpu/xstate.h
+index 24492c7034b1..bd74b52082da 100644
+--- a/arch/x86/kernel/fpu/xstate.h
++++ b/arch/x86/kernel/fpu/xstate.h
+@@ -244,6 +244,14 @@ static inline void os_xsave(struct fpstate *fpstate)
+  *
+  * Uses XRSTORS when XSAVES is used, XRSTOR otherwise.
+  */
++#ifdef CONFIG_X86_EARLYMIC
++/* no XRSTOR; FP/SSE and the VPU block always travel together, the mask is ignored */
++static inline void os_xrstor(struct fpstate *fpstate, u64 mask)
++{
++	fxrstor(&fpstate->regs.fxsave);
++	WARN_ON_FPU(restore_vpu_checking(&fpstate->regs.xsave.vpu));
++}
++#else
+ static inline void os_xrstor(struct fpstate *fpstate, u64 mask)
+ {
+ 	u32 lmask = mask;
+@@ -252,6 +260,7 @@ static inline void os_xrstor(struct fpstate *fpstate, u64 mask)
+ 	xfd_validate_state(fpstate, mask, true);
+ 	XSTATE_XRESTORE(&fpstate->regs.xsave, lmask, hmask);
+ }
++#endif
+ 
+ /* Restore of supervisor state. Does not require XFD */
+ static inline void os_xrstor_supervisor(struct fpstate *fpstate)
+@@ -356,6 +365,16 @@ static inline int xrstor_from_user_sigframe(struct xregs_state __user *buf, u64
+  * Restore xstate from kernel space xsave area, return an error code instead of
+  * an exception.
+  */
++#ifdef CONFIG_X86_EARLYMIC
++static inline int os_xrstor_safe(struct fpstate *fpstate, u64 mask)
++{
++	int err = fxrstor_safe(&fpstate->regs.fxsave);
++
++	if (!err)
++		err = restore_vpu_checking(&fpstate->regs.xsave.vpu);
++	return err;
++}
++#else
+ static inline int os_xrstor_safe(struct fpstate *fpstate, u64 mask)
+ {
+ 	struct xregs_state *xstate = &fpstate->regs.xsave;
+@@ -373,6 +392,7 @@ static inline int os_xrstor_safe(struct fpstate *fpstate, u64 mask)
+ 
+ 	return err;
+ }
++#endif
+ 
+ 
+ #endif

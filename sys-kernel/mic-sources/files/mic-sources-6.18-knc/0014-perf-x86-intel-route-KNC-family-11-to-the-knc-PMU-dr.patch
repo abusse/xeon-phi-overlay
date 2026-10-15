@@ -1,0 +1,32 @@
+From a896d5fed2e3fde3410ce5c2ca643d4e66480c82 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 28 Sep 2026 09:57:36 +0200
+Subject: [PATCH 14/16] perf/x86/intel: route KNC (family 11) to the knc PMU
+ driver
+
+From Intel MPSS 3.8.6: intel_pmu_init() dispatches family 11 model 1
+to knc_pmu_init() (mainline still carries events/intel/knc.c but no
+longer reaches it from the family 6 initialisation).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ arch/x86/events/intel/core.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/arch/x86/events/intel/core.c b/arch/x86/events/intel/core.c
+index fe65be0b9d9c..11bb7b35a15d 100644
+--- a/arch/x86/events/intel/core.c
++++ b/arch/x86/events/intel/core.c
+@@ -6855,6 +6855,11 @@ __init int intel_pmu_init(void)
+ 	char *name;
+ 	struct x86_hybrid_pmu *pmu;
+ 
++#ifdef CONFIG_MK1OM
++	extern int knc_pmu_init(void);
++	if (boot_cpu_data.x86 == 0x0b)		/* Knights Corner */
++		return knc_pmu_init();
++#endif
+ 	/* Architectural Perfmon was introduced starting with Core "Yonah" */
+ 	if (!cpu_has(&boot_cpu_data, X86_FEATURE_ARCH_PERFMON)) {
+ 		switch (boot_cpu_data.x86) {

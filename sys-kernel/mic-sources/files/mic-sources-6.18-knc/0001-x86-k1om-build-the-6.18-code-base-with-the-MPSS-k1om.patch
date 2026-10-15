@@ -1,0 +1,1355 @@
+From a4fff01f2ae12217b16aff355395eab5ccf1e6d1 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Mon, 28 Sep 2026 09:57:31 +0200
+Subject: [PATCH 01/16] x86/k1om: build the 6.18 code base with the MPSS k1om
+ toolchain
+
+The only toolchain that targets k1om is the MPSS 3.8.6 one: gcc 5.1.1
+and binutils 2.22.52. Everything here keeps the 6.18 sources compiling
+and assembling with it; all of it is dead on KNC at run time (guarded
+by CONFIG_X86_EARLYMIC/MK1OM or by CPU features KNC never has).
+
+gcc 5.1.1:
+ - It accepts the "=@cc<cond>" asm flag-output constraint but does not
+   implement it (no __GCC_ASM_FLAG_OUTPUTS__): the "output" is a stale
+   register, so every try_cmpxchg(), test_and_set_bit() etc. returned
+   garbage. First victim was the mutex unlock at the end of
+   cgroup_init_subsys(), whose slow path retried a "failed" cmpxchg
+   forever, hanging the card before its first printk. CC_SET()/CC_OUT()
+   are restored in asm/asm.h with the setcc fallback and the 30
+   flag-output sites (cmpxchg*, rmwcc, bitops, percpu, uaccess, signal,
+   archrandom, special_insns, sev, boot/) use them again.
+ - min-tool-version: gcc floor 5.1, binutils floor 2.22.
+ - objtool is not built for EARLYMIC (it cannot decode VPU code and its
+   libsubcmd needs a newer host gcc), so the !CONFIG_OBJTOOL asm side
+   needs STACK_FRAME_NON_STANDARD_FP; static calls use the out-of-line
+   trampolines.
+ - 6.15 forces -march=x86-64 for 64-bit builds, which makes the k1om
+   gcc emit cmov: MK1OM keeps the compiler default.
+
+binutils 2.22 (no mnemonics for anything after ~2011):
+ - mfence/lfence: FENCE_SWAPGS_*, FILL_RETURN_BUFFER, clear_bhb_loop
+   and the entry_64 GS fence are empty/skipped (in-order core, no RSB).
+ - rd/wr{fs,gs}base, rdrand/rdseed, invpcid, xgetbv/xsetbv, rdtscp,
+   rdpid, monitor/mwait(x), clflushopt/clwb, pause, tzcnt, cmova,
+   movnti/sfence, vmmcall, clac/stac and the XSAVE family are stubbed,
+   given a .byte encoding or replaced by the plain form (rep bsf,
+   branch instead of cmova, mov instead of movnti, memcpy for
+   memcpy_flushcache); XSAVE/XRSTOR are ud2 (KNC has no XSAVE).
+ - U/UL suffixes in asm expressions are rejected: verify_cpu.S masks
+   (never run on KNC) and the uprobe trampoline alignment.
+ - The SSE2/AVX/SHA-NI/PCLMUL asm of the 6.17 lib/crc and lib/crypto
+   libraries and the vDSO chacha getrandom (6.11) are not built;
+   XMM/XMM2 and CMOV are not required features; the microcode loader
+   (reads IA32_UCODE_REV) and 128-bit cmpxchg (no CX16) are off.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ arch/x86/Kconfig                       |  9 ++++----
+ arch/x86/Kconfig.cpufeatures           |  4 ++--
+ arch/x86/Makefile                      |  2 ++
+ arch/x86/boot/bitops.h                 |  2 +-
+ arch/x86/boot/boot.h                   |  8 +++----
+ arch/x86/boot/compressed/mem_encrypt.S |  8 +++++++
+ arch/x86/boot/string.c                 |  9 ++++++--
+ arch/x86/entry/calling.h               | 18 +++++++++++++++
+ arch/x86/entry/entry_64.S              |  9 +++++++-
+ arch/x86/entry/vdso/Makefile           |  3 ++-
+ arch/x86/include/asm/archrandom.h      | 15 ++++++++----
+ arch/x86/include/asm/asm.h             | 14 +++++++++++
+ arch/x86/include/asm/bitops.h          | 32 +++++++++++++++-----------
+ arch/x86/include/asm/cmpxchg.h         | 16 ++++++-------
+ arch/x86/include/asm/cmpxchg_32.h      |  8 +++----
+ arch/x86/include/asm/cmpxchg_64.h      |  6 +++--
+ arch/x86/include/asm/fpu/xcr.h         |  6 +++++
+ arch/x86/include/asm/fsgsbase.h        |  8 +++++++
+ arch/x86/include/asm/invpcid.h         |  5 ++++
+ arch/x86/include/asm/mwait.h           | 16 +++++++++----
+ arch/x86/include/asm/nospec-branch.h   |  6 +++++
+ arch/x86/include/asm/percpu.h          | 20 +++++++++-------
+ arch/x86/include/asm/rmwcc.h           |  4 ++--
+ arch/x86/include/asm/segment.h         |  4 ++++
+ arch/x86/include/asm/sev.h             |  4 ++--
+ arch/x86/include/asm/signal.h          |  2 +-
+ arch/x86/include/asm/smap.h            | 17 ++++++++++++++
+ arch/x86/include/asm/special_insns.h   | 16 +++++++++----
+ arch/x86/include/asm/tsc.h             |  8 +++++++
+ arch/x86/include/asm/uaccess.h         | 12 +++++-----
+ arch/x86/include/asm/uaccess_64.h      | 11 +++++++++
+ arch/x86/include/asm/vdso/processor.h  |  5 ++++
+ arch/x86/kernel/fpu/xstate.h           | 10 ++++++++
+ arch/x86/kernel/uprobes.c              | 10 ++++++--
+ arch/x86/kernel/verify_cpu.S           |  6 +++++
+ arch/x86/lib/copy_user_uncached_64.S   |  9 ++++++++
+ arch/x86/lib/getuser.S                 | 10 ++++++++
+ arch/x86/lib/usercopy_64.c             |  6 +++++
+ include/linux/objtool.h                |  2 ++
+ lib/crc/Kconfig                        |  6 ++---
+ lib/crypto/Kconfig                     | 14 +++++------
+ scripts/min-tool-version.sh            |  6 ++---
+ 42 files changed, 295 insertions(+), 91 deletions(-)
+
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index fa3b616af03a..127d0e7c1b12 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -215,8 +215,7 @@ config X86
+ 	select HAVE_ARCH_RANDOMIZE_KSTACK_OFFSET
+ 	select HAVE_ARCH_WITHIN_STACK_FRAMES
+ 	select HAVE_ASM_MODVERSIONS
+-	select HAVE_CMPXCHG_DOUBLE
+-	select HAVE_CMPXCHG_LOCAL
++	select HAVE_CMPXCHG_LOCAL		if !MK1OM
+ 	select HAVE_CONTEXT_TRACKING_USER		if X86_64
+ 	select HAVE_CONTEXT_TRACKING_USER_OFFSTACK	if HAVE_CONTEXT_TRACKING_USER
+ 	select HAVE_C_RECORDMCOUNT
+@@ -269,7 +268,7 @@ config X86
+ 	select HAVE_NOINSTR_HACK		if HAVE_OBJTOOL
+ 	select HAVE_NMI
+ 	select HAVE_NOINSTR_VALIDATION		if HAVE_OBJTOOL
+-	select HAVE_OBJTOOL			if X86_64
++	select HAVE_OBJTOOL			if X86_64 && !X86_EARLYMIC	# objtool cannot decode k1om VPU code
+ 	select HAVE_OPTPROBES
+ 	select HAVE_PAGE_SIZE_4KB
+ 	select HAVE_PCSPKR_PLATFORM
+@@ -299,7 +298,7 @@ config X86
+ 	select HAVE_UNSTABLE_SCHED_CLOCK
+ 	select HAVE_USER_RETURN_NOTIFIER
+ 	select HAVE_GENERIC_VDSO
+-	select VDSO_GETRANDOM			if X86_64
++	select VDSO_GETRANDOM			if X86_64 && !X86_EARLYMIC	# SSE2 chacha
+ 	select HOTPLUG_PARALLEL			if SMP && X86_64
+ 	select HOTPLUG_SMT			if SMP
+ 	select HOTPLUG_SPLIT_STARTUP		if SMP && X86_32
+@@ -1318,7 +1317,7 @@ config X86_REBOOTFIXUPS
+ 
+ config MICROCODE
+ 	def_bool y
+-	depends on CPU_SUP_AMD || CPU_SUP_INTEL
++	depends on (CPU_SUP_AMD || CPU_SUP_INTEL) && !X86_EARLYMIC
+ 	select CRYPTO_LIB_SHA256 if CPU_SUP_AMD
+ 
+ config MICROCODE_INITRD32
+diff --git a/arch/x86/Kconfig.cpufeatures b/arch/x86/Kconfig.cpufeatures
+index 250c10627ab3..c85bf3e281b0 100644
+--- a/arch/x86/Kconfig.cpufeatures
++++ b/arch/x86/Kconfig.cpufeatures
+@@ -90,11 +90,11 @@ config X86_REQUIRED_FEATURE_FXSR
+ 
+ config X86_REQUIRED_FEATURE_XMM
+ 	def_bool y
+-	depends on X86_64
++	depends on X86_64 && !X86_EARLYMIC
+ 
+ config X86_REQUIRED_FEATURE_XMM2
+ 	def_bool y
+-	depends on X86_64
++	depends on X86_64 && !X86_EARLYMIC
+ 
+ config X86_REQUIRED_FEATURE_LM
+ 	def_bool y
+diff --git a/arch/x86/Makefile b/arch/x86/Makefile
+index 1a27efcf3c20..87234f971f12 100644
+--- a/arch/x86/Makefile
++++ b/arch/x86/Makefile
+@@ -165,6 +165,8 @@ else
+ ifdef CONFIG_X86_NATIVE_CPU
+         KBUILD_CFLAGS += -march=native
+         KBUILD_RUSTFLAGS += -Ctarget-cpu=native
++else ifdef CONFIG_MK1OM
++        # the k1om gcc defaults to the KNC ISA; -march=x86-64 would enable cmov/SSE
+ else
+         KBUILD_CFLAGS += -march=x86-64 -mtune=generic
+         KBUILD_RUSTFLAGS += -Ctarget-cpu=x86-64 -Ztune-cpu=generic
+diff --git a/arch/x86/boot/bitops.h b/arch/x86/boot/bitops.h
+index 79e15971529d..8518ae214c9b 100644
+--- a/arch/x86/boot/bitops.h
++++ b/arch/x86/boot/bitops.h
+@@ -27,7 +27,7 @@ static inline bool variable_test_bit(int nr, const void *addr)
+ 	bool v;
+ 	const u32 *p = addr;
+ 
+-	asm("btl %2,%1" : "=@ccc" (v) : "m" (*p), "Ir" (nr));
++	asm("btl %2,%1" CC_SET(c) : CC_OUT(c) (v) : "m" (*p), "Ir" (nr));
+ 	return v;
+ }
+ 
+diff --git a/arch/x86/boot/boot.h b/arch/x86/boot/boot.h
+index a3c58ebe3662..60580836daf7 100644
+--- a/arch/x86/boot/boot.h
++++ b/arch/x86/boot/boot.h
+@@ -155,15 +155,15 @@ static inline void wrgs32(u32 v, addr_t addr)
+ static inline bool memcmp_fs(const void *s1, addr_t s2, size_t len)
+ {
+ 	bool diff;
+-	asm volatile("fs repe cmpsb"
+-		     : "=@ccnz" (diff), "+D" (s1), "+S" (s2), "+c" (len));
++	asm volatile("fs repe cmpsb" CC_SET(nz)
++		     : CC_OUT(nz) (diff), "+D" (s1), "+S" (s2), "+c" (len));
+ 	return diff;
+ }
+ static inline bool memcmp_gs(const void *s1, addr_t s2, size_t len)
+ {
+ 	bool diff;
+-	asm volatile("gs repe cmpsb"
+-		     : "=@ccnz" (diff), "+D" (s1), "+S" (s2), "+c" (len));
++	asm volatile("gs repe cmpsb" CC_SET(nz)
++		     : CC_OUT(nz) (diff), "+D" (s1), "+S" (s2), "+c" (len));
+ 	return diff;
+ }
+ 
+diff --git a/arch/x86/boot/compressed/mem_encrypt.S b/arch/x86/boot/compressed/mem_encrypt.S
+index 32f7cc8a8625..e36c679d5f52 100644
+--- a/arch/x86/boot/compressed/mem_encrypt.S
++++ b/arch/x86/boot/compressed/mem_encrypt.S
+@@ -68,7 +68,11 @@ SYM_CODE_START_LOCAL(sev_es_req_cpuid)
+ 	orl     $0x00000004, %eax
+ 	movl    $MSR_AMD64_SEV_ES_GHCB, %ecx
+ 	wrmsr
++#ifdef CONFIG_X86_EARLYMIC
++	.byte 0xf3, 0x0f, 0x01, 0xd9	# rep; vmmcall (no such mnemonic in the k1om assembler; SEV never runs here)
++#else
+ 	rep; vmmcall		# VMGEXIT
++#endif
+ 	rdmsr
+ 
+ 	/* Check response */
+@@ -169,7 +173,11 @@ SYM_CODE_START_LOCAL(startup32_vc_handler)
+ 	xorl    %edx, %edx
+ 	movl    $MSR_AMD64_SEV_ES_GHCB, %ecx
+ 	wrmsr
++#ifdef CONFIG_X86_EARLYMIC
++	.byte 0xf3, 0x0f, 0x01, 0xd9	# rep; vmmcall (no such mnemonic in the k1om assembler; SEV never runs here)
++#else
+ 	rep; vmmcall
++#endif
+ 
+ 	/* If request fails, go to hlt loop */
+ 	hlt
+diff --git a/arch/x86/boot/string.c b/arch/x86/boot/string.c
+index b25c6a9303b7..a030f65c6e01 100644
+--- a/arch/x86/boot/string.c
++++ b/arch/x86/boot/string.c
+@@ -32,8 +32,13 @@
+ int memcmp(const void *s1, const void *s2, size_t len)
+ {
+ 	bool diff;
+-	asm("repe cmpsb"
+-	    : "=@ccnz" (diff), "+D" (s1), "+S" (s2), "+c" (len));
++#ifdef __GCC_ASM_FLAG_OUTPUTS__
++	asm("repe cmpsb" CC_SET(nz)
++	    : CC_OUT(nz) (diff), "+D" (s1), "+S" (s2), "+c" (len));
++#else	/* gcc < 6 (k1om toolchain) */
++	asm("repe cmpsb\n\tsetnz %0"
++	    : "=qm" (diff), "+D" (s1), "+S" (s2), "+c" (len) : : "cc");
++#endif
+ 	return diff;
+ }
+ 
+diff --git a/arch/x86/entry/calling.h b/arch/x86/entry/calling.h
+index 77e2d920a640..3e9157b6b088 100644
+--- a/arch/x86/entry/calling.h
++++ b/arch/x86/entry/calling.h
+@@ -360,12 +360,20 @@ For 32-bit we have the following conventions - kernel is built with
+  * to prevent the swapgs from getting speculatively skipped when coming from
+  * user space.
+  */
++#ifdef CONFIG_X86_EARLYMIC
++/* in-order core, no lfence in the assembler */
++.macro FENCE_SWAPGS_USER_ENTRY
++.endm
++.macro FENCE_SWAPGS_KERNEL_ENTRY
++.endm
++#else
+ .macro FENCE_SWAPGS_USER_ENTRY
+ 	ALTERNATIVE "", "lfence", X86_FEATURE_FENCE_SWAPGS_USER
+ .endm
+ .macro FENCE_SWAPGS_KERNEL_ENTRY
+ 	ALTERNATIVE "", "lfence", X86_FEATURE_FENCE_SWAPGS_KERNEL
+ .endm
++#endif
+ 
+ .macro STACKLEAK_ERASE_NOCLOBBER
+ #ifdef CONFIG_KSTACK_ERASE
+@@ -375,6 +383,16 @@ For 32-bit we have the following conventions - kernel is built with
+ #endif
+ .endm
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/* never executed on KNC (no FSGSBASE); the k1om assembler has no such mnemonics */
++.macro rdgsbase reg:req
++	ud2
++.endm
++.macro wrgsbase reg:req
++	ud2
++.endm
++#endif
++
+ .macro SAVE_AND_SET_GSBASE scratch_reg:req save_reg:req
+ 	rdgsbase \save_reg
+ 	GET_PERCPU_BASE \scratch_reg
+diff --git a/arch/x86/entry/entry_64.S b/arch/x86/entry/entry_64.S
+index ed04a968cc7d..b842ec07f6b0 100644
+--- a/arch/x86/entry/entry_64.S
++++ b/arch/x86/entry/entry_64.S
+@@ -749,7 +749,11 @@ SYM_FUNC_START(asm_load_gs_index)
+ .Lgs_change:
+ 	ANNOTATE_NOENDBR // error_entry
+ 	movl	%edi, %gs
++#ifdef CONFIG_X86_EARLYMIC
++2:
++#else
+ 2:	ALTERNATIVE "", "mfence", X86_BUG_SWAPGS_FENCE
++#endif
+ 	swapgs
+ 	FRAME_END
+ 	RET
+@@ -1562,7 +1566,10 @@ SYM_FUNC_START(clear_bhb_loop)
+ 	sub	$1, %ecx
+ 	jnz	1b
+ .Lret2:	RET
+-5:	lfence
++5:
++#ifndef CONFIG_X86_EARLYMIC	/* never patched in on KNC; no lfence in the k1om assembler */
++	lfence
++#endif
+ 	pop	%rbp
+ 	RET
+ SYM_FUNC_END(clear_bhb_loop)
+diff --git a/arch/x86/entry/vdso/Makefile b/arch/x86/entry/vdso/Makefile
+index f247f5f5cb44..25b06d4876d0 100644
+--- a/arch/x86/entry/vdso/Makefile
++++ b/arch/x86/entry/vdso/Makefile
+@@ -7,7 +7,8 @@
+ include $(srctree)/lib/vdso/Makefile.include
+ 
+ # Files to link into the vDSO:
+-vobjs-y := vdso-note.o vclock_gettime.o vgetcpu.o vgetrandom.o vgetrandom-chacha.o
++vobjs-y := vdso-note.o vclock_gettime.o vgetcpu.o
++vobjs-$(CONFIG_VDSO_GETRANDOM) += vgetrandom.o vgetrandom-chacha.o
+ vobjs32-y := vdso32/note.o vdso32/system_call.o vdso32/sigreturn.o
+ vobjs32-y += vdso32/vclock_gettime.o vdso32/vgetcpu.o
+ vobjs-$(CONFIG_X86_SGX)	+= vsgx.o
+diff --git a/arch/x86/include/asm/archrandom.h b/arch/x86/include/asm/archrandom.h
+index 4c305305871b..0816ffdcd52a 100644
+--- a/arch/x86/include/asm/archrandom.h
++++ b/arch/x86/include/asm/archrandom.h
+@@ -17,13 +17,18 @@
+ 
+ /* Unconditional execution of RDRAND and RDSEED */
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/* no RDRAND/RDSEED on KNC (and no such mnemonics in the k1om assembler) */
++static inline bool __must_check rdrand_long(unsigned long *v) { return false; }
++static inline bool __must_check rdseed_long(unsigned long *v) { return false; }
++#else
+ static inline bool __must_check rdrand_long(unsigned long *v)
+ {
+ 	bool ok;
+ 	unsigned int retry = RDRAND_RETRY_LOOPS;
+ 	do {
+-		asm volatile("rdrand %[out]"
+-			     : "=@ccc" (ok), [out] "=r" (*v));
++		asm volatile("rdrand %[out]" CC_SET(c)
++			     : CC_OUT(c) (ok), [out] "=r" (*v));
+ 		if (ok)
+ 			return true;
+ 	} while (--retry);
+@@ -33,11 +38,13 @@ static inline bool __must_check rdrand_long(unsigned long *v)
+ static inline bool __must_check rdseed_long(unsigned long *v)
+ {
+ 	bool ok;
+-	asm volatile("rdseed %[out]"
+-		     : "=@ccc" (ok), [out] "=r" (*v));
++	asm volatile("rdseed %[out]" CC_SET(c)
++		     : CC_OUT(c) (ok), [out] "=r" (*v));
+ 	return ok;
+ }
+ 
++#endif
++
+ /*
+  * These are the generic interfaces; they must not be declared if the
+  * stubs in <linux/random.h> are to be invoked.
+diff --git a/arch/x86/include/asm/asm.h b/arch/x86/include/asm/asm.h
+index d5c8d3afe196..5421c5aeedf9 100644
+--- a/arch/x86/include/asm/asm.h
++++ b/arch/x86/include/asm/asm.h
+@@ -113,6 +113,20 @@
+ 
+ #endif
+ 
++/*
++ * Macros to generate condition code outputs from inline assembly. The output
++ * operand must be type "bool". The k1om gcc 5.1 accepts the "=@cc" flag-output
++ * constraint but miscompiles it (and does not define __GCC_ASM_FLAG_OUTPUTS__),
++ * so keep the setcc fallback that upstream dropped when it required gcc >= 8.
++ */
++#ifdef __GCC_ASM_FLAG_OUTPUTS__
++# define CC_SET(c) "\n\t/* output condition code " #c "*/\n"
++# define CC_OUT(c) "=@cc" #c
++#else
++# define CC_SET(c) "\n\tset" #c " %[_cc_" #c "]\n"
++# define CC_OUT(c) [_cc_ ## c] "=qm"
++#endif
++
+ #ifndef __ASSEMBLER__
+ static __always_inline __pure void *rip_rel_ptr(void *p)
+ {
+diff --git a/arch/x86/include/asm/bitops.h b/arch/x86/include/asm/bitops.h
+index c2ce213f2b9b..352de3a1b7e0 100644
+--- a/arch/x86/include/asm/bitops.h
++++ b/arch/x86/include/asm/bitops.h
+@@ -16,6 +16,12 @@
+ #include <linux/compiler.h>
+ #include <asm/alternative.h>
+ #include <asm/rmwcc.h>
++
++#ifdef CONFIG_X86_EARLYMIC
++#define TZCNT_INSN	"rep; bsf %1,%0"	/* k1om assembler chokes on tzcnt */
++#else
++#define TZCNT_INSN	"tzcnt %1,%0"
++#endif
+ #include <asm/barrier.h>
+ 
+ #if BITS_PER_LONG == 32
+@@ -98,8 +104,8 @@ static __always_inline bool arch_xor_unlock_is_negative_byte(unsigned long mask,
+ 		volatile unsigned long *addr)
+ {
+ 	bool negative;
+-	asm_inline volatile(LOCK_PREFIX "xorb %2,%1"
+-		: "=@ccs" (negative), WBYTE_ADDR(addr)
++	asm_inline volatile(LOCK_PREFIX "xorb %2,%1" CC_SET(s)
++		: CC_OUT(s) (negative), WBYTE_ADDR(addr)
+ 		: "iq" ((char)mask) : "memory");
+ 	return negative;
+ }
+@@ -147,8 +153,8 @@ arch___test_and_set_bit(unsigned long nr, volatile unsigned long *addr)
+ {
+ 	bool oldbit;
+ 
+-	asm(__ASM_SIZE(bts) " %2,%1"
+-	    : "=@ccc" (oldbit)
++	asm(__ASM_SIZE(bts) " %2,%1" CC_SET(c)
++	    : CC_OUT(c) (oldbit)
+ 	    : ADDR, "Ir" (nr) : "memory");
+ 	return oldbit;
+ }
+@@ -172,8 +178,8 @@ arch___test_and_clear_bit(unsigned long nr, volatile unsigned long *addr)
+ {
+ 	bool oldbit;
+ 
+-	asm volatile(__ASM_SIZE(btr) " %2,%1"
+-		     : "=@ccc" (oldbit)
++	asm volatile(__ASM_SIZE(btr) " %2,%1" CC_SET(c)
++		     : CC_OUT(c) (oldbit)
+ 		     : ADDR, "Ir" (nr) : "memory");
+ 	return oldbit;
+ }
+@@ -183,8 +189,8 @@ arch___test_and_change_bit(unsigned long nr, volatile unsigned long *addr)
+ {
+ 	bool oldbit;
+ 
+-	asm volatile(__ASM_SIZE(btc) " %2,%1"
+-		     : "=@ccc" (oldbit)
++	asm volatile(__ASM_SIZE(btc) " %2,%1" CC_SET(c)
++		     : CC_OUT(c) (oldbit)
+ 		     : ADDR, "Ir" (nr) : "memory");
+ 
+ 	return oldbit;
+@@ -206,8 +212,8 @@ static __always_inline bool constant_test_bit_acquire(long nr, const volatile un
+ {
+ 	bool oldbit;
+ 
+-	asm volatile("testb %2,%1"
+-		     : "=@ccnz" (oldbit)
++	asm volatile("testb %2,%1" CC_SET(nz)
++		     : CC_OUT(nz) (oldbit)
+ 		     : "m" (((unsigned char *)addr)[nr >> 3]),
+ 		       "i" (1 << (nr & 7))
+ 		     :"memory");
+@@ -219,8 +225,8 @@ static __always_inline bool variable_test_bit(long nr, volatile const unsigned l
+ {
+ 	bool oldbit;
+ 
+-	asm volatile(__ASM_SIZE(bt) " %2,%1"
+-		     : "=@ccc" (oldbit)
++	asm volatile(__ASM_SIZE(bt) " %2,%1" CC_SET(c)
++		     : CC_OUT(c) (oldbit)
+ 		     : "m" (*(unsigned long *)addr), "Ir" (nr) : "memory");
+ 
+ 	return oldbit;
+@@ -242,7 +248,7 @@ arch_test_bit_acquire(unsigned long nr, const volatile unsigned long *addr)
+ 
+ static __always_inline __attribute_const__ unsigned long variable__ffs(unsigned long word)
+ {
+-	asm("tzcnt %1,%0"
++	asm(TZCNT_INSN
+ 		: "=r" (word)
+ 		: ASM_INPUT_RM (word));
+ 	return word;
+diff --git a/arch/x86/include/asm/cmpxchg.h b/arch/x86/include/asm/cmpxchg.h
+index a88b06f1c35e..1fc820ea81b5 100644
+--- a/arch/x86/include/asm/cmpxchg.h
++++ b/arch/x86/include/asm/cmpxchg.h
+@@ -165,8 +165,8 @@ extern void __add_wrong_size(void)
+ 	case __X86_CASE_B:						\
+ 	{								\
+ 		volatile u8 *__ptr = (volatile u8 *)(_ptr);		\
+-		asm_inline volatile(lock "cmpxchgb %[new], %[ptr]"	\
+-			     : "=@ccz" (success),			\
++		asm_inline volatile(lock "cmpxchgb %[new], %[ptr]" CC_SET(z)	\
++			     : CC_OUT(z) (success),			\
+ 			       [ptr] "+m" (*__ptr),			\
+ 			       [old] "+a" (__old)			\
+ 			     : [new] "q" (__new)			\
+@@ -176,8 +176,8 @@ extern void __add_wrong_size(void)
+ 	case __X86_CASE_W:						\
+ 	{								\
+ 		volatile u16 *__ptr = (volatile u16 *)(_ptr);		\
+-		asm_inline volatile(lock "cmpxchgw %[new], %[ptr]"	\
+-			     : "=@ccz" (success),			\
++		asm_inline volatile(lock "cmpxchgw %[new], %[ptr]" CC_SET(z)	\
++			     : CC_OUT(z) (success),			\
+ 			       [ptr] "+m" (*__ptr),			\
+ 			       [old] "+a" (__old)			\
+ 			     : [new] "r" (__new)			\
+@@ -187,8 +187,8 @@ extern void __add_wrong_size(void)
+ 	case __X86_CASE_L:						\
+ 	{								\
+ 		volatile u32 *__ptr = (volatile u32 *)(_ptr);		\
+-		asm_inline volatile(lock "cmpxchgl %[new], %[ptr]"	\
+-			     : "=@ccz" (success),			\
++		asm_inline volatile(lock "cmpxchgl %[new], %[ptr]" CC_SET(z)	\
++			     : CC_OUT(z) (success),			\
+ 			       [ptr] "+m" (*__ptr),			\
+ 			       [old] "+a" (__old)			\
+ 			     : [new] "r" (__new)			\
+@@ -198,8 +198,8 @@ extern void __add_wrong_size(void)
+ 	case __X86_CASE_Q:						\
+ 	{								\
+ 		volatile u64 *__ptr = (volatile u64 *)(_ptr);		\
+-		asm_inline volatile(lock "cmpxchgq %[new], %[ptr]"	\
+-			     : "=@ccz" (success),			\
++		asm_inline volatile(lock "cmpxchgq %[new], %[ptr]" CC_SET(z)	\
++			     : CC_OUT(z) (success),			\
+ 			       [ptr] "+m" (*__ptr),			\
+ 			       [old] "+a" (__old)			\
+ 			     : [new] "r" (__new)			\
+diff --git a/arch/x86/include/asm/cmpxchg_32.h b/arch/x86/include/asm/cmpxchg_32.h
+index 1f80a62be969..de943c358f4a 100644
+--- a/arch/x86/include/asm/cmpxchg_32.h
++++ b/arch/x86/include/asm/cmpxchg_32.h
+@@ -45,8 +45,8 @@ static __always_inline u64 __cmpxchg64_local(volatile u64 *ptr, u64 old, u64 new
+ 			   n = { .full = (_new), };			\
+ 	bool ret;							\
+ 									\
+-	asm_inline volatile(_lock "cmpxchg8b %[ptr]"			\
+-		     : "=@ccz" (ret),					\
++	asm_inline volatile(_lock "cmpxchg8b %[ptr]" CC_SET(z)			\
++		     : CC_OUT(z) (ret),					\
+ 		       [ptr] "+m" (*(_ptr)),				\
+ 		       "+a" (o.low), "+d" (o.high)			\
+ 		     : "b" (n.low), "c" (n.high)			\
+@@ -123,8 +123,8 @@ static __always_inline u64 arch_cmpxchg64_local(volatile u64 *ptr, u64 old, u64
+ 	asm_inline volatile(						\
+ 		ALTERNATIVE(_lock_loc					\
+ 			    "call cmpxchg8b_emu",			\
+-			    _lock "cmpxchg8b %a[ptr]", X86_FEATURE_CX8) \
+-		: ALT_OUTPUT_SP("=@ccz" (ret),				\
++			    _lock "cmpxchg8b %a[ptr]", X86_FEATURE_CX8) CC_SET(z) \
++		: ALT_OUTPUT_SP(CC_OUT(z) (ret),				\
+ 				"+a" (o.low), "+d" (o.high))		\
+ 		: "b" (n.low), "c" (n.high),				\
+ 		  [ptr] "S" (_ptr)					\
+diff --git a/arch/x86/include/asm/cmpxchg_64.h b/arch/x86/include/asm/cmpxchg_64.h
+index 5afea056fb20..10378e2d8c07 100644
+--- a/arch/x86/include/asm/cmpxchg_64.h
++++ b/arch/x86/include/asm/cmpxchg_64.h
+@@ -33,6 +33,7 @@ union __u128_halves {
+ 	};
+ };
+ 
++#ifndef CONFIG_MK1OM	/* k1om lacks CMPXCHG16B */
+ #define __arch_cmpxchg128(_ptr, _old, _new, _lock)			\
+ ({									\
+ 	union __u128_halves o = { .full = (_old), },			\
+@@ -65,8 +66,8 @@ static __always_inline u128 arch_cmpxchg128_local(volatile u128 *ptr, u128 old,
+ 			    n = { .full = (_new), };			\
+ 	bool ret;							\
+ 									\
+-	asm_inline volatile(_lock "cmpxchg16b %[ptr]"			\
+-		     : "=@ccz" (ret),					\
++	asm_inline volatile(_lock "cmpxchg16b %[ptr]" CC_SET(z)			\
++		     : CC_OUT(z) (ret),					\
+ 		       [ptr] "+m" (*(_ptr)),				\
+ 		       "+a" (o.low), "+d" (o.high)			\
+ 		     : "b" (n.low), "c" (n.high)			\
+@@ -91,5 +92,6 @@ static __always_inline bool arch_try_cmpxchg128_local(volatile u128 *ptr, u128 *
+ #define arch_try_cmpxchg128_local arch_try_cmpxchg128_local
+ 
+ #define system_has_cmpxchg128()		boot_cpu_has(X86_FEATURE_CX16)
++#endif /* !CONFIG_MK1OM */
+ 
+ #endif /* _ASM_X86_CMPXCHG_64_H */
+diff --git a/arch/x86/include/asm/fpu/xcr.h b/arch/x86/include/asm/fpu/xcr.h
+index 9a710c060445..0657f60e1cbb 100644
+--- a/arch/x86/include/asm/fpu/xcr.h
++++ b/arch/x86/include/asm/fpu/xcr.h
+@@ -5,6 +5,11 @@
+ #define XCR_XFEATURE_ENABLED_MASK	0x00000000
+ #define XCR_XFEATURE_IN_USE_MASK	0x00000001
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/* no XCR0 on KNC (and no such mnemonics in the k1om assembler); never reached */
++static __always_inline u64 xgetbv(u32 index) { return 0; }
++static __always_inline void xsetbv(u32 index, u64 value) { }
++#else
+ static __always_inline u64 xgetbv(u32 index)
+ {
+ 	u32 eax, edx;
+@@ -20,6 +25,7 @@ static inline void xsetbv(u32 index, u64 value)
+ 
+ 	asm volatile("xsetbv" :: "a" (eax), "d" (edx), "c" (index));
+ }
++#endif
+ 
+ /*
+  * Return a mask of xfeatures which are currently being tracked
+diff --git a/arch/x86/include/asm/fsgsbase.h b/arch/x86/include/asm/fsgsbase.h
+index ab2547f97c2c..56255ab0c216 100644
+--- a/arch/x86/include/asm/fsgsbase.h
++++ b/arch/x86/include/asm/fsgsbase.h
+@@ -21,6 +21,13 @@ extern void x86_gsbase_write_task(struct task_struct *task, unsigned long gsbase
+ 
+ /* Must be protected by X86_FEATURE_FSGSBASE check. */
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/* no FSGSBASE on KNC (and no such mnemonics in the k1om assembler); never reached */
++static __always_inline unsigned long rdfsbase(void) { return 0; }
++static __always_inline unsigned long rdgsbase(void) { return 0; }
++static __always_inline void wrfsbase(unsigned long fsbase) { }
++static __always_inline void wrgsbase(unsigned long gsbase) { }
++#else
+ static __always_inline unsigned long rdfsbase(void)
+ {
+ 	unsigned long fsbase;
+@@ -48,6 +55,7 @@ static __always_inline void wrgsbase(unsigned long gsbase)
+ {
+ 	asm volatile("wrgsbase %0" :: "r" (gsbase) : "memory");
+ }
++#endif
+ 
+ #include <asm/cpufeature.h>
+ 
+diff --git a/arch/x86/include/asm/invpcid.h b/arch/x86/include/asm/invpcid.h
+index 734482afbf81..fec0fcf2bb13 100644
+--- a/arch/x86/include/asm/invpcid.h
++++ b/arch/x86/include/asm/invpcid.h
+@@ -13,8 +13,13 @@ static inline void __invpcid(unsigned long pcid, unsigned long addr,
+ 	 * mappings, we don't want the compiler to reorder any subsequent
+ 	 * memory accesses before the TLB flush.
+ 	 */
++#ifdef CONFIG_X86_EARLYMIC
++	/* no INVPCID on KNC; never reached */
++	(void)desc;
++#else
+ 	asm volatile("invpcid %[desc], %[type]"
+ 		     :: [desc] "m" (desc), [type] "r" (type) : "memory");
++#endif
+ }
+ 
+ #define INVPCID_TYPE_INDIV_ADDR		0
+diff --git a/arch/x86/include/asm/mwait.h b/arch/x86/include/asm/mwait.h
+index e4815e15dc9a..fd4d7bdde703 100644
+--- a/arch/x86/include/asm/mwait.h
++++ b/arch/x86/include/asm/mwait.h
+@@ -2,6 +2,12 @@
+ #ifndef _ASM_X86_MWAIT_H
+ #define _ASM_X86_MWAIT_H
+ 
++#ifdef CONFIG_X86_EARLYMIC
++#define MIC_INSN(mnemonic, bytes)	bytes	/* k1om assembler lacks the mnemonic */
++#else
++#define MIC_INSN(mnemonic, bytes)	mnemonic
++#endif
++
+ #include <linux/sched.h>
+ #include <linux/sched/idle.h>
+ 
+@@ -31,12 +37,12 @@ static __always_inline void __monitor(const void *eax, u32 ecx, u32 edx)
+ 	 * Use the instruction mnemonic with implicit operands, as the LLVM
+ 	 * assembler fails to assemble the mnemonic with explicit operands:
+ 	 */
+-	asm volatile("monitor" :: "a" (eax), "c" (ecx), "d" (edx));
++	asm volatile(MIC_INSN("monitor", ".byte 0x0f, 0x01, 0xc8") :: "a" (eax), "c" (ecx), "d" (edx));
+ }
+ 
+ static __always_inline void __monitorx(const void *eax, u32 ecx, u32 edx)
+ {
+-	asm volatile("monitorx" :: "a" (eax), "c" (ecx), "d"(edx));
++	asm volatile(MIC_INSN("monitorx", ".byte 0x0f, 0x01, 0xfa") :: "a" (eax), "c" (ecx), "d"(edx));
+ }
+ 
+ static __always_inline void __mwait(u32 eax, u32 ecx)
+@@ -45,7 +51,7 @@ static __always_inline void __mwait(u32 eax, u32 ecx)
+ 	 * Use the instruction mnemonic with implicit operands, as the LLVM
+ 	 * assembler fails to assemble the mnemonic with explicit operands:
+ 	 */
+-	asm volatile("mwait" :: "a" (eax), "c" (ecx));
++	asm volatile(MIC_INSN("mwait", ".byte 0x0f, 0x01, 0xc9") :: "a" (eax), "c" (ecx));
+ }
+ 
+ /*
+@@ -78,7 +84,7 @@ static __always_inline void __mwaitx(u32 eax, u32 ebx, u32 ecx)
+ {
+ 	/* No need for TSA buffer clearing on AMD */
+ 
+-	asm volatile("mwaitx" :: "a" (eax), "b" (ebx), "c" (ecx));
++	asm volatile(MIC_INSN("mwaitx", ".byte 0x0f, 0x01, 0xfb") :: "a" (eax), "b" (ebx), "c" (ecx));
+ }
+ 
+ /*
+@@ -93,7 +99,7 @@ static __always_inline void __mwaitx(u32 eax, u32 ebx, u32 ecx)
+ static __always_inline void __sti_mwait(u32 eax, u32 ecx)
+ {
+ 
+-	asm volatile("sti; mwait" :: "a" (eax), "c" (ecx));
++	asm volatile(MIC_INSN("sti; mwait", "sti; .byte 0x0f, 0x01, 0xc9") :: "a" (eax), "c" (ecx));
+ }
+ 
+ /*
+diff --git a/arch/x86/include/asm/nospec-branch.h b/arch/x86/include/asm/nospec-branch.h
+index 08ed5a2e46a5..98b7a81c8605 100644
+--- a/arch/x86/include/asm/nospec-branch.h
++++ b/arch/x86/include/asm/nospec-branch.h
+@@ -240,6 +240,11 @@
+   * A simpler FILL_RETURN_BUFFER macro. Don't make people use the CPP
+   * monstrosity above, manually.
+   */
++#ifdef CONFIG_X86_EARLYMIC
++/* in-order core, no RSB and no lfence in the assembler */
++.macro FILL_RETURN_BUFFER reg:req nr:req ftr:req ftr2=ALT_NOT(X86_FEATURE_ALWAYS)
++.endm
++#else
+ .macro FILL_RETURN_BUFFER reg:req nr:req ftr:req ftr2=ALT_NOT(X86_FEATURE_ALWAYS)
+ 	ALTERNATIVE_2 "jmp .Lskip_rsb_\@", \
+ 		__stringify(__FILL_RETURN_BUFFER(\reg,\nr)), \ftr, \
+@@ -247,6 +252,7 @@
+ 
+ .Lskip_rsb_\@:
+ .endm
++#endif
+ 
+ /*
+  * The CALL to srso_alias_untrain_ret() must be patched in directly at
+diff --git a/arch/x86/include/asm/percpu.h b/arch/x86/include/asm/percpu.h
+index 332428caaed2..80d2afe16040 100644
+--- a/arch/x86/include/asm/percpu.h
++++ b/arch/x86/include/asm/percpu.h
+@@ -308,8 +308,8 @@ do {									\
+ 	__pcpu_type_##size pco_new__ = __pcpu_cast_##size(_nval);	\
+ 									\
+ 	asm qual (__pcpu_op_##size("cmpxchg") "%[nval], "		\
+-		  __percpu_arg([var])					\
+-		  : "=@ccz" (success),					\
++		  __percpu_arg([var]) CC_SET(z)					\
++		  : CC_OUT(z) (success),					\
+ 		    [oval] "+a" (pco_old__),				\
+ 		    [var] "+m" (__my_cpu_var(_var))			\
+ 		  : [nval] __pcpu_reg_##size(, pco_new__)		\
+@@ -365,8 +365,8 @@ do {									\
+ 									\
+ 	asm_inline qual (						\
+ 		ALTERNATIVE("call this_cpu_cmpxchg8b_emu",		\
+-			    "cmpxchg8b " __percpu_arg([var]), X86_FEATURE_CX8) \
+-		: ALT_OUTPUT_SP("=@ccz" (success),			\
++			    "cmpxchg8b " __percpu_arg([var]), X86_FEATURE_CX8) CC_SET(z) \
++		: ALT_OUTPUT_SP(CC_OUT(z) (success),			\
+ 				[var] "+m" (__my_cpu_var(_var)),	\
+ 				"+a" (old__.low), "+d" (old__.high))	\
+ 		: "b" (new__.low), "c" (new__.high),			\
+@@ -414,8 +414,10 @@ do {									\
+ 	old__.var;							\
+ })
+ 
++#ifndef CONFIG_MK1OM	/* k1om lacks CMPXCHG16B */
+ #define raw_cpu_cmpxchg128(pcp, oval, nval)		percpu_cmpxchg128_op(16,         , pcp, oval, nval)
+ #define this_cpu_cmpxchg128(pcp, oval, nval)		percpu_cmpxchg128_op(16, volatile, pcp, oval, nval)
++#endif
+ 
+ #define percpu_try_cmpxchg128_op(size, qual, _var, _ovalp, _nval)	\
+ ({									\
+@@ -433,8 +435,8 @@ do {									\
+ 									\
+ 	asm_inline qual (						\
+ 		ALTERNATIVE("call this_cpu_cmpxchg16b_emu",		\
+-			    "cmpxchg16b " __percpu_arg([var]), X86_FEATURE_CX16) \
+-		: ALT_OUTPUT_SP("=@ccz" (success),			\
++			    "cmpxchg16b " __percpu_arg([var]), X86_FEATURE_CX16) CC_SET(z) \
++		: ALT_OUTPUT_SP(CC_OUT(z) (success),			\
+ 				[var] "+m" (__my_cpu_var(_var)),	\
+ 				"+a" (old__.low), "+d" (old__.high))	\
+ 		: "b" (new__.low), "c" (new__.high),			\
+@@ -446,8 +448,10 @@ do {									\
+ 	likely(success);						\
+ })
+ 
++#ifndef CONFIG_MK1OM	/* k1om lacks CMPXCHG16B */
+ #define raw_cpu_try_cmpxchg128(pcp, ovalp, nval)	percpu_try_cmpxchg128_op(16,         , pcp, ovalp, nval)
+ #define this_cpu_try_cmpxchg128(pcp, ovalp, nval)	percpu_try_cmpxchg128_op(16, volatile, pcp, ovalp, nval)
++#endif
+ 
+ #endif /* CONFIG_X86_64 */
+ 
+@@ -581,8 +585,8 @@ do {									\
+ ({									\
+ 	bool oldbit;							\
+ 									\
+-	asm volatile("btl %[nr], " __percpu_arg([var])			\
+-		     : "=@ccc" (oldbit)					\
++	asm volatile("btl %[nr], " __percpu_arg([var]) CC_SET(c)			\
++		     : CC_OUT(c) (oldbit)					\
+ 		     : [var] "m" (__my_cpu_var(_var)),			\
+ 		       [nr] "rI" (_nr));				\
+ 	oldbit;								\
+diff --git a/arch/x86/include/asm/rmwcc.h b/arch/x86/include/asm/rmwcc.h
+index 54c8fc430684..d078b38dfb0e 100644
+--- a/arch/x86/include/asm/rmwcc.h
++++ b/arch/x86/include/asm/rmwcc.h
+@@ -9,8 +9,8 @@
+ #define __GEN_RMWcc(fullop, _var, cc, clobbers, ...)			\
+ ({									\
+ 	bool c;								\
+-	asm_inline volatile (fullop					\
+-			: [var] "+m" (_var), "=@cc" #cc (c)		\
++	asm_inline volatile (fullop CC_SET(cc)				\
++			: [var] "+m" (_var), CC_OUT(cc) (c)		\
+ 			: __VA_ARGS__ : clobbers);			\
+ 	c;								\
+ })
+diff --git a/arch/x86/include/asm/segment.h b/arch/x86/include/asm/segment.h
+index f59ae7186940..b0f55ad0ea91 100644
+--- a/arch/x86/include/asm/segment.h
++++ b/arch/x86/include/asm/segment.h
+@@ -255,7 +255,11 @@ static inline void vdso_read_cpunode(unsigned *cpu, unsigned *node)
+ 	 * If RDPID is available, use it.
+ 	 */
+ 	alternative_io ("lsl %[seg],%k[p]",
++#ifdef CONFIG_X86_EARLYMIC
++			".byte 0xf3,0x0f,0xc7,0xf8",	/* rdpid %rax: never patched in on KNC */
++#else
+ 			"rdpid %[p]",
++#endif
+ 			X86_FEATURE_RDPID,
+ 			[p] "=r" (p), [seg] "r" (__CPUNODE_SEG));
+ 
+diff --git a/arch/x86/include/asm/sev.h b/arch/x86/include/asm/sev.h
+index 0e6c0940100f..4ded571a7b5d 100644
+--- a/arch/x86/include/asm/sev.h
++++ b/arch/x86/include/asm/sev.h
+@@ -490,8 +490,8 @@ static inline int pvalidate(unsigned long vaddr, bool rmp_psize, bool validate)
+ 	int rc;
+ 
+ 	/* "pvalidate" mnemonic support in binutils 2.36 and newer */
+-	asm volatile(".byte 0xF2, 0x0F, 0x01, 0xFF\n\t"
+-		     : "=@ccc"(no_rmpupdate), "=a"(rc)
++	asm volatile(".byte 0xF2, 0x0F, 0x01, 0xFF\n\t" CC_SET(c)
++		     : CC_OUT(c)(no_rmpupdate), "=a"(rc)
+ 		     : "a"(vaddr), "c"(rmp_psize), "d"(validate)
+ 		     : "memory", "cc");
+ 
+diff --git a/arch/x86/include/asm/signal.h b/arch/x86/include/asm/signal.h
+index 5c03aaa89014..5a310e84a96a 100644
+--- a/arch/x86/include/asm/signal.h
++++ b/arch/x86/include/asm/signal.h
+@@ -83,7 +83,7 @@ static inline int __const_sigismember(sigset_t *set, int _sig)
+ static inline int __gen_sigismember(sigset_t *set, int _sig)
+ {
+ 	bool ret;
+-	asm("btl %2,%1" : "=@ccc"(ret) : "m"(*set), "Ir"(_sig-1));
++	asm("btl %2,%1" CC_SET(c) : CC_OUT(c)(ret) : "m"(*set), "Ir"(_sig-1));
+ 	return ret;
+ }
+ 
+diff --git a/arch/x86/include/asm/smap.h b/arch/x86/include/asm/smap.h
+index 4f84d421d1cf..02b5f4f69ab8 100644
+--- a/arch/x86/include/asm/smap.h
++++ b/arch/x86/include/asm/smap.h
+@@ -13,6 +13,22 @@
+ #include <asm/cpufeatures.h>
+ #include <asm/alternative.h>
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/* no SMAP on KNC and no clac/stac in the k1om assembler */
++#ifdef __ASSEMBLER__
++#define ASM_CLAC
++#define ASM_STAC
++#else
++static __always_inline void clac(void) { }
++static __always_inline void stac(void) { }
++static __always_inline unsigned long smap_save(void) { return 0; }
++static __always_inline void smap_restore(unsigned long flags) { }
++#define ASM_CLAC ""
++#define ASM_STAC ""
++#define ASM_CLAC_UNSAFE ""
++#define ASM_STAC_UNSAFE ""
++#endif
++#else /* CONFIG_X86_EARLYMIC */
+ #ifdef __ASSEMBLER__
+ 
+ #define ASM_CLAC \
+@@ -69,5 +85,6 @@ static __always_inline void smap_restore(unsigned long flags)
+ 	ALTERNATIVE("", ANNOTATE_IGNORE_ALTERNATIVE "stac", X86_FEATURE_SMAP)
+ 
+ #endif /* __ASSEMBLER__ */
++#endif /* CONFIG_X86_EARLYMIC */
+ 
+ #endif /* _ASM_X86_SMAP_H */
+diff --git a/arch/x86/include/asm/special_insns.h b/arch/x86/include/asm/special_insns.h
+index 46aa2c9c1bda..deb7988e58e8 100644
+--- a/arch/x86/include/asm/special_insns.h
++++ b/arch/x86/include/asm/special_insns.h
+@@ -2,6 +2,12 @@
+ #ifndef _ASM_X86_SPECIAL_INSNS_H
+ #define _ASM_X86_SPECIAL_INSNS_H
+ 
++#ifdef CONFIG_X86_EARLYMIC
++#define MIC_INSN(mnemonic, bytes)	bytes	/* k1om assembler lacks the mnemonic; never patched in */
++#else
++#define MIC_INSN(mnemonic, bytes)	mnemonic
++#endif
++
+ #ifdef __KERNEL__
+ #include <asm/nops.h>
+ #include <asm/processor-flags.h>
+@@ -190,7 +196,7 @@ static __always_inline void clflush(volatile void *__p)
+ static inline void clflushopt(volatile void *__p)
+ {
+ 	alternative_io("ds clflush %0",
+-		       "clflushopt %0", X86_FEATURE_CLFLUSHOPT,
++		       MIC_INSN("clflushopt %0", "ds clflush %0"), X86_FEATURE_CLFLUSHOPT,
+ 		       "+m" (*(volatile char __force *)__p));
+ }
+ 
+@@ -200,8 +206,8 @@ static inline void clwb(volatile void *__p)
+ 
+ 	asm_inline volatile(ALTERNATIVE_2(
+ 		"ds clflush %0",
+-		"clflushopt %0", X86_FEATURE_CLFLUSHOPT,
+-		"clwb %0", X86_FEATURE_CLWB)
++		MIC_INSN("clflushopt %0", "ds clflush %0"), X86_FEATURE_CLFLUSHOPT,
++		MIC_INSN("clwb %0", "ds clflush %0"), X86_FEATURE_CLWB)
+ 		: "+m" (*p));
+ }
+ 
+@@ -283,8 +289,8 @@ static inline int enqcmds(void __iomem *dst, const void *src)
+ 	 *
+ 	 * See movdir64b()'s comment on operand specification.
+ 	 */
+-	asm volatile(".byte 0xf3, 0x0f, 0x38, 0xf8, 0x02, 0x66, 0x90"
+-		     : "=@ccz" (zf), "+m" (*__dst)
++	asm volatile(".byte 0xf3, 0x0f, 0x38, 0xf8, 0x02, 0x66, 0x90" CC_SET(z)
++		     : CC_OUT(z) (zf), "+m" (*__dst)
+ 		     : "m" (*__src), "a" (__dst), "d" (__src));
+ 
+ 	/* Submission failure is indicated via EFLAGS.ZF=1 */
+diff --git a/arch/x86/include/asm/tsc.h b/arch/x86/include/asm/tsc.h
+index 4f7f09f50552..147160f2b3d7 100644
+--- a/arch/x86/include/asm/tsc.h
++++ b/arch/x86/include/asm/tsc.h
+@@ -36,6 +36,13 @@ static __always_inline u64 rdtsc(void)
+  * be impossible to observe non-monotonic rdtsc_unordered() behavior
+  * across multiple CPUs as long as the TSC is synced.
+  */
++#ifdef CONFIG_X86_EARLYMIC
++/* in-order core; the assembler has neither lfence nor rdtscp */
++static __always_inline u64 rdtsc_ordered(void)
++{
++	return rdtsc();
++}
++#else
+ static __always_inline u64 rdtsc_ordered(void)
+ {
+ 	EAX_EDX_DECLARE_ARGS(val, low, high);
+@@ -63,6 +70,7 @@ static __always_inline u64 rdtsc_ordered(void)
+ 
+ 	return EAX_EDX_VAL(val, low, high);
+ }
++#endif
+ 
+ /*
+  * Standard way to access the cycle counter.
+diff --git a/arch/x86/include/asm/uaccess.h b/arch/x86/include/asm/uaccess.h
+index 91a3fb8ae7ff..edbdf104d630 100644
+--- a/arch/x86/include/asm/uaccess.h
++++ b/arch/x86/include/asm/uaccess.h
+@@ -377,8 +377,8 @@ do {									\
+ 	__typeof__(*(_ptr)) __new = (_new);				\
+ 	asm_goto_output("\n"						\
+ 		     "1: " LOCK_PREFIX "cmpxchg"itype" %[new], %[ptr]\n"\
+-		     _ASM_EXTABLE_UA(1b, %l[label])			\
+-		     : "=@ccz" (success),				\
++		     _ASM_EXTABLE_UA(1b, %l[label]) CC_SET(z)			\
++		     : CC_OUT(z) (success),				\
+ 		       [ptr] "+m" (*_ptr),				\
+ 		       [old] "+a" (__old)				\
+ 		     : [new] ltype (__new)				\
+@@ -396,8 +396,8 @@ do {									\
+ 	__typeof__(*(_ptr)) __new = (_new);				\
+ 	asm_goto_output("\n"						\
+ 		     "1: " LOCK_PREFIX "cmpxchg8b %[ptr]\n"		\
+-		     _ASM_EXTABLE_UA(1b, %l[label])			\
+-		     : "=@ccz" (success),				\
++		     _ASM_EXTABLE_UA(1b, %l[label]) CC_SET(z)			\
++		     : CC_OUT(z) (success),				\
+ 		       "+A" (__old),					\
+ 		       [ptr] "+m" (*_ptr)				\
+ 		     : "b" ((u32)__new),				\
+@@ -419,8 +419,8 @@ do {									\
+ 		     "1: " LOCK_PREFIX "cmpxchg"itype" %[new], %[ptr]\n"\
+ 		     "2:\n"						\
+ 		     _ASM_EXTABLE_TYPE_REG(1b, 2b, EX_TYPE_EFAULT_REG,	\
+-					   %[errout])			\
+-		     : "=@ccz" (success),				\
++					   %[errout]) CC_SET(z)			\
++		     : CC_OUT(z) (success),				\
+ 		       [errout] "+r" (__err),				\
+ 		       [ptr] "+m" (*_ptr),				\
+ 		       [old] "+a" (__old)				\
+diff --git a/arch/x86/include/asm/uaccess_64.h b/arch/x86/include/asm/uaccess_64.h
+index 641f45c22f9d..7e453d0b33fa 100644
+--- a/arch/x86/include/asm/uaccess_64.h
++++ b/arch/x86/include/asm/uaccess_64.h
+@@ -64,11 +64,22 @@ static inline unsigned long __untagged_addr_remote(struct mm_struct *mm,
+ static inline void __user *mask_user_address(const void __user *ptr)
+ {
+ 	void __user *ret;
++#ifdef CONFIG_X86_EARLYMIC
++	/* no cmov on KNC */
++	asm("cmp %1,%0\n\t"
++	    "jbe 1f\n\t"
++	    "mov %1,%0\n"
++	    "1:"
++		:"=r" (ret)
++		:"r" (runtime_const_ptr(USER_PTR_MAX)),
++		 "0" (ptr) : "cc");
++#else
+ 	asm("cmp %1,%0\n\t"
+ 	    "cmova %1,%0"
+ 		:"=r" (ret)
+ 		:"r" (runtime_const_ptr(USER_PTR_MAX)),
+ 		 "0" (ptr));
++#endif
+ 	return ret;
+ }
+ #define masked_user_access_begin(x) ({				\
+diff --git a/arch/x86/include/asm/vdso/processor.h b/arch/x86/include/asm/vdso/processor.h
+index 7000aeb59aa2..3bf806b47fab 100644
+--- a/arch/x86/include/asm/vdso/processor.h
++++ b/arch/x86/include/asm/vdso/processor.h
+@@ -10,7 +10,12 @@
+ /* PAUSE is a good thing to insert into busy-wait loops. */
+ static __always_inline void native_pause(void)
+ {
++#ifdef CONFIG_X86_EARLYMIC
++	/* no pause; approximate with delay */
++	asm volatile("delay %0" :: "r" (1000) : "memory");
++#else
+ 	asm volatile("pause" ::: "memory");
++#endif
+ }
+ 
+ static __always_inline void cpu_relax(void)
+diff --git a/arch/x86/kernel/fpu/xstate.h b/arch/x86/kernel/fpu/xstate.h
+index 52ce19289989..24492c7034b1 100644
+--- a/arch/x86/kernel/fpu/xstate.h
++++ b/arch/x86/kernel/fpu/xstate.h
+@@ -110,12 +110,22 @@ static inline int update_pkru_in_sigframe(struct xregs_state __user *buf, u32 pk
+ #define REX_SUFFIX
+ #endif
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/* no XSAVE on KNC and no such mnemonics in the k1om assembler; these paths are never reached */
++#define XSAVE		"ud2 # xsave %[xa]"
++#define XSAVEOPT	"ud2 # xsaveopt %[xa]"
++#define XSAVEC		"ud2 # xsavec %[xa]"
++#define XSAVES		"ud2 # xsaves %[xa]"
++#define XRSTOR		"ud2 # xrstor %[xa]"
++#define XRSTORS		"ud2 # xrstors %[xa]"
++#else
+ #define XSAVE		"xsave" REX_SUFFIX " %[xa]"
+ #define XSAVEOPT	"xsaveopt" REX_SUFFIX " %[xa]"
+ #define XSAVEC		"xsavec" REX_SUFFIX " %[xa]"
+ #define XSAVES		"xsaves" REX_SUFFIX " %[xa]"
+ #define XRSTOR		"xrstor" REX_SUFFIX " %[xa]"
+ #define XRSTORS		"xrstors" REX_SUFFIX " %[xa]"
++#endif
+ 
+ /*
+  * After this @err contains 0 on success or the trap number when the
+diff --git a/arch/x86/kernel/uprobes.c b/arch/x86/kernel/uprobes.c
+index 845aeaf36b8d..ad108af89031 100644
+--- a/arch/x86/kernel/uprobes.c
++++ b/arch/x86/kernel/uprobes.c
+@@ -20,6 +20,12 @@
+ #include <asm/mmu_context.h>
+ #include <asm/nops.h>
+ 
++#ifdef CONFIG_X86_EARLYMIC
++#define UPROBE_TRAMP_ALIGN	"4096"	/* binutils 2.22 rejects the UL suffix of __stringify(PAGE_SIZE) */
++#else
++#define UPROBE_TRAMP_ALIGN	__stringify(PAGE_SIZE)
++#endif
++
+ /* Post-execution fixups. */
+ 
+ /* Adjust IP back to vicinity of actual insn */
+@@ -881,7 +887,7 @@ SYSCALL_DEFINE0(uprobe)
+ 
+ asm (
+ 	".pushsection .rodata\n"
+-	".balign " __stringify(PAGE_SIZE) "\n"
++	".balign " UPROBE_TRAMP_ALIGN "\n"
+ 	"uprobe_trampoline_entry:\n"
+ 	"push %rcx\n"
+ 	"push %r11\n"
+@@ -893,7 +899,7 @@ asm (
+ 	"pop %rcx\n"
+ 	"ret\n"
+ 	"int3\n"
+-	".balign " __stringify(PAGE_SIZE) "\n"
++	".balign " UPROBE_TRAMP_ALIGN "\n"
+ 	".popsection\n"
+ );
+ 
+diff --git a/arch/x86/kernel/verify_cpu.S b/arch/x86/kernel/verify_cpu.S
+index 37ad43792452..0fbc18e5d5b6 100644
+--- a/arch/x86/kernel/verify_cpu.S
++++ b/arch/x86/kernel/verify_cpu.S
+@@ -30,6 +30,12 @@
+ 
+ #include <asm/cpufeatures.h>
+ #include <asm/cpufeaturemasks.h>
++#ifdef CONFIG_X86_EARLYMIC	/* never run on KNC; the U-suffixed masks do not assemble with binutils 2.22 */
++#undef REQUIRED_MASK0
++#define REQUIRED_MASK0	0
++#undef REQUIRED_MASK1
++#define REQUIRED_MASK1	0
++#endif
+ #include <asm/msr-index.h>
+ 
+ #define SSE_MASK	\
+diff --git a/arch/x86/lib/copy_user_uncached_64.S b/arch/x86/lib/copy_user_uncached_64.S
+index 18350b343c2a..6566aa4a26b5 100644
+--- a/arch/x86/lib/copy_user_uncached_64.S
++++ b/arch/x86/lib/copy_user_uncached_64.S
+@@ -8,6 +8,15 @@
+ #include <linux/objtool.h>
+ #include <asm/asm.h>
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/* no SSE2 on KNC: plain stores, no store fence */
++.macro movnti a:vararg
++	mov \a
++.endm
++.macro sfence
++.endm
++#endif
++
+ /*
+  * copy_user_nocache - Uncached memory copy with exception handling
+  *
+diff --git a/arch/x86/lib/getuser.S b/arch/x86/lib/getuser.S
+index 9d5654b8a72a..fd7c84241d6d 100644
+--- a/arch/x86/lib/getuser.S
++++ b/arch/x86/lib/getuser.S
+@@ -37,13 +37,23 @@
+ #include <asm/smap.h>
+ #include <asm/runtime-const.h>
+ 
++#ifdef CONFIG_X86_EARLYMIC
++#define ASM_BARRIER_NOSPEC	/* in-order core, no lfence in the assembler */
++#else
+ #define ASM_BARRIER_NOSPEC ALTERNATIVE "", "lfence", X86_FEATURE_LFENCE_RDTSC
++#endif
+ 
+ .macro check_range size:req
+ .if IS_ENABLED(CONFIG_X86_64)
+ 	RUNTIME_CONST_PTR USER_PTR_MAX, rdx
+ 	cmp %rdx, %rax
++#ifdef CONFIG_X86_EARLYMIC	/* no cmov on KNC */
++	jbe .Lcr_\@
++	mov %rdx, %rax
++.Lcr_\@:
++#else
+ 	cmova %rdx, %rax
++#endif
+ .else
+ 	cmp $TASK_SIZE_MAX-\size+1, %eax
+ 	jae .Lbad_get_user
+diff --git a/arch/x86/lib/usercopy_64.c b/arch/x86/lib/usercopy_64.c
+index 654280aaa3e9..aa034a96485d 100644
+--- a/arch/x86/lib/usercopy_64.c
++++ b/arch/x86/lib/usercopy_64.c
+@@ -79,6 +79,11 @@ long __copy_user_flushcache(void *dst, const void __user *src, unsigned size)
+ 
+ void __memcpy_flushcache(void *_dst, const void *_src, size_t size)
+ {
++#ifdef CONFIG_X86_EARLYMIC
++	/* No non-temporal stores or cache line flushes on k1om (no pmem either). */
++	memcpy(_dst, _src, size);
++	return;
++#else
+ 	unsigned long dest = (unsigned long) _dst;
+ 	unsigned long source = (unsigned long) _src;
+ 
+@@ -139,6 +144,7 @@ void __memcpy_flushcache(void *_dst, const void *_src, size_t size)
+ 		memcpy((void *) dest, (void *) source, size);
+ 		clean_cache_range((void *) dest, size);
+ 	}
++#endif
+ }
+ EXPORT_SYMBOL_GPL(__memcpy_flushcache);
+ #endif
+diff --git a/include/linux/objtool.h b/include/linux/objtool.h
+index 46ebaa46e6c5..7827919b0983 100644
+--- a/include/linux/objtool.h
++++ b/include/linux/objtool.h
+@@ -135,6 +135,8 @@
+ .endm
+ .macro STACK_FRAME_NON_STANDARD func:req
+ .endm
++.macro STACK_FRAME_NON_STANDARD_FP func:req
++.endm
+ .macro ANNOTATE type:req
+ .endm
+ #endif
+diff --git a/lib/crc/Kconfig b/lib/crc/Kconfig
+index 70e7a6016de3..58bc76d5f217 100644
+--- a/lib/crc/Kconfig
++++ b/lib/crc/Kconfig
+@@ -51,7 +51,7 @@ config CRC_T10DIF_ARCH
+ 	default y if ARM64 && KERNEL_MODE_NEON
+ 	default y if PPC64 && ALTIVEC
+ 	default y if RISCV && RISCV_ISA_ZBC
+-	default y if X86
++	default y if X86 && !X86_EARLYMIC
+ 
+ config CRC32
+ 	tristate
+@@ -71,7 +71,7 @@ config CRC32_ARCH
+ 	default y if RISCV && RISCV_ISA_ZBC
+ 	default y if S390
+ 	default y if SPARC64
+-	default y if X86
++	default y if X86 && !X86_EARLYMIC
+ 
+ config CRC64
+ 	tristate
+@@ -83,7 +83,7 @@ config CRC64_ARCH
+ 	bool
+ 	depends on CRC64 && CRC_OPTIMIZATIONS
+ 	default y if RISCV && RISCV_ISA_ZBC && 64BIT
+-	default y if X86_64
++	default y if X86_64 && !X86_EARLYMIC
+ 
+ config CRC_OPTIMIZATIONS
+ 	bool "Enable optimized CRC implementations" if EXPERT
+diff --git a/lib/crypto/Kconfig b/lib/crypto/Kconfig
+index 16859c6226dd..15bc3dc114b2 100644
+--- a/lib/crypto/Kconfig
++++ b/lib/crypto/Kconfig
+@@ -34,7 +34,7 @@ config CRYPTO_LIB_BLAKE2S_ARCH
+ 	bool
+ 	depends on !UML
+ 	default y if ARM
+-	default y if X86_64
++	default y if X86_64 && !X86_EARLYMIC
+ 
+ config CRYPTO_LIB_CHACHA
+ 	tristate
+@@ -52,7 +52,7 @@ config CRYPTO_LIB_CHACHA_ARCH
+ 	default y if PPC64 && CPU_LITTLE_ENDIAN && VSX
+ 	default y if RISCV && 64BIT && RISCV_ISA_V && TOOLCHAIN_HAS_VECTOR_CRYPTO
+ 	default y if S390
+-	default y if X86_64
++	default y if X86_64 && !X86_EARLYMIC
+ 
+ config CRYPTO_LIB_CURVE25519
+ 	tristate
+@@ -66,7 +66,7 @@ config CRYPTO_LIB_CURVE25519_ARCH
+ 	depends on CRYPTO_LIB_CURVE25519 && !UML && !KMSAN
+ 	default y if ARM && KERNEL_MODE_NEON && !CPU_BIG_ENDIAN
+ 	default y if PPC64 && CPU_LITTLE_ENDIAN
+-	default y if X86_64
++	default y if X86_64 && !X86_EARLYMIC
+ 
+ config CRYPTO_LIB_CURVE25519_GENERIC
+ 	bool
+@@ -104,7 +104,7 @@ config CRYPTO_LIB_POLY1305_ARCH
+ 	# The PPC64 code needs to be fixed to work in softirq context.
+ 	default y if PPC64 && CPU_LITTLE_ENDIAN && VSX && BROKEN
+ 	default y if RISCV
+-	default y if X86_64
++	default y if X86_64 && !X86_EARLYMIC
+ 
+ # This symbol controls the inclusion of the Poly1305 generic code.  This differs
+ # from most of the other algorithms, which handle the generic code
+@@ -145,7 +145,7 @@ config CRYPTO_LIB_SHA1_ARCH
+ 	default y if PPC
+ 	default y if S390
+ 	default y if SPARC64
+-	default y if X86_64
++	default y if X86_64 && !X86_EARLYMIC
+ 
+ config CRYPTO_LIB_SHA256
+ 	tristate
+@@ -164,7 +164,7 @@ config CRYPTO_LIB_SHA256_ARCH
+ 	default y if RISCV && 64BIT && RISCV_ISA_V && TOOLCHAIN_HAS_VECTOR_CRYPTO
+ 	default y if S390
+ 	default y if SPARC64
+-	default y if X86_64
++	default y if X86_64 && !X86_EARLYMIC
+ 
+ config CRYPTO_LIB_SHA512
+ 	tristate
+@@ -182,7 +182,7 @@ config CRYPTO_LIB_SHA512_ARCH
+ 	default y if RISCV && 64BIT && RISCV_ISA_V && TOOLCHAIN_HAS_VECTOR_CRYPTO
+ 	default y if S390
+ 	default y if SPARC64
+-	default y if X86_64
++	default y if X86_64 && !X86_EARLYMIC
+ 
+ config CRYPTO_LIB_SM3
+ 	tristate
+diff --git a/scripts/min-tool-version.sh b/scripts/min-tool-version.sh
+index 99b5575c1ef7..519fb174d588 100755
+--- a/scripts/min-tool-version.sh
++++ b/scripts/min-tool-version.sh
+@@ -14,13 +14,13 @@ fi
+ 
+ case "$1" in
+ binutils)
+-	echo 2.30.0
++	echo 2.22.0	# k1om binutils is 2.22.52 (MPSS 3.8.6)
+ 	;;
+ gcc)
+ 	if [ "$ARCH" = parisc64 ]; then
+ 		echo 12.0.0
+ 	else
+-		echo 8.1.0
++		echo 5.1.0	# k1om gcc is 5.1.1 (MPSS 3.8.6)
+ 	fi
+ 	;;
+ llvm)
+@@ -34,7 +34,7 @@ rustc)
+ 	echo 1.78.0
+ 	;;
+ bindgen)
+-	echo 0.65.1
++	echo 0.56.0
+ 	;;
+ *)
+ 	echo "$1: unknown tool" >&2

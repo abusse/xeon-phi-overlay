@@ -1,0 +1,2470 @@
+From ef743269bed952597b3b84e0e7c8305a672d26bb Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 28 Sep 2026 09:57:34 +0200
+Subject: [PATCH 10/16] x86/mic: KNC platform code and the SFI firmware tables
+
+From Intel MPSS 3.8.6:
+ - intelmic.c: the x86_init/x86_platform hooks for the card
+   (x86_mic_early_setup() from x86_64_start_kernel(), SBOX-based
+   CPU/TSC calibration, wallclock, SMPT for host
+   memory access, ISR setup, crash path), mic_etc.c: the ETC (elapsed
+   time counter) clocksource used when the TSC is unstable across
+   cpufreq changes, mic_v30_stubs.c; the SBOX ICR doorbell interrupts
+   as their own irq_chip in io_apic.c (arch_setup_sbox_irqs).
+ - The KNC bootstrap hands the CPU and IOAPIC tables to the kernel as
+   SFI tables (CPUS/APIC); arch/x86/platform/sfi parses them and fills
+   the KNC IOAPIC pin table.
+
+Adaptations for 6.18:
+ - Commit 4590d98f5a4f ("sfi: Remove framework for deprecated
+   firmware") deleted SFI in 5.12; the 5.10 drivers/sfi core, headers
+   and arch/x86/platform/sfi are carried here (the intel-mid users
+   stay gone), with sfi_init_late() in init/main.c switching the
+   tables from early_ioremap to ioremap (else check_early_ioremap_leak
+   warns and late table access is wrong).
+ - 6.9 topology: topology_register_apic() instead of
+   generic_processor_info(); the SFI hook runs before
+   x86_init.mpparse.parse_smp_cfg().
+ - setup_arch() calls the calibrate hooks from
+   simple_udelay_calibration() before ioremap() works (4.12):
+   intel_mic_calibrate_tsc() returns 0 until the slab is up and
+   tsc_init() asks again later.
+ - Latent MPSS bugs fixed on the way: intel_mic_{get,set}_wallclock
+   never filled the timespec (pre-3.9 prototypes), mic_setup_isr()
+   was a void late_initcall.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ arch/x86/Kconfig                |   6 +-
+ arch/x86/kernel/Makefile        |   3 +
+ arch/x86/kernel/apic/io_apic.c  |  65 ++++
+ arch/x86/kernel/head64.c        |  29 ++
+ arch/x86/kernel/intelmic.c      | 620 ++++++++++++++++++++++++++++++++
+ arch/x86/kernel/mic_etc.c       | 155 ++++++++
+ arch/x86/kernel/mic_v30_stubs.c |  13 +
+ arch/x86/kernel/setup.c         |   2 +
+ arch/x86/kernel/smpboot.c       |   4 +
+ arch/x86/platform/Makefile      |   1 +
+ arch/x86/platform/sfi/Makefile  |   2 +
+ arch/x86/platform/sfi/sfi.c     | 130 +++++++
+ drivers/Makefile                |   2 +-
+ drivers/sfi/Kconfig             |  18 +
+ drivers/sfi/Makefile            |   4 +
+ drivers/sfi/sfi_acpi.c          | 214 +++++++++++
+ drivers/sfi/sfi_core.c          | 539 +++++++++++++++++++++++++++
+ drivers/sfi/sfi_core.h          |  81 +++++
+ include/linux/sfi.h             | 210 +++++++++++
+ include/linux/sfi_acpi.h        |  93 +++++
+ init/main.c                     |   3 +
+ 21 files changed, 2191 insertions(+), 3 deletions(-)
+ create mode 100644 arch/x86/kernel/intelmic.c
+ create mode 100644 arch/x86/kernel/mic_etc.c
+ create mode 100644 arch/x86/kernel/mic_v30_stubs.c
+ create mode 100644 arch/x86/platform/sfi/Makefile
+ create mode 100644 arch/x86/platform/sfi/sfi.c
+ create mode 100644 drivers/sfi/Kconfig
+ create mode 100644 drivers/sfi/Makefile
+ create mode 100644 drivers/sfi/sfi_acpi.c
+ create mode 100644 drivers/sfi/sfi_core.c
+ create mode 100644 drivers/sfi/sfi_core.h
+ create mode 100644 include/linux/sfi.h
+ create mode 100644 include/linux/sfi_acpi.h
+
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index 93c26a46c605..ca5a06e5c441 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -507,7 +507,7 @@ config X86_POSTED_MSI
+ 	  If you don't know what to do here, say N.
+ 
+ config X86_MPPARSE
+-	bool "Enable MPS table" if ACPI
++	bool "Enable MPS table" if ACPI || SFI
+ 	default y
+ 	depends on X86_LOCAL_APIC
+ 	help
+@@ -2743,6 +2743,8 @@ source "kernel/power/Kconfig"
+ 
+ source "drivers/acpi/Kconfig"
+ 
++source "drivers/sfi/Kconfig"
++
+ config X86_APM_BOOT
+ 	def_bool y
+ 	depends on APM
+@@ -2928,7 +2930,7 @@ config PCI_DIRECT
+ config PCI_MMCONFIG
+ 	bool "Support mmconfig PCI config space access" if X86_64
+ 	default y
+-	depends on PCI && (ACPI || JAILHOUSE_GUEST)
++	depends on PCI && (ACPI || SFI || JAILHOUSE_GUEST)
+ 	depends on X86_64 || (PCI_GOANY || PCI_GOMMCONFIG)
+ 	help
+ 	  Add support for accessing the PCI configuration space as a memory
+diff --git a/arch/x86/kernel/Makefile b/arch/x86/kernel/Makefile
+index 9d4ce1fae4b5..4f72b3939a8e 100644
+--- a/arch/x86/kernel/Makefile
++++ b/arch/x86/kernel/Makefile
+@@ -134,6 +134,9 @@ obj-$(CONFIG_JAILHOUSE_GUEST)	+= jailhouse.o
+ 
+ obj-$(CONFIG_EISA)		+= eisa.o
+ obj-$(CONFIG_PCSPKR_PLATFORM)	+= pcspeaker.o
++obj-$(CONFIG_X86_MICPCI)	+= intelmic.o
++obj-$(CONFIG_MK1OM)		+= mic_etc.o
++obj-$(CONFIG_MK1OM)		+= mic_v30_stubs.o
+ obj-$(CONFIG_X86_EARLYMIC)	+= mic_cacheflush.o
+ 
+ obj-$(CONFIG_X86_CHECK_BIOS_CORRUPTION) += check.o
+diff --git a/arch/x86/kernel/apic/io_apic.c b/arch/x86/kernel/apic/io_apic.c
+index e6596be0d500..9eb20ac35d38 100644
+--- a/arch/x86/kernel/apic/io_apic.c
++++ b/arch/x86/kernel/apic/io_apic.c
+@@ -1926,6 +1926,71 @@ static struct irq_chip ioapic_ir_chip __read_mostly = {
+ 				  IRQCHIP_AFFINITY_PRE_STARTUP,
+ };
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/*
++ * SBOX APIC ICR interrupt support (MIC host<->card doorbell IRQs): plain
++ * vector-domain IRQs whose vector is programmed into an SBOX ICR register.
++ */
++static void mask_sbox_irq(struct irq_data *data)
++{
++#ifdef CONFIG_MK1OM
++	void __iomem *icraddr = irq_data_get_irq_handler_data(data);
++	u32 value = readl(icraddr);
++	value |= 1 << 16;
++	writel(value, icraddr);
++#endif
++}
++
++static void unmask_sbox_irq(struct irq_data *data)
++{
++#ifdef CONFIG_MK1OM
++	void __iomem *icraddr = irq_data_get_irq_handler_data(data);
++	u32 value = readl(icraddr);
++	value &= ~(1 << 16);
++	writel(value, icraddr);
++#endif
++}
++
++static struct irq_chip sbox_chip = {
++	.name		= "SBOX-ICR",
++	.irq_unmask	= unmask_sbox_irq,
++	.irq_mask	= mask_sbox_irq,
++	.irq_ack	= apic_ack_edge,
++};
++
++static void setup_sbox_irq(int irq, int i)
++{
++	struct irq_cfg *cfg = irqd_cfg(irq_get_irq_data(irq));
++	void __iomem *icraddr = mic_sbox_mmio_va + SBOX_APICICR0 + (i * 8);
++	int vector = cfg->vector;
++
++	irq_set_chip_and_handler_name(irq, &sbox_chip, handle_edge_irq, "edge");
++	irq_set_handler_data(irq, icraddr);
++	/* Write the vector number and destination apicid into the SBOX ICR */
++	writel(vector, icraddr);
++	writel(cfg->dest_apicid, icraddr + 4);
++	printk("irq %d for SBOX, vector=%d, icr=%u\n", irq, vector, readl(icraddr));
++}
++
++void arch_setup_sbox_irqs(unsigned int *irqs, int n)
++{
++	struct irq_alloc_info info;
++	int node = cpu_to_node(boot_cpu_physical_apicid);
++	int irq, i;
++
++	init_irq_alloc_info(&info, NULL);
++	/* 4.15+: without a mask the vector domain only reserves (and later spreads the
++	 * vectors over CPUs); the ICR has one fixed destination, so assign on the BSP now. */
++	info.mask = cpumask_of(0);
++	irq = irq_domain_alloc_irqs(x86_vector_domain, n, node, &info);
++	BUG_ON(irq <= 0);
++	for (i = 0; i < n; i++) {
++		setup_sbox_irq(irq + i, i);
++		irqs[i] = irq + i;
++	}
++}
++#endif /* CONFIG_X86_EARLYMIC */
++
+ static inline void init_IO_APIC_traps(void)
+ {
+ 	struct irq_cfg *cfg;
+diff --git a/arch/x86/kernel/head64.c b/arch/x86/kernel/head64.c
+index fd28b53dbac5..2a55543d7072 100644
+--- a/arch/x86/kernel/head64.c
++++ b/arch/x86/kernel/head64.c
+@@ -1,4 +1,28 @@
+ // SPDX-License-Identifier: GPL-2.0
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ /*
+  *  prepare to run common code
+  *
+@@ -297,6 +321,11 @@ void __init __noreturn x86_64_start_reservations(char *real_mode_data)
+ 	if (!boot_params.hdr.version)
+ 		copy_bootdata(__va(real_mode_data));
+ 
++#ifdef CONFIG_X86_EARLYMIC
++	/* MICBUGBUG: Make this conditional on the subarch */
++	extern void x86_mic_early_setup(void);
++	x86_mic_early_setup();
++#endif
+ 	x86_early_init_platform_quirks();
+ 
+ 	switch (boot_params.hdr.hardware_subarch) {
+diff --git a/arch/x86/kernel/intelmic.c b/arch/x86/kernel/intelmic.c
+new file mode 100644
+index 000000000000..7e53814da6ed
+--- /dev/null
++++ b/arch/x86/kernel/intelmic.c
+@@ -0,0 +1,620 @@
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
++/*
++ * intelmic.c: Intel MIC platform specific setup code
++ *
++ * (C) Copyright 2010 Intel Corporation
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; version 2
++ * of the License.
++ */
++#include <linux/init.h>
++#include <linux/slab.h>
++#include <linux/kernel.h>
++#include <linux/sfi.h>
++#include <linux/irq.h>
++#include <linux/module.h>
++#include <linux/reboot.h>
++#include <linux/interrupt.h>
++#include <linux/irqflags.h>
++#include <linux/time.h>
++
++#include <asm/setup.h>
++#include <asm/mpspec_def.h>
++#include <asm/hw_irq.h>
++#include <asm/apic.h>
++#include <asm/io_apic.h>
++#include <asm/io.h>
++#include <asm/i8259.h>
++#include <asm/reboot.h>
++#include <asm/mic_def.h>
++#include <asm/mce.h>
++
++
++#define MIC_SBOX_BASE			0x08007D0000ULL     /* PCIE SBox Registers */
++#define MIC_SBOX_MMIO_SIZE		(64*1024)
++
++#define SNOOP_ON                (0 << 0)
++#define SNOOP_OFF               (1 << 0)
++#define MIC_SYSTEM_PAGE_SHIFT   34ULL
++#define NUM_SMPT_ENTRIES_IN_USE 32
++#define MIC_SYSTEM_PAGE_SIZE    0x0400000000ULL
++#define SBOX_SMPT00             0x00003100
++
++/* Sbox Smpt Reg Bits:
++ * Bits 	31:2	Host address
++ * Bits 	1	RSVD
++ * Bits		0	No snoop
++ */
++#define BUILD_SMPT(NO_SNOOP, HOST_ADDR)  \
++	(uint32_t)(((((HOST_ADDR)<< 2) & (~0x03)) | ((NO_SNOOP) & (0x01))))
++
++#ifdef CONFIG_MK1OM
++#define SBOX_SDBIC1		0x0000CC94
++#else
++#define SBOX_SDBIC1		0x00009034
++#endif
++
++/* vnet/mic_shutdown/hvc/virtio/pc35_wakeup */
++unsigned int sbox_irqs[5];
++
++void __iomem *mic_sbox_mmio_va;
++EXPORT_SYMBOL(mic_sbox_mmio_va);
++
++#ifdef CONFIG_MK1OM
++/* Function to init the SBOX ETC timer.	*/
++extern void mic_timer_init(void);
++extern int mic_etc_enabled;
++#define	MIC_SBOX_CURRENT_CLK_RATIO	0x0000402C
++#define	MIC_SBOX_SCRATCH4		0x0000AB30
++#define	CORE_VCO			4000
++#define	BITS_TO_DIV(x)			(((x) == 3) ? 1 : ((x) == 2) ? 2 : 4)
++union sboxScratch4RegDef
++{
++	uint32_t m_value;
++	struct
++	{
++		uint32_t thread_mask		: 4;    // bit 3:0   (Mask of enabled threads per core)
++		uint32_t cache_size		: 2;    // bit 5:4   (0,1,2 = 512KB, 3 = 256KB)
++		uint32_t gbox_channel_count	: 4;    // bit 9:6   (0 based channel count since we have to have at least 1 channel active)
++		uint32_t			: 15;    // bit 24:10
++		uint32_t icc_divider		: 5;    // bit 29:25 (4000 / IccDivider) = reference clock
++		uint32_t soft_reset		: 1;    // bit 30:30 (1 if current boot was from a soft reset, 0 otherwise)
++		uint32_t internal_flash		: 1;    // bit 31:31 (1 if flash is an internal build, 0 for external)
++	};
++};
++
++union mclkRatioEncoding
++{
++	uint32_t value;
++	struct
++	{
++		uint32_t			: 1;    // bits 0:0
++		uint32_t fb			: 8;    // bits 8:1     (feedback divider)
++		uint32_t ff			: 2;    // bits 10:9    (feedforward divider)
++		uint32_t			: 21;   // bits 31:11
++	};
++};
++
++static int get_core_freq(void)
++{
++	int core_vco;
++	int ref_clk;
++	union sboxScratch4RegDef s4_reg;
++	union mclkRatioEncoding encoded_value;
++
++	// Read ICC divider so we know what the ICC output is
++	s4_reg.m_value = readl(mic_sbox_mmio_va + MIC_SBOX_SCRATCH4);
++
++	// Read the current clock ratio
++	encoded_value.value = readl(mic_sbox_mmio_va + MIC_SBOX_CURRENT_CLK_RATIO);
++
++	// Calculate reference clock (reference is constant, divider changes)
++	ref_clk = CORE_VCO / s4_reg.icc_divider;
++
++	// Calculate the core clock
++	core_vco = (ref_clk * encoded_value.fb) / BITS_TO_DIV(encoded_value.ff);
++
++	return core_vco;
++}
++#else
++/* PLL Data structure - This has sufficient data to generate Gpu and Memory frequency
++ * table dynamically and thus avoiding the long memory consuming table. And also it is useful in
++ * converting the frequencies from Mhz to Ratio/Divider format and vice versa
++ * This data structure is indexed by group(range) of frequencies having same Divider values
++ */
++struct pll_info
++{
++	uint8_t clk_div;     /* clock divider */
++	uint8_t min_ratio;   /* Minimum ratio */
++	uint8_t max_ratio;   /* Maximum ratio */
++	uint16_t min_clk;    /* Minimum Clk (frequency) */
++	uint16_t max_clk;    /* Maximum Clk (frequency) */
++	uint8_t step_size;   /* By how much are the frequency incrementing */
++};
++
++#define MIC_SBOX_CURRENT_CLK_RATIO	0x00003004
++#define CLK_DIVIDER			0xC0
++#define CLK_RATIO			0x3F
++#define B_CLK				100
++
++/* This table is specific to ML1OM core. */
++static struct pll_info pll_info_gpu[] = {
++	{ 1, 20, 40, 2000, 4000, 100},
++	{ 2, 20, 39, 1000, 1950, 50},
++	{ 4, 20, 39, 500, 975, 25}
++};
++
++/*************************************************************************
++    Core Frequency
++*************************************************************************/
++union sboxCorefreqReg
++{
++	uint32_t value;
++	struct
++	{
++		uint32_t ratio		: 8; /* bit 0-7 Ratio */
++		uint32_t rsvd0		: 8; /* bit 8-15 */
++		uint32_t asyncmode	: 1; /* bit 16 Async Mode. Field pulled out from extclkfreq by SW team */
++		uint32_t extclkfreq	: 4; /* bit 17-20 ExtClkFreq */
++		uint32_t rsvd1		: 6; /* bit 21-26 */
++		uint32_t ratiostep	: 3; /* bit 27-29 Power throttle ratio-step */
++		uint32_t jumpratio	: 1; /* bit 30 Power throttle jump at once */
++		uint32_t switch_bit	: 1; /* bit 31 Switch to the value from fuse or the register */
++	} bits;
++};
++
++/*
++ * Convert ratio to Mhz
++ * @param freq_ratio in ratio/divider format
++ * @param pll_info, pll Table
++ * @param len, Length of the table
++ * @return ratio , 0 as failure
++ */
++static int ratio_to_mhz(int freq_ratio, struct pll_info *pll_table, int len)
++{
++	int i, ret_val = 0;
++
++	/*
++	 * Inverting the clock divider can be used as index for PLL
++	 * table This is derived by hand from the table of encoded PLL
++	 * frequencies It won't have to change until K1OM (which will
++	 * require substantial changes, apparently).
++	 */
++	i = ~((freq_ratio & CLK_DIVIDER) >> 6) & 0x3;
++	freq_ratio &= CLK_RATIO;
++
++	/*
++	 * check if the given ratio and divider matches the core PLL
++	 * table's range
++	 */
++	if (i < len &&
++		(int)pll_table[i].min_ratio <= freq_ratio &&
++		(int)pll_table[i].max_ratio >= freq_ratio) {
++		ret_val = freq_ratio * B_CLK;
++		(void) do_div(ret_val, (int)pll_table[i].clk_div);
++	}
++	return ret_val;
++}
++#endif
++
++void __init mic_sbox_md_init(void);
++
++#ifdef CONFIG_MK1OM
++static inline void __delay_atleast_ms(int cnt)
++{
++	int i, j;
++	for (i = 0; i < cnt; i++)
++		for (j = 0; j < 2000; j++) {
++			/* 1000 cycles assumes 1GZ clock rate
++			 * Looping for 2000 times makes sure that we delay
++			 * for atleast one ms for any frequency upto 2GZ
++			 */
++			asm volatile ("delay %0" :: "r" (1000) : "memory");
++		}
++}
++#endif
++
++static int __init __calculate_tsc_comp(int64_t hz)
++{
++	int64_t deltahz;
++#ifdef CONFIG_MK1OM
++	/* max compensation due to ICC SSC comp is 2.5%
++	 * So the max deviation is 1/2 * 2.5%
++	 */
++	int64_t max_tsc_comp = (5 * hz) / 400;
++	uint64_t tsc1, tsc2, deltatsc;
++	uint64_t etc1, etc2, deltaetc;
++	int attempts = 0;
++	unsigned long flags;
++#define MAX_ATTEMPTS 10
++	do {
++		local_irq_save(flags);
++		tsc1 = rdtsc();
++		etc1 = mic_etc_read(NULL);
++		local_irq_restore(flags);
++		/* Random value of 3secs
++		 * That should be big enough
++		 */
++		__delay_atleast_ms(3000);
++
++		local_irq_save(flags);
++		tsc2 = rdtsc();
++		etc2 = mic_etc_read(NULL);
++		local_irq_restore(flags);
++
++		deltaetc = etc2 - etc1;
++		deltatsc = tsc2 - tsc1;
++		deltahz  = (deltatsc * (ETC_TICK_RATE + etc_comp)) / deltaetc;
++		deltahz -= hz;
++		attempts ++;
++	} while (attempts < MAX_ATTEMPTS && (deltahz > max_tsc_comp ||
++						deltahz < -max_tsc_comp));
++	if (deltahz > max_tsc_comp || deltahz < -max_tsc_comp)
++		printk("Tsc compensation %lld is > max_tsc_comp(%lld) or <"
++				"min_tsc_comp(%lld)\n",
++				deltahz, max_tsc_comp, -max_tsc_comp);
++
++	deltahz = min(max_tsc_comp, deltahz);
++	deltahz = max(-max_tsc_comp, deltahz);
++	printk("tsc_comp = %lld, etc_comp = %d\n", deltahz, etc_comp);
++#else
++	deltahz = 0;
++#endif
++	return deltahz;
++}
++
++extern int delay_us_cycles;
++extern int delay_us_cycles_extra;
++static unsigned long __init intel_mic_calibrate_tsc(void)
++{
++	unsigned long khz;
++#ifdef CONFIG_ML1OM
++	union sboxCorefreqReg core_freq_reg;
++#endif
++	/* 4.12+: setup_arch() calls this from simple_udelay_calibration(), before
++	 * ioremap() works; tsc_init() asks again once the SBOX can be mapped. */
++	if (!mic_sbox_mmio_va && !slab_is_available())
++		return 0;
++	mic_sbox_md_init();
++#if defined CONFIG_ML1OM
++	core_freq_reg.value = readl(mic_sbox_mmio_va + MIC_SBOX_CURRENT_CLK_RATIO);
++	delay_us_cycles_extra = ratio_to_mhz(core_freq_reg.bits.ratio, pll_info_gpu, ARRAY_SIZE(pll_info_gpu));
++#else
++	delay_us_cycles_extra = get_core_freq();
++#endif
++	delay_us_cycles_extra *= 1000 * 1000;
++	delay_us_cycles_extra += __calculate_tsc_comp(delay_us_cycles_extra);
++	delay_us_cycles_extra /= 1000;
++	khz = delay_us_cycles_extra;
++	delay_us_cycles_extra /= 1000;
++	delay_us_cycles_extra -= delay_us_cycles;
++	return khz;
++}
++
++#ifdef CONFIG_ML1OM
++/*------------------------------------------------------------------------------
++ *  FUNCTION: mic_smpt_init
++ *
++ *  DESCRIPTION: Initializes 1-1 mapping
++ *  i.e 0-512GB -> MIC_SYSTEM_BASE-(MIC_SYSTEM_BASE + 512GB)
++ *
++ *  PARAMETERS: None
++ *
++ *  RETURNS: None
++*------------------------------------------------------------------------------*/
++void __init mic_smpt_init(void)
++{
++	uint32_t *smpt_offset;
++	uint32_t smpt_reg_val;
++	int i;
++
++	if(!mic_sbox_mmio_va)
++		mic_sbox_md_init();
++
++	smpt_offset = mic_sbox_mmio_va + SBOX_SMPT00;
++
++	for (i = 0; i < NUM_SMPT_ENTRIES_IN_USE; i++) {
++		smpt_reg_val = BUILD_SMPT(SNOOP_ON, (i * MIC_SYSTEM_PAGE_SIZE)
++					 >> MIC_SYSTEM_PAGE_SHIFT);
++		writel(smpt_reg_val, &smpt_offset[i]);
++	}
++}
++#else
++void __init mic_smpt_init(void)
++{
++}
++#endif
++
++/* No RTC on the card; time comes from the host via ntp. */
++static void intel_mic_get_wallclock(struct timespec64 *ts)
++{
++	ts->tv_sec = 0;
++	ts->tv_nsec = 0;
++}
++
++static int intel_mic_set_wallclock(const struct timespec64 *ts)
++{
++	return -1;
++}
++
++void __init mic_sbox_md_init(void)
++{
++	/* When do we unmap sbox or do we even care? */
++	/* We need to map sbox mmio when we init the ETC counter
++ 	   on KNC. 
++	*/
++	if(!mic_sbox_mmio_va){ 
++		mic_sbox_mmio_va = ioremap(MIC_SBOX_BASE, MIC_SBOX_MMIO_SIZE);
++		BUG_ON(!mic_sbox_mmio_va);
++	}
++	return;
++}
++
++#ifdef	CONFIG_MK1OM
++static void mic_timer_init_common(void)
++{
++	if (mic_etc_enabled)
++		mic_timer_init();
++	else
++		x86_init_noop();
++}
++#endif
++
++/*------------------------------------------------------------------------------
++ *  FUNCTION: mic_shutdown
++ *
++ *  DESCRIPTION: Notifies the host about a MIC shutdown/poweroff/restart via
++ *  writing to a doorbell register which interrupts the host.
++ *
++ *  PARAMETERS: system state.
++ *
++ *  RETURNS: none.
++*------------------------------------------------------------------------------*/
++void mic_shutdown(uint16_t state)
++{
++	uint32_t db_reg;
++#define SBOX_SDBIC1_DBREQ_BIT   0x80000000
++
++	db_reg = state | SBOX_SDBIC1_DBREQ_BIT;
++	writel(db_reg, mic_sbox_mmio_va + SBOX_SDBIC1);
++	printk(KERN_ALERT "%s: system state %d dbreg 0x%x\n",
++			__func__, state, db_reg);
++}
++
++void _mic_shutdown(void)
++{
++	native_machine_shutdown();
++	mic_shutdown(system_state);
++}
++
++#ifdef CONFIG_KEXEC
++void _mic_crash_shutdown(struct pt_regs *regs)
++{
++	native_machine_crash_shutdown(regs);
++	/*
++	 * Only alert host outside of MC handling context
++	 */
++#ifdef CONFIG_X86_MCE
++	if (! atomic_read(&mce_entry))
++		mic_shutdown(0xdead);
++#else
++	mic_shutdown(0xdead);
++#endif
++	/*
++	 * Halt since MIC does not want to load crash kernel itself because
++	 * host kernel will capture the kernel core dump.
++	 */
++	while(1)
++		halt();
++}
++#endif
++
++/*------------------------------------------------------------------------------
++ *  FUNCTION: mic_shutdown_isr
++ *
++ *  DESCRIPTION: This interrupt service routine is executed when the host
++ *  triggers an interrupt telling the uOS that an orderly shutdown should be
++ *  performed by writing to SBOX RDMASR0.
++*------------------------------------------------------------------------------*/
++static irqreturn_t mic_shutdown_isr(int irq, void *unused)
++{
++	orderly_poweroff(true);
++	return IRQ_HANDLED;
++}
++
++/*------------------------------------------------------------------------------
++ *  FUNCTION: mic_setup_isr
++ *
++ *  DESCRIPTION: This function registers an interrupts for regular host
++ *  interrupts and host shutdown interrupt.
++ *  Host requests an orderly uOS shutdown by writing to SBOX APICICR1.
++*------------------------------------------------------------------------------*/
++static int __init mic_setup_isr(void)
++{
++	int ret;
++	arch_setup_sbox_irqs(sbox_irqs, ARRAY_SIZE(sbox_irqs));
++	ret = request_irq(sbox_irqs[1], mic_shutdown_isr, 0, "Shutdown", NULL);
++	if (ret) {
++		printk("ret value=%d, irq=%d\n", ret, sbox_irqs[1]);
++		BUG_ON(1);
++	}
++	printk("irq for shutdown isr %d\n", sbox_irqs[1]);
++	return 0;
++}
++late_initcall(mic_setup_isr);
++
++int get_sbox_irq(int index)
++{
++	BUG_ON(index >= ARRAY_SIZE(sbox_irqs));
++	return sbox_irqs[index];
++}
++EXPORT_SYMBOL(get_sbox_irq);
++
++/*
++ * Intel MIC specific x86_init function overrides and early setup
++ * calls.
++ */
++void __init x86_mic_early_setup(void)
++{
++	x86_init.resources.probe_roms = x86_init_noop;
++	x86_init.resources.reserve_resources = x86_init_noop;
++
++#ifdef CONFIG_MK1OM
++	x86_init.timers.timer_init = mic_timer_init_common;
++#else
++	x86_init.timers.timer_init = x86_init_noop;
++#endif	
++	x86_init.irqs.pre_vector_init = x86_init_noop;
++
++	x86_platform.calibrate_tsc = intel_mic_calibrate_tsc;
++	/* 4.8+: tsc_init() also runs calibrate_cpu(); the PIT/PM-timer default hangs here. */
++	x86_platform.calibrate_cpu = intel_mic_calibrate_tsc;
++	x86_platform.get_wallclock = intel_mic_get_wallclock;
++	x86_platform.set_wallclock = intel_mic_set_wallclock;
++
++	machine_ops.shutdown  = _mic_shutdown;
++#ifdef CONFIG_KEXEC
++	machine_ops.crash_shutdown = _mic_crash_shutdown;
++#endif
++	legacy_pic = &null_legacy_pic;
++	mic_sbox_mmio_va = NULL;
++	/* no_sync_cmos_clock removed in v3.4; KNC set_wallclock (intel_mic_set_wallclock) is a safe no-op */
++}
++
++static inline void assign_to_mp_irq(struct mpc_intsrc *m,
++				    struct mpc_intsrc *mp_irq)
++{
++	memcpy(mp_irq, m, sizeof(struct mpc_intsrc));
++}
++
++static inline int mp_irq_cmp(struct mpc_intsrc *mp_irq,
++				struct mpc_intsrc *m)
++{
++	return memcmp(mp_irq, m, sizeof(struct mpc_intsrc));
++}
++
++static inline void __init MP_intsrc_info(struct mpc_intsrc *m)
++{
++	int i;
++
++	for (i = 0; i < mp_irq_entries; i++) {
++		if (!mp_irq_cmp(&mp_irqs[i], m))
++			return;
++	}
++	assign_to_mp_irq(m, &mp_irqs[mp_irq_entries]);
++	if (++mp_irq_entries == MAX_IRQ_SOURCES)
++		panic("Max # of irq sources exceeded!!\n");
++}
++
++void  __init mic_construct_default_ioirq_mptable(int mpc_default_type)
++{
++	struct mpc_intsrc intsrc;
++	int i;
++
++	/*
++	 * 0	DMA Completion Interrupt for Channel 0 NOT USED
++	 * 1	DMA Completion Interrupt for Channel 1 NOT USED
++	 * 2	DMA Completion Interrupt for Channel 2 NOT USED
++	 * 3	DMA Completion Interrupt for Channel 3 NOT USED
++	 * 4	DMA Completion Interrupt for Channel 4
++	 * 5	DMA Completion Interrupt for Channel 5
++	 * 6	DMA Completion Interrupt for Channel 6
++	 * 7	DMA Completion Interrupt for Channel 7
++	 * 8	Display Rendering Related Interrupt A (RRA) NOT USED
++	 * 9	Display Rendering Related Interrupt B (RRB) NOT USED
++	 * 10	Display Non-Rendering Related Interrupt (NRR) NOT USED
++	 * 11	Unused NOT USED
++	 * 12	PMU Interrupt
++	 * 13	Thermal Interrupt
++	 * 14	SPI Interrupt NOT USED
++	 * 15	Sbox Global APIC Error Interrupt
++	 * 16	Machine Check Architecture (MCA) Interrupt
++	 * 17	Remote DMA Completion Interrupt for Channel 0
++	 * 18	Remote DMA Completion Interrupt for Channel 1
++	 * 19	Remote DMA Completion Interrupt for Channel 2
++	 * 20	Remote DMA Completion Interrupt for Channel 3
++	 * 21	Remote DMA Completion Interrupt for Channel 4
++	 * 22	Remote DMA Completion Interrupt for Channel 5
++	 * 23	Remote DMA Completion Interrupt for Channel 6
++	 * 24	Remote DMA Completion Interrupt for Channel 7
++	 * 25	PSMI Interrupt NOT USED
++	 */
++
++	intsrc.type = MP_INTSRC;
++	intsrc.srcbus = 0;
++	intsrc.dstapic = MP_APIC_ALL;
++	intsrc.irqtype = mp_INT;
++
++	/* SBOX interrupts are all edge trigged */
++	intsrc.irqflag = 5;
++	for (i = 4; i < 8; i++){
++		intsrc.srcbusirq = i;
++		intsrc.dstirq = i;
++		MP_intsrc_info(&intsrc);
++	}
++
++	intsrc.irqflag = 5;
++	for (i = 12; i < 14; i++) {
++		intsrc.srcbusirq = i;
++		intsrc.dstirq = i;
++		MP_intsrc_info(&intsrc);
++	}
++
++	intsrc.irqflag = 13;
++	for (i = 15; i < 16; i++) {
++		intsrc.srcbusirq = i;
++		intsrc.dstirq = i;
++		MP_intsrc_info(&intsrc);
++	}
++
++	intsrc.irqflag = 5;
++	for (i = 16; i < 25; i++) {
++		intsrc.srcbusirq = i;
++		intsrc.dstirq = i;
++		MP_intsrc_info(&intsrc);
++	}
++}
++
++void save_APICICR_setup(uint64_t *apicicr)
++{
++	int i;
++	for (i = 0; i < 8; i++) {
++		apicicr[i] = readl(mic_sbox_mmio_va + SBOX_APICICR0 + i * 8 + 4);
++		apicicr[i] <<= 32;
++		apicicr[i] |= readl(mic_sbox_mmio_va + SBOX_APICICR0 + i * 8);
++	}
++}
++
++void restore_APICICR_setup(uint64_t *apicicr)
++{
++	int i;
++	for (i = 0; i < 8; i++) {
++		writel(apicicr[i], mic_sbox_mmio_va + SBOX_APICICR0 + i * 8);
++		writel((apicicr[i] >> 32), mic_sbox_mmio_va + SBOX_APICICR0 + i * 8 + 4);
++	}
++}
+diff --git a/arch/x86/kernel/mic_etc.c b/arch/x86/kernel/mic_etc.c
+new file mode 100644
+index 000000000000..7ce470b43068
+--- /dev/null
++++ b/arch/x86/kernel/mic_etc.c
+@@ -0,0 +1,155 @@
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++/*
++ * mic_etc.c: Clocksource rotuines for the MIC SBox Elapsed Time Counter
++ *
++ * (C) Copyright 2009 Intel Corporation
++  *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; version 2
++ * of the License.
++ *
++ * 
++  */
++
++#include <linux/clocksource.h>
++#include <linux/clockchips.h>
++#include <linux/delay.h>
++#include <linux/errno.h>
++#include <linux/init.h>
++#include <linux/slab.h>
++#include <linux/cpu.h>
++
++#include <asm/mic_def.h>
++
++extern void __iomem  *mic_sbox_mmio_va;
++static unsigned long etc_readl(void);
++
++
++#define MIC_ETC_MASK			CLOCKSOURCE_MASK(64)
++#define MIC_ETC_CLOCKSOURCE_RATING	250
++
++/*
++ * intel chipset (ioh) specification mentions
++ * a PCIe SSC downspread of 0.5% at 30-33khz, since this is a triangular
++ * wave, the effective downspread is 0.25% of ETC_TICKRATE, this value
++ * is used as a max until we know better
++ */
++#define MAX_ETC_COMP		(ETC_TICK_RATE / 4 / 100)
++
++#define	MIC_READ_MMIO_REG(var,offset)	\
++              var.value = readl((const volatile void __iomem *)((unsigned long)(mic_sbox_mmio_va) +  (offset)));
++ 		
++#define	MIC_WRITE_MMIO_REG(var,offset) \
++	writel(var.value,(volatile void __iomem *)((unsigned long)(mic_sbox_mmio_va) +  (offset))); 	 
++
++												
++u64 mic_etc_read(struct clocksource *cs);
++EXPORT_SYMBOL_GPL(mic_etc_read);
++
++/*
++ * Compensation applied to ETC since it may not tick @ ETC_TICK_RATE due to
++ * PCIe SSC, this value is calculated by the host driver
++ */
++int etc_comp;
++static int __init set_etc_comp(char *str)
++{
++	etc_comp = simple_strtol(str, NULL, 10);
++	etc_comp = min(MAX_ETC_COMP, etc_comp);
++	etc_comp = max(-MAX_ETC_COMP, etc_comp);
++	return 1;
++}
++
++__setup("etc_comp=", set_etc_comp);
++
++struct clocksource clocksource_micetc = {
++	.name		= "micetc",
++	.rating		= MIC_ETC_CLOCKSOURCE_RATING,
++	.read		= mic_etc_read,
++	.mask		= MIC_ETC_MASK,
++	.flags		= CLOCK_SOURCE_IS_CONTINUOUS,
++};
++
++static unsigned long etc_readl(void)
++{
++	sboxElapsedTimeLowReg 	low1Reg,low2Reg;
++	sboxElapsedTimeHighReg	hi1Reg,hi2Reg;
++		
++	do {
++		MIC_READ_MMIO_REG(hi1Reg,SBOX_ELAPSED_TIME_HIGH);
++		MIC_READ_MMIO_REG(low1Reg,SBOX_ELAPSED_TIME_LOW);
++		MIC_READ_MMIO_REG(hi2Reg,SBOX_ELAPSED_TIME_HIGH);
++	}while(hi1Reg.value != hi2Reg.value);	 	
++	return((unsigned long)(((unsigned long)hi1Reg.value << 32)  | low1Reg.value));
++}
++/*
++ *    mic_etc_read	- Read a 64-bit count from ETC which is made up of
++ *    two 32 bit counts.		  
++ */
++u64 mic_etc_read(struct clocksource *cs)
++{
++
++	return((u64)etc_readl() >> 5);
++}
++
++/*
++ *  Initialize MIC SBOX Elasped Time Counter	 
++ */
++static void mic_etc_init( u32 __iomem  *mmio_va)
++{
++	sboxThermalStatusInterruptReg	treg;
++	unsigned long i=0;
++	/* Reset ETC freeze bit  */
++	treg.value = 0;
++		
++	MIC_WRITE_MMIO_REG(treg,SBOX_THERMAL_STATUS_INTERRUPT);		
++	do {
++		MIC_READ_MMIO_REG(treg,SBOX_THERMAL_STATUS_INTERRUPT);
++	} while(treg.bits.etc_freeze && (i++ < 10));
++	
++	if(i >= 10) {
++		printk(KERN_INFO"Failed to clear ETC freeze bit");
++		return;
++	}	 
++			
++	clocksource_register_hz(&clocksource_micetc, ETC_TICK_RATE + etc_comp);
++	printk(KERN_INFO"Registering ETC as clocksource with mult = %u\n" ,clocksource_micetc.mult);
++	printk(KERN_INFO"Registering ETC as clocksource with shift = %u\n" ,clocksource_micetc.shift);
++	return;
++}
++
++void  __init mic_timer_init(void)
++{
++	if(!mic_sbox_mmio_va) {
++		printk(KERN_INFO"Mapping MIC mmio in mic_timer_init");
++		mic_sbox_mmio_va = ioremap(SBOX_BASE, MIC_SBOX_MMIO_SIZE);
++		if(!mic_sbox_mmio_va) {
++			printk(KERN_ERR"Failed to map SBOX MMIO space into kernel");
++			return ;
++		}	
++	}
++	mic_etc_init(mic_sbox_mmio_va);
++}
++
+diff --git a/arch/x86/kernel/mic_v30_stubs.c b/arch/x86/kernel/mic_v30_stubs.c
+new file mode 100644
+index 000000000000..3b6fce9647a3
+--- /dev/null
++++ b/arch/x86/kernel/mic_v30_stubs.c
+@@ -0,0 +1,13 @@
++/*
++ * k1om forward-port to 3.0: config-dependent MIC symbol.
++ * arch_setup_sbox_irqs() is now fully implemented in apic/io_apic.c.
++ */
++#include <linux/kernel.h>
++#include <linux/module.h>
++
++#ifndef CONFIG_MIC_PM
++/* Normally provided by drivers/micpm/mic_pm.c (=1). With micpm disabled the MIC
++ * elapsed-time-counter clocksource is off and the kernel uses TSC. */
++int mic_etc_enabled;
++EXPORT_SYMBOL(mic_etc_enabled);
++#endif
+diff --git a/arch/x86/kernel/setup.c b/arch/x86/kernel/setup.c
+index 1b2edd07a3e1..0c38e93b52b0 100644
+--- a/arch/x86/kernel/setup.c
++++ b/arch/x86/kernel/setup.c
+@@ -21,6 +21,7 @@
+ #include <linux/pci.h>
+ #include <linux/random.h>
+ #include <linux/root_dev.h>
++#include <linux/sfi.h>
+ #include <linux/static_call.h>
+ #include <linux/swiotlb.h>
+ #include <linux/tboot.h>
+@@ -1230,6 +1231,7 @@ void __init setup_arch(char **cmdline_p)
+ 	 * specific parser.
+ 	 */
+ 	acpi_boot_init();
++	sfi_init();
+ 	x86_init.mpparse.parse_smp_cfg();
+ 
+ 	/* Last opportunity to detect and map the local APIC */
+diff --git a/arch/x86/kernel/smpboot.c b/arch/x86/kernel/smpboot.c
+index a1b64db0edfd..672fc8d8d038 100644
+--- a/arch/x86/kernel/smpboot.c
++++ b/arch/x86/kernel/smpboot.c
+@@ -1014,6 +1014,10 @@ void __init smp_prepare_cpus_common(void)
+ 			per_cpu(cpu_info.cpu_index, cpu) = nr_cpu_ids;
+ 	}
+ 
++#ifdef CONFIG_X86_EARLYMIC
++	disable_icache_snoop();		/* we are the BSP */
++	mic_smpt_init();		/* MIC system memory page tables (host access) */
++#endif
+ 	for_each_possible_cpu(cpu) {
+ 		node = cpu_to_node(cpu);
+ 
+diff --git a/arch/x86/platform/Makefile b/arch/x86/platform/Makefile
+index 3ed03a2552d0..b2f90a1a89f1 100644
+--- a/arch/x86/platform/Makefile
++++ b/arch/x86/platform/Makefile
+@@ -10,5 +10,6 @@ obj-y	+= intel-mid/
+ obj-y	+= intel-quark/
+ obj-y	+= olpc/
+ obj-y	+= scx200/
++obj-y	+= sfi/
+ obj-y	+= ts5500/
+ obj-y	+= uv/
+diff --git a/arch/x86/platform/sfi/Makefile b/arch/x86/platform/sfi/Makefile
+new file mode 100644
+index 000000000000..4eba24c2af67
+--- /dev/null
++++ b/arch/x86/platform/sfi/Makefile
+@@ -0,0 +1,2 @@
++# SPDX-License-Identifier: GPL-2.0-only
++obj-$(CONFIG_SFI)		+= sfi.o
+diff --git a/arch/x86/platform/sfi/sfi.c b/arch/x86/platform/sfi/sfi.c
+new file mode 100644
+index 000000000000..a8fe4060f448
+--- /dev/null
++++ b/arch/x86/platform/sfi/sfi.c
+@@ -0,0 +1,130 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++/*
++ * sfi.c - x86 architecture SFI support.
++ *
++ * Copyright (c) 2009, Intel Corporation.
++ */
++
++#define KMSG_COMPONENT "SFI"
++#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
++
++#include <linux/acpi.h>
++#include <linux/init.h>
++#include <linux/sfi.h>
++#include <linux/io.h>
++
++#include <asm/irqdomain.h>
++#include <asm/io_apic.h>
++#include <asm/mpspec.h>
++#include <asm/setup.h>
++#include <asm/apic.h>
++#ifdef CONFIG_X86_EARLYMIC
++#include <asm/mic_def.h>
++#endif
++
++#ifdef CONFIG_X86_LOCAL_APIC
++static unsigned long sfi_lapic_addr __initdata = APIC_DEFAULT_PHYS_BASE;
++
++/* All CPUs enumerated by SFI must be present and enabled */
++static void __init mp_sfi_register_lapic(u8 id)
++{
++	if (MAX_LOCAL_APIC - id <= 0) {
++		pr_warn("Processor #%d invalid (max %d)\n", id, MAX_LOCAL_APIC);
++		return;
++	}
++
++	pr_info("registering lapic[%d]\n", id);
++
++	topology_register_apic(id, id, true);	/* 6.9: generic_processor_info() is gone */
++}
++
++static int __init sfi_parse_cpus(struct sfi_table_header *table)
++{
++	struct sfi_table_simple *sb;
++	struct sfi_cpu_table_entry *pentry;
++	int i;
++	int cpu_num;
++
++	sb = (struct sfi_table_simple *)table;
++	cpu_num = SFI_GET_NUM_ENTRIES(sb, struct sfi_cpu_table_entry);
++	pentry = (struct sfi_cpu_table_entry *)sb->pentry;
++
++	for (i = 0; i < cpu_num; i++) {
++		mp_sfi_register_lapic(pentry->apic_id);
++		pentry++;
++	}
++
++	smp_found_config = 1;
++	return 0;
++}
++#endif /* CONFIG_X86_LOCAL_APIC */
++
++#ifdef CONFIG_X86_IO_APIC
++
++static int __init sfi_parse_ioapic(struct sfi_table_header *table)
++{
++	struct sfi_table_simple *sb;
++	struct sfi_apic_table_entry *pentry;
++	int i, num;
++	struct ioapic_domain_cfg cfg = {
++		.type = IOAPIC_DOMAIN_STRICT,
++		.ops = &mp_ioapic_irqdomain_ops,
++	};
++
++	sb = (struct sfi_table_simple *)table;
++	num = SFI_GET_NUM_ENTRIES(sb, struct sfi_apic_table_entry);
++	pentry = (struct sfi_apic_table_entry *)sb->pentry;
++
++	for (i = 0; i < num; i++) {
++		mp_register_ioapic(i, pentry->phys_addr, gsi_top, &cfg);
++		pentry++;
++	}
++#ifdef CONFIG_X86_EARLYMIC
++	/* 4.15+: setup_IO_APIC() runs from late_time_init, before smp_prepare_cpus */
++	mic_construct_default_ioirq_mptable(0);
++#endif
++
++	WARN(pic_mode, KERN_WARNING
++		"SFI: pic_mod shouldn't be 1 when IOAPIC table is present\n");
++	pic_mode = 0;
++	return 0;
++}
++#endif /* CONFIG_X86_IO_APIC */
++
++/*
++ * sfi_platform_init(): register lapics & io-apics
++ */
++int __init sfi_platform_init(void)
++{
++#ifdef CONFIG_X86_LOCAL_APIC
++	register_lapic_address(sfi_lapic_addr);
++	sfi_table_parse(SFI_SIG_CPUS, NULL, NULL, sfi_parse_cpus);
++#endif
++#ifdef CONFIG_X86_IO_APIC
++	sfi_table_parse(SFI_SIG_APIC, NULL, NULL, sfi_parse_ioapic);
++#endif
++	return 0;
++}
+diff --git a/drivers/Makefile b/drivers/Makefile
+index 8e1ffa4358d5..2f8d5ffda717 100644
+--- a/drivers/Makefile
++++ b/drivers/Makefile
+@@ -31,7 +31,7 @@ obj-y				+= idle/
+ obj-y				+= char/ipmi/
+ 
+ obj-$(CONFIG_ACPI)		+= acpi/
+-
++obj-$(CONFIG_SFI)		+= sfi/
+ # PnP must come after ACPI since it will eventually need to check if acpi
+ # was used and do nothing if so
+ obj-$(CONFIG_PNP)		+= pnp/
+diff --git a/drivers/sfi/Kconfig b/drivers/sfi/Kconfig
+new file mode 100644
+index 000000000000..3d0b64db214e
+--- /dev/null
++++ b/drivers/sfi/Kconfig
+@@ -0,0 +1,18 @@
++# SPDX-License-Identifier: GPL-2.0-only
++#
++# SFI Configuration
++#
++
++menuconfig SFI
++	bool "SFI (Simple Firmware Interface) Support"
++	help
++	The Simple Firmware Interface (SFI) provides a lightweight method
++	for platform firmware to pass information to the operating system
++	via static tables in memory.  Kernel SFI support is required to
++	boot on SFI-only platforms.  Currently, all SFI-only platforms are
++	based on the 2nd generation Intel Atom processor platform,
++	code-named Moorestown.
++
++	For more information, see http://simplefirmware.org
++
++	Say 'Y' here to enable the kernel to boot on SFI-only platforms.
+diff --git a/drivers/sfi/Makefile b/drivers/sfi/Makefile
+new file mode 100644
+index 000000000000..ca9436b12386
+--- /dev/null
++++ b/drivers/sfi/Makefile
+@@ -0,0 +1,4 @@
++# SPDX-License-Identifier: GPL-2.0-only
++obj-y	+= sfi_acpi.o
++obj-y	+= sfi_core.o
++
+diff --git a/drivers/sfi/sfi_acpi.c b/drivers/sfi/sfi_acpi.c
+new file mode 100644
+index 000000000000..5a0c73126570
+--- /dev/null
++++ b/drivers/sfi/sfi_acpi.c
+@@ -0,0 +1,214 @@
++/* sfi_acpi.c Simple Firmware Interface - ACPI extensions */
++
++/*
++
++  This file is provided under a dual BSD/GPLv2 license.  When using or
++  redistributing this file, you may do so under either license.
++
++  GPL LICENSE SUMMARY
++
++  Copyright(c) 2009 Intel Corporation. All rights reserved.
++
++  This program is free software; you can redistribute it and/or modify
++  it under the terms of version 2 of the GNU General Public License as
++  published by the Free Software Foundation.
++
++  This program is distributed in the hope that it will be useful, but
++  WITHOUT ANY WARRANTY; without even the implied warranty of
++  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++  General Public License for more details.
++
++  You should have received a copy of the GNU General Public License
++  along with this program; if not, write to the Free Software
++  Foundation, Inc., 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
++  The full GNU General Public License is included in this distribution
++  in the file called LICENSE.GPL.
++
++  BSD LICENSE
++
++  Copyright(c) 2009 Intel Corporation. All rights reserved.
++
++  Redistribution and use in source and binary forms, with or without
++  modification, are permitted provided that the following conditions
++  are met:
++
++    * Redistributions of source code must retain the above copyright
++      notice, this list of conditions and the following disclaimer.
++    * Redistributions in binary form must reproduce the above copyright
++      notice, this list of conditions and the following disclaimer in
++      the documentation and/or other materials provided with the
++      distribution.
++    * Neither the name of Intel Corporation nor the names of its
++      contributors may be used to endorse or promote products derived
++      from this software without specific prior written permission.
++
++  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++  OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++*/
++
++#define KMSG_COMPONENT "SFI"
++#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
++
++#include <linux/kernel.h>
++#include <linux/sfi_acpi.h>
++#include "sfi_core.h"
++
++/*
++ * SFI can access ACPI-defined tables via an optional ACPI XSDT.
++ *
++ * This allows re-use, and avoids re-definition, of standard tables.
++ * For example, the "MCFG" table is defined by PCI, reserved by ACPI,
++ * and is expected to be present many SFI-only systems.
++ */
++
++static struct acpi_table_xsdt *xsdt_va __read_mostly;
++
++#define XSDT_GET_NUM_ENTRIES(ptable, entry_type) \
++	((ptable->header.length - sizeof(struct acpi_table_header)) / \
++	(sizeof(entry_type)))
++
++static inline struct sfi_table_header *acpi_to_sfi_th(
++				struct acpi_table_header *th)
++{
++	return (struct sfi_table_header *)th;
++}
++
++static inline struct acpi_table_header *sfi_to_acpi_th(
++				struct sfi_table_header *th)
++{
++	return (struct acpi_table_header *)th;
++}
++
++/*
++ * sfi_acpi_parse_xsdt()
++ *
++ * Parse the ACPI XSDT for later access by sfi_acpi_table_parse().
++ */
++static int __init sfi_acpi_parse_xsdt(struct sfi_table_header *th)
++{
++	struct sfi_table_key key = SFI_ANY_KEY;
++	int tbl_cnt, i;
++	void *ret;
++
++	xsdt_va = (struct acpi_table_xsdt *)th;
++	tbl_cnt = XSDT_GET_NUM_ENTRIES(xsdt_va, u64);
++	for (i = 0; i < tbl_cnt; i++) {
++		ret = sfi_check_table(xsdt_va->table_offset_entry[i], &key);
++		if (IS_ERR(ret)) {
++			disable_sfi();
++			return -1;
++		}
++	}
++
++	return 0;
++}
++
++int __init sfi_acpi_init(void)
++{
++	struct sfi_table_key xsdt_key = { .sig = SFI_SIG_XSDT };
++
++	sfi_table_parse(SFI_SIG_XSDT, NULL, NULL, sfi_acpi_parse_xsdt);
++
++	/* Only call the get_table to keep the table mapped */
++	xsdt_va = (struct acpi_table_xsdt *)sfi_get_table(&xsdt_key);
++	return 0;
++}
++
++static struct acpi_table_header *sfi_acpi_get_table(struct sfi_table_key *key)
++{
++	u32 tbl_cnt, i;
++	void *ret;
++
++	tbl_cnt = XSDT_GET_NUM_ENTRIES(xsdt_va, u64);
++	for (i = 0; i < tbl_cnt; i++) {
++		ret = sfi_check_table(xsdt_va->table_offset_entry[i], key);
++		if (!IS_ERR(ret) && ret)
++			return sfi_to_acpi_th(ret);
++	}
++
++	return NULL;
++}
++
++static void sfi_acpi_put_table(struct acpi_table_header *table)
++{
++	sfi_put_table(acpi_to_sfi_th(table));
++}
++
++/*
++ * sfi_acpi_table_parse()
++ *
++ * Find specified table in XSDT, run handler on it and return its return value
++ */
++int sfi_acpi_table_parse(char *signature, char *oem_id, char *oem_table_id,
++			int(*handler)(struct acpi_table_header *))
++{
++	struct acpi_table_header *table = NULL;
++	struct sfi_table_key key;
++	int ret = 0;
++
++	if (sfi_disabled)
++		return -1;
++
++	key.sig = signature;
++	key.oem_id = oem_id;
++	key.oem_table_id = oem_table_id;
++
++	table = sfi_acpi_get_table(&key);
++	if (!table)
++		return -EINVAL;
++
++	ret = handler(table);
++	sfi_acpi_put_table(table);
++	return ret;
++}
++
++static ssize_t sfi_acpi_table_show(struct file *filp, struct kobject *kobj,
++			       const struct bin_attribute *bin_attr, char *buf,
++			       loff_t offset, size_t count)
++{
++	struct sfi_table_attr *tbl_attr =
++	    container_of(bin_attr, struct sfi_table_attr, attr);
++	struct acpi_table_header *th = NULL;
++	struct sfi_table_key key;
++	ssize_t cnt;
++
++	key.sig = tbl_attr->name;
++	key.oem_id = NULL;
++	key.oem_table_id = NULL;
++
++	th = sfi_acpi_get_table(&key);
++	if (!th)
++		return 0;
++
++	cnt =  memory_read_from_buffer(buf, count, &offset,
++					th, th->length);
++	sfi_acpi_put_table(th);
++
++	return cnt;
++}
++
++
++void __init sfi_acpi_sysfs_init(void)
++{
++	u32 tbl_cnt, i;
++	struct sfi_table_attr *tbl_attr;
++
++	tbl_cnt = XSDT_GET_NUM_ENTRIES(xsdt_va, u64);
++	for (i = 0; i < tbl_cnt; i++) {
++		tbl_attr =
++			sfi_sysfs_install_table(xsdt_va->table_offset_entry[i]);
++		tbl_attr->attr.read = sfi_acpi_table_show;
++	}
++
++	return;
++}
+diff --git a/drivers/sfi/sfi_core.c b/drivers/sfi/sfi_core.c
+new file mode 100644
+index 000000000000..26003d800a7c
+--- /dev/null
++++ b/drivers/sfi/sfi_core.c
+@@ -0,0 +1,539 @@
++/* sfi_core.c Simple Firmware Interface - core internals */
++
++/*
++
++  This file is provided under a dual BSD/GPLv2 license.  When using or
++  redistributing this file, you may do so under either license.
++
++  GPL LICENSE SUMMARY
++
++  Copyright(c) 2009 Intel Corporation. All rights reserved.
++
++  This program is free software; you can redistribute it and/or modify
++  it under the terms of version 2 of the GNU General Public License as
++  published by the Free Software Foundation.
++
++  This program is distributed in the hope that it will be useful, but
++  WITHOUT ANY WARRANTY; without even the implied warranty of
++  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++  General Public License for more details.
++
++  You should have received a copy of the GNU General Public License
++  along with this program; if not, write to the Free Software
++  Foundation, Inc., 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
++  The full GNU General Public License is included in this distribution
++  in the file called LICENSE.GPL.
++
++  BSD LICENSE
++
++  Copyright(c) 2009 Intel Corporation. All rights reserved.
++
++  Redistribution and use in source and binary forms, with or without
++  modification, are permitted provided that the following conditions
++  are met:
++
++    * Redistributions of source code must retain the above copyright
++      notice, this list of conditions and the following disclaimer.
++    * Redistributions in binary form must reproduce the above copyright
++      notice, this list of conditions and the following disclaimer in
++      the documentation and/or other materials provided with the
++      distribution.
++    * Neither the name of Intel Corporation nor the names of its
++      contributors may be used to endorse or promote products derived
++      from this software without specific prior written permission.
++
++  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++  OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++*/
++
++#define KMSG_COMPONENT "SFI"
++#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
++
++#include <linux/memblock.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/errno.h>
++#include <linux/types.h>
++#include <linux/acpi.h>
++#include <linux/init.h>
++#include <linux/sfi.h>
++#include <linux/slab.h>
++#include <linux/io.h>
++#include <linux/memblock.h>
++#include <asm/pgalloc.h>
++
++#include "sfi_core.h"
++
++#define ON_SAME_PAGE(addr1, addr2) \
++	(((unsigned long)(addr1) & PAGE_MASK) == \
++	((unsigned long)(addr2) & PAGE_MASK))
++#define TABLE_ON_PAGE(page, table, size) (ON_SAME_PAGE(page, table) && \
++				ON_SAME_PAGE(page, table + size))
++
++int sfi_disabled __read_mostly;
++EXPORT_SYMBOL(sfi_disabled);
++
++static u64 syst_pa __read_mostly;
++static struct sfi_table_simple *syst_va __read_mostly;
++
++/*
++ * FW creates and saves the SFI tables in memory. When these tables get
++ * used, they may need to be mapped to virtual address space, and the mapping
++ * can happen before or after the memremap() is ready, so a flag is needed
++ * to indicating this
++ */
++static u32 sfi_use_memremap __read_mostly;
++
++/*
++ * sfi_un/map_memory calls early_memremap/memunmap which is a __init function
++ * and introduces section mismatch. So use __ref to make it calm.
++ */
++static void __iomem * __ref sfi_map_memory(u64 phys, u32 size)
++{
++	pr_emerg("Entering sfi_map_memory, phys = %llx, size = %d\n", phys, size);
++
++	if (!phys || !size)
++		return NULL;
++
++	if (sfi_use_memremap)
++		return memremap(phys, size, MEMREMAP_WB);
++	else
++		return early_memremap(phys, size);
++}
++
++static void __ref sfi_unmap_memory(void __iomem *virt, u32 size)
++{
++	if (!virt || !size)
++		return;
++
++	if (sfi_use_memremap)
++		memunmap(virt);
++	else
++		early_memunmap(virt, size);
++}
++
++static void sfi_print_table_header(unsigned long long pa,
++				struct sfi_table_header *header)
++{
++	pr_info("%4.4s %llX, %04X (v%d %6.6s %8.8s)\n",
++		header->sig, pa,
++		header->len, header->rev, header->oem_id,
++		header->oem_table_id);
++}
++
++/*
++ * sfi_verify_table()
++ * Sanity check table lengh, calculate checksum
++ */
++static int sfi_verify_table(struct sfi_table_header *table)
++{
++
++	u8 checksum = 0;
++	u8 *puchar = (u8 *)table;
++	u32 length = table->len;
++
++	/* Sanity check table length against arbitrary 1MB limit */
++	if (length > 0x100000) {
++		pr_err("Invalid table length 0x%x\n", length);
++		return -1;
++	}
++
++	while (length--)
++		checksum += *puchar++;
++
++	if (checksum) {
++		pr_err("Checksum %2.2X should be %2.2X\n",
++			table->csum, table->csum - checksum);
++		return -1;
++	}
++	return 0;
++}
++
++/*
++ * sfi_map_table()
++ *
++ * Return address of mapped table
++ * Check for common case that we can re-use mapping to SYST,
++ * which requires syst_pa, syst_va to be initialized.
++ */
++static struct sfi_table_header *sfi_map_table(u64 pa)
++{
++	struct sfi_table_header *th;
++	u32 length;
++
++	pr_emerg("Entering sfi_map_table, pa = %llx\n", pa);
++
++	if (!TABLE_ON_PAGE(syst_pa, pa, sizeof(struct sfi_table_header)))
++		th = sfi_map_memory(pa, sizeof(struct sfi_table_header));
++	else
++		th = (void *)syst_va + (pa - syst_pa);
++
++	pr_emerg("sfi_map_table, th = %llx\n", (u64)th);
++
++	 /* If table fits on same page as its header, we are done */
++	if (TABLE_ON_PAGE(th, th, th->len))
++		return th;
++
++	/* Entire table does not fit on same page as SYST */
++	length = th->len;
++	if (!TABLE_ON_PAGE(syst_pa, pa, sizeof(struct sfi_table_header)))
++		sfi_unmap_memory(th, sizeof(struct sfi_table_header));
++
++	return sfi_map_memory(pa, length);
++}
++
++/*
++ * sfi_unmap_table()
++ *
++ * Undoes effect of sfi_map_table() by unmapping table
++ * if it did not completely fit on same page as SYST.
++ */
++static void sfi_unmap_table(struct sfi_table_header *th)
++{
++	if (!TABLE_ON_PAGE(syst_va, th, th->len))
++		sfi_unmap_memory(th, TABLE_ON_PAGE(th, th, th->len) ?
++					sizeof(*th) : th->len);
++}
++
++static int sfi_table_check_key(struct sfi_table_header *th,
++				struct sfi_table_key *key)
++{
++
++	if (strncmp(th->sig, key->sig, SFI_SIGNATURE_SIZE)
++		|| (key->oem_id && strncmp(th->oem_id,
++				key->oem_id, SFI_OEM_ID_SIZE))
++		|| (key->oem_table_id && strncmp(th->oem_table_id,
++				key->oem_table_id, SFI_OEM_TABLE_ID_SIZE)))
++		return -1;
++
++	return 0;
++}
++
++/*
++ * This function will be used in 2 cases:
++ * 1. used to enumerate and verify the tables addressed by SYST/XSDT,
++ *    thus no signature will be given (in kernel boot phase)
++ * 2. used to parse one specific table, signature must exist, and
++ *    the mapped virt address will be returned, and the virt space
++ *    will be released by call sfi_put_table() later
++ *
++ * This two cases are from two different functions with two different
++ * sections and causes section mismatch warning. So use __ref to tell
++ * modpost not to make any noise.
++ *
++ * Return value:
++ *	NULL:			when can't find a table matching the key
++ *	ERR_PTR(error):		error value
++ *	virt table address:	when a matched table is found
++ */
++struct sfi_table_header *
++ __ref sfi_check_table(u64 pa, struct sfi_table_key *key)
++{
++	struct sfi_table_header *th;
++	void *ret = NULL;
++
++	th = sfi_map_table(pa);
++	if (!th)
++		return ERR_PTR(-ENOMEM);
++
++	if (!key->sig) {
++		sfi_print_table_header(pa, th);
++		if (sfi_verify_table(th))
++			ret = ERR_PTR(-EINVAL);
++	} else {
++		if (!sfi_table_check_key(th, key))
++			return th;	/* Success */
++	}
++
++	sfi_unmap_table(th);
++	return ret;
++}
++
++/*
++ * sfi_get_table()
++ *
++ * Search SYST for the specified table with the signature in
++ * the key, and return the mapped table
++ */
++struct sfi_table_header *sfi_get_table(struct sfi_table_key *key)
++{
++	struct sfi_table_header *th;
++	u32 tbl_cnt, i;
++
++	tbl_cnt = SFI_GET_NUM_ENTRIES(syst_va, u64);
++	for (i = 0; i < tbl_cnt; i++) {
++		th = sfi_check_table(syst_va->pentry[i], key);
++		if (!IS_ERR(th) && th)
++			return th;
++	}
++
++	return NULL;
++}
++
++void sfi_put_table(struct sfi_table_header *th)
++{
++	sfi_unmap_table(th);
++}
++
++/* Find table with signature, run handler on it */
++int sfi_table_parse(char *signature, char *oem_id, char *oem_table_id,
++			sfi_table_handler handler)
++{
++	struct sfi_table_header *table = NULL;
++	struct sfi_table_key key;
++	int ret = -EINVAL;
++
++	if (sfi_disabled || !handler || !signature)
++		goto exit;
++
++	key.sig = signature;
++	key.oem_id = oem_id;
++	key.oem_table_id = oem_table_id;
++
++	table = sfi_get_table(&key);
++	if (!table)
++		goto exit;
++
++	ret = handler(table);
++	sfi_put_table(table);
++exit:
++	return ret;
++}
++EXPORT_SYMBOL_GPL(sfi_table_parse);
++
++/*
++ * sfi_parse_syst()
++ * Checksum all the tables in SYST and print their headers
++ *
++ * success: set syst_va, return 0
++ */
++static int __init sfi_parse_syst(void)
++{
++	struct sfi_table_key key = SFI_ANY_KEY;
++	int tbl_cnt, i;
++	void *ret;
++
++	syst_va = sfi_map_memory(syst_pa, sizeof(struct sfi_table_simple));
++	if (!syst_va)
++		return -ENOMEM;
++
++	tbl_cnt = SFI_GET_NUM_ENTRIES(syst_va, u64);
++	for (i = 0; i < tbl_cnt; i++) {
++		ret = sfi_check_table(syst_va->pentry[i], &key);
++		if (IS_ERR(ret))
++			return PTR_ERR(ret);
++	}
++
++	return 0;
++}
++
++/*
++ * The OS finds the System Table by searching 16-byte boundaries between
++ * physical address 0x000E0000 and 0x000FFFFF. The OS shall search this region
++ * starting at the low address and shall stop searching when the 1st valid SFI
++ * System Table is found.
++ *
++ * success: set syst_pa, return 0
++ * fail: return -1
++ */
++static __init int sfi_find_syst(void)
++{
++	unsigned long offset, len;
++	void *start;
++
++	len = SFI_SYST_SEARCH_END - SFI_SYST_SEARCH_BEGIN;
++	start = sfi_map_memory(SFI_SYST_SEARCH_BEGIN, len);
++	if (!start)
++		return -1;
++
++	for (offset = 0; offset < len; offset += 16) {
++		struct sfi_table_header *syst_hdr;
++
++		syst_hdr = start + offset;
++		if (strncmp(syst_hdr->sig, SFI_SIG_SYST,
++				SFI_SIGNATURE_SIZE))
++			continue;
++
++		if (syst_hdr->len > PAGE_SIZE)
++			continue;
++
++		sfi_print_table_header(SFI_SYST_SEARCH_BEGIN + offset,
++					syst_hdr);
++
++		if (sfi_verify_table(syst_hdr))
++			continue;
++
++		/*
++		 * Enforce SFI spec mandate that SYST reside within a page.
++		 */
++		if (!ON_SAME_PAGE(syst_pa, syst_pa + syst_hdr->len)) {
++			pr_info("SYST 0x%llx + 0x%x crosses page\n",
++					syst_pa, syst_hdr->len);
++			continue;
++		}
++
++		/* Success */
++		syst_pa = SFI_SYST_SEARCH_BEGIN + offset;
++		sfi_unmap_memory(start, len);
++		return 0;
++	}
++
++	sfi_unmap_memory(start, len);
++	return -1;
++}
++
++static struct kobject *sfi_kobj;
++static struct kobject *tables_kobj;
++
++static ssize_t sfi_table_show(struct file *filp, struct kobject *kobj,
++			       const struct bin_attribute *bin_attr, char *buf,
++			       loff_t offset, size_t count)
++{
++	struct sfi_table_attr *tbl_attr =
++	    container_of(bin_attr, struct sfi_table_attr, attr);
++	struct sfi_table_header *th = NULL;
++	struct sfi_table_key key;
++	ssize_t cnt;
++
++	key.sig = tbl_attr->name;
++	key.oem_id = NULL;
++	key.oem_table_id = NULL;
++
++	if (strncmp(SFI_SIG_SYST, tbl_attr->name, SFI_SIGNATURE_SIZE)) {
++		th = sfi_get_table(&key);
++		if (!th)
++			return 0;
++
++		cnt =  memory_read_from_buffer(buf, count, &offset,
++						th, th->len);
++		sfi_put_table(th);
++	} else
++		cnt =  memory_read_from_buffer(buf, count, &offset,
++					syst_va, syst_va->header.len);
++
++	return cnt;
++}
++
++struct sfi_table_attr __init *sfi_sysfs_install_table(u64 pa)
++{
++	struct sfi_table_attr *tbl_attr;
++	struct sfi_table_header *th;
++	int ret;
++
++	tbl_attr = kzalloc(sizeof(struct sfi_table_attr), GFP_KERNEL);
++	if (!tbl_attr)
++		return NULL;
++
++	th = sfi_map_table(pa);
++	if (!th || !th->sig[0]) {
++		kfree(tbl_attr);
++		return NULL;
++	}
++
++	sysfs_attr_init(&tbl_attr->attr.attr);
++	memcpy(tbl_attr->name, th->sig, SFI_SIGNATURE_SIZE);
++
++	tbl_attr->attr.size = 0;
++	tbl_attr->attr.read = sfi_table_show;
++	tbl_attr->attr.attr.name = tbl_attr->name;
++	tbl_attr->attr.attr.mode = 0400;
++
++	ret = sysfs_create_bin_file(tables_kobj,
++				  &tbl_attr->attr);
++	if (ret) {
++		kfree(tbl_attr);
++		tbl_attr = NULL;
++	}
++
++	sfi_unmap_table(th);
++	return tbl_attr;
++}
++
++static int __init sfi_sysfs_init(void)
++{
++	int tbl_cnt, i;
++
++	if (sfi_disabled)
++		return 0;
++
++	sfi_kobj = kobject_create_and_add("sfi", firmware_kobj);
++	if (!sfi_kobj)
++		return 0;
++
++	tables_kobj = kobject_create_and_add("tables", sfi_kobj);
++	if (!tables_kobj) {
++		kobject_put(sfi_kobj);
++		return 0;
++	}
++
++	sfi_sysfs_install_table(syst_pa);
++
++	tbl_cnt = SFI_GET_NUM_ENTRIES(syst_va, u64);
++
++	for (i = 0; i < tbl_cnt; i++)
++		sfi_sysfs_install_table(syst_va->pentry[i]);
++
++#ifndef CONFIG_X86_EARLYMIC
++	/* Fails without ACPI */
++	sfi_acpi_sysfs_init();
++#endif
++	kobject_uevent(sfi_kobj, KOBJ_ADD);
++	kobject_uevent(tables_kobj, KOBJ_ADD);
++	pr_info("SFI sysfs interfaces init success\n");
++	return 0;
++}
++
++void __init sfi_init(void)
++{
++	if (!acpi_disabled)
++		disable_sfi();
++
++	if (sfi_disabled)
++		return;
++
++	pr_info("Simple Firmware Interface v0.81 http://simplefirmware.org\n");
++
++	if (sfi_find_syst() || sfi_parse_syst() || sfi_platform_init())
++		disable_sfi();
++
++	return;
++}
++
++void __init sfi_init_late(void)
++{
++	int length;
++
++	if (sfi_disabled)
++		return;
++
++	length = syst_va->header.len;
++	sfi_unmap_memory(syst_va, sizeof(struct sfi_table_simple));
++
++	/* Use memremap now after it is ready */
++	sfi_use_memremap = 1;
++#ifdef CONFIG_X86_EARLYMIC
++	/* E820 does not mark page reserved */
++	memblock_reserve(0x92000, PAGE_SIZE);
++	/* needed for ioremap */
++	SetPageReserved(pfn_to_page(0x92));
++#endif
++	syst_va = sfi_map_memory(syst_pa, length);
++
++	sfi_acpi_init();
++}
++
++/*
++ * The reason we put it here because we need wait till the /sys/firmware
++ * is setup, then our interface can be registered in /sys/firmware/sfi
++ */
++core_initcall(sfi_sysfs_init);
+diff --git a/drivers/sfi/sfi_core.h b/drivers/sfi/sfi_core.h
+new file mode 100644
+index 000000000000..1d5cfe854cf7
+--- /dev/null
++++ b/drivers/sfi/sfi_core.h
+@@ -0,0 +1,81 @@
++/* sfi_core.h Simple Firmware Interface, internal header */
++
++/*
++
++  This file is provided under a dual BSD/GPLv2 license.  When using or
++  redistributing this file, you may do so under either license.
++
++  GPL LICENSE SUMMARY
++
++  Copyright(c) 2009 Intel Corporation. All rights reserved.
++
++  This program is free software; you can redistribute it and/or modify
++  it under the terms of version 2 of the GNU General Public License as
++  published by the Free Software Foundation.
++
++  This program is distributed in the hope that it will be useful, but
++  WITHOUT ANY WARRANTY; without even the implied warranty of
++  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++  General Public License for more details.
++
++  You should have received a copy of the GNU General Public License
++  along with this program; if not, write to the Free Software
++  Foundation, Inc., 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
++  The full GNU General Public License is included in this distribution
++  in the file called LICENSE.GPL.
++
++  BSD LICENSE
++
++  Copyright(c) 2009 Intel Corporation. All rights reserved.
++
++  Redistribution and use in source and binary forms, with or without
++  modification, are permitted provided that the following conditions
++  are met:
++
++    * Redistributions of source code must retain the above copyright
++      notice, this list of conditions and the following disclaimer.
++    * Redistributions in binary form must reproduce the above copyright
++      notice, this list of conditions and the following disclaimer in
++      the documentation and/or other materials provided with the
++      distribution.
++    * Neither the name of Intel Corporation nor the names of its
++      contributors may be used to endorse or promote products derived
++      from this software without specific prior written permission.
++
++  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++  OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++*/
++
++#include <linux/sysfs.h>
++
++struct sfi_table_key{
++	char	*sig;
++	char	*oem_id;
++	char	*oem_table_id;
++};
++
++/* sysfs interface */
++struct sfi_table_attr {
++	struct bin_attribute attr;
++	char name[8];
++};
++
++#define SFI_ANY_KEY { .sig = NULL, .oem_id = NULL, .oem_table_id = NULL }
++
++extern int __init sfi_acpi_init(void);
++extern  struct sfi_table_header *sfi_check_table(u64 paddr,
++					struct sfi_table_key *key);
++struct sfi_table_header *sfi_get_table(struct sfi_table_key *key);
++extern void sfi_put_table(struct sfi_table_header *table);
++extern struct sfi_table_attr __init *sfi_sysfs_install_table(u64 pa);
++extern void __init sfi_acpi_sysfs_init(void);
+diff --git a/include/linux/sfi.h b/include/linux/sfi.h
+new file mode 100644
+index 000000000000..e0e1597ef9e6
+--- /dev/null
++++ b/include/linux/sfi.h
+@@ -0,0 +1,210 @@
++/* sfi.h Simple Firmware Interface */
++
++/*
++
++  This file is provided under a dual BSD/GPLv2 license.  When using or
++  redistributing this file, you may do so under either license.
++
++  GPL LICENSE SUMMARY
++
++  Copyright(c) 2009 Intel Corporation. All rights reserved.
++
++  This program is free software; you can redistribute it and/or modify
++  it under the terms of version 2 of the GNU General Public License as
++  published by the Free Software Foundation.
++
++  This program is distributed in the hope that it will be useful, but
++  WITHOUT ANY WARRANTY; without even the implied warranty of
++  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++  General Public License for more details.
++
++  You should have received a copy of the GNU General Public License
++  along with this program; if not, write to the Free Software
++  Foundation, Inc., 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
++  The full GNU General Public License is included in this distribution
++  in the file called LICENSE.GPL.
++
++  BSD LICENSE
++
++  Copyright(c) 2009 Intel Corporation. All rights reserved.
++
++  Redistribution and use in source and binary forms, with or without
++  modification, are permitted provided that the following conditions
++  are met:
++
++    * Redistributions of source code must retain the above copyright
++      notice, this list of conditions and the following disclaimer.
++    * Redistributions in binary form must reproduce the above copyright
++      notice, this list of conditions and the following disclaimer in
++      the documentation and/or other materials provided with the
++      distribution.
++    * Neither the name of Intel Corporation nor the names of its
++      contributors may be used to endorse or promote products derived
++      from this software without specific prior written permission.
++
++  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++  OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++*/
++
++#ifndef _LINUX_SFI_H
++#define _LINUX_SFI_H
++
++#include <linux/init.h>
++#include <linux/types.h>
++
++/* Table signatures reserved by the SFI specification */
++#define SFI_SIG_SYST		"SYST"
++#define SFI_SIG_FREQ		"FREQ"
++#define SFI_SIG_IDLE		"IDLE"
++#define SFI_SIG_CPUS		"CPUS"
++#define SFI_SIG_MTMR		"MTMR"
++#define SFI_SIG_MRTC		"MRTC"
++#define SFI_SIG_MMAP		"MMAP"
++#define SFI_SIG_APIC		"APIC"
++#define SFI_SIG_XSDT		"XSDT"
++#define SFI_SIG_WAKE		"WAKE"
++#define SFI_SIG_DEVS		"DEVS"
++#define SFI_SIG_GPIO		"GPIO"
++
++#define SFI_SIGNATURE_SIZE	4
++#define SFI_OEM_ID_SIZE		6
++#define SFI_OEM_TABLE_ID_SIZE	8
++
++#define SFI_NAME_LEN		16
++
++#define SFI_SYST_SEARCH_BEGIN		0x000E0000
++#define SFI_SYST_SEARCH_END		0x000FFFFF
++
++#define SFI_GET_NUM_ENTRIES(ptable, entry_type) \
++	((ptable->header.len - sizeof(struct sfi_table_header)) / \
++	(sizeof(entry_type)))
++/*
++ * Table structures must be byte-packed to match the SFI specification,
++ * as they are provided by the BIOS.
++ */
++struct sfi_table_header {
++	char	sig[SFI_SIGNATURE_SIZE];
++	u32	len;
++	u8	rev;
++	u8	csum;
++	char	oem_id[SFI_OEM_ID_SIZE];
++	char	oem_table_id[SFI_OEM_TABLE_ID_SIZE];
++} __packed;
++
++struct sfi_table_simple {
++	struct sfi_table_header		header;
++	u64				pentry[1];
++} __packed;
++
++/* Comply with UEFI spec 2.1 */
++struct sfi_mem_entry {
++	u32	type;
++	u64	phys_start;
++	u64	virt_start;
++	u64	pages;
++	u64	attrib;
++} __packed;
++
++struct sfi_cpu_table_entry {
++	u32	apic_id;
++} __packed;
++
++struct sfi_cstate_table_entry {
++	u32	hint;		/* MWAIT hint */
++	u32	latency;	/* latency in ms */
++} __packed;
++
++struct sfi_apic_table_entry {
++	u64	phys_addr;	/* phy base addr for APIC reg */
++} __packed;
++
++struct sfi_freq_table_entry {
++	u32	freq_mhz;	/* in MHZ */
++	u32	latency;	/* transition latency in ms */
++	u32	ctrl_val;	/* value to write to PERF_CTL */
++} __packed;
++
++struct sfi_wake_table_entry {
++	u64	phys_addr;	/* pointer to where the wake vector locates */
++} __packed;
++
++struct sfi_timer_table_entry {
++	u64	phys_addr;	/* phy base addr for the timer */
++	u32	freq_hz;	/* in HZ */
++	u32	irq;
++} __packed;
++
++struct sfi_rtc_table_entry {
++	u64	phys_addr;	/* phy base addr for the RTC */
++	u32	irq;
++} __packed;
++
++struct sfi_device_table_entry {
++	u8	type;		/* bus type, I2C, SPI or ...*/
++#define SFI_DEV_TYPE_SPI	0
++#define SFI_DEV_TYPE_I2C	1
++#define SFI_DEV_TYPE_UART	2
++#define SFI_DEV_TYPE_HSI	3
++#define SFI_DEV_TYPE_IPC	4
++#define SFI_DEV_TYPE_SD		5
++
++	u8	host_num;	/* attached to host 0, 1...*/
++	u16	addr;
++	u8	irq;
++	u32	max_freq;
++	char	name[SFI_NAME_LEN];
++} __packed;
++
++struct sfi_gpio_table_entry {
++	char	controller_name[SFI_NAME_LEN];
++	u16	pin_no;
++	char	pin_name[SFI_NAME_LEN];
++} __packed;
++
++typedef int (*sfi_table_handler) (struct sfi_table_header *table);
++
++#ifdef CONFIG_SFI
++extern void __init sfi_init(void);
++extern int __init sfi_platform_init(void);
++extern void __init sfi_init_late(void);
++extern int sfi_table_parse(char *signature, char *oem_id, char *oem_table_id,
++				sfi_table_handler handler);
++
++extern int sfi_disabled;
++static inline void disable_sfi(void)
++{
++	sfi_disabled = 1;
++}
++
++#else /* !CONFIG_SFI */
++
++static inline void sfi_init(void)
++{
++}
++
++static inline void sfi_init_late(void)
++{
++}
++
++#define sfi_disabled	0
++
++static inline int sfi_table_parse(char *signature, char *oem_id,
++					char *oem_table_id,
++					sfi_table_handler handler)
++{
++	return -1;
++}
++
++#endif /* !CONFIG_SFI */
++
++#endif /*_LINUX_SFI_H*/
+diff --git a/include/linux/sfi_acpi.h b/include/linux/sfi_acpi.h
+new file mode 100644
+index 000000000000..a6e555cbe05c
+--- /dev/null
++++ b/include/linux/sfi_acpi.h
+@@ -0,0 +1,93 @@
++/* sfi.h Simple Firmware Interface */
++
++/*
++
++  This file is provided under a dual BSD/GPLv2 license.  When using or
++  redistributing this file, you may do so under either license.
++
++  GPL LICENSE SUMMARY
++
++  Copyright(c) 2009 Intel Corporation. All rights reserved.
++
++  This program is free software; you can redistribute it and/or modify
++  it under the terms of version 2 of the GNU General Public License as
++  published by the Free Software Foundation.
++
++  This program is distributed in the hope that it will be useful, but
++  WITHOUT ANY WARRANTY; without even the implied warranty of
++  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++  General Public License for more details.
++
++  You should have received a copy of the GNU General Public License
++  along with this program; if not, write to the Free Software
++  Foundation, Inc., 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
++  The full GNU General Public License is included in this distribution
++  in the file called LICENSE.GPL.
++
++  BSD LICENSE
++
++  Copyright(c) 2009 Intel Corporation. All rights reserved.
++
++  Redistribution and use in source and binary forms, with or without
++  modification, are permitted provided that the following conditions
++  are met:
++
++    * Redistributions of source code must retain the above copyright
++      notice, this list of conditions and the following disclaimer.
++    * Redistributions in binary form must reproduce the above copyright
++      notice, this list of conditions and the following disclaimer in
++      the documentation and/or other materials provided with the
++      distribution.
++    * Neither the name of Intel Corporation nor the names of its
++      contributors may be used to endorse or promote products derived
++      from this software without specific prior written permission.
++
++  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++  OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++*/
++
++#ifndef _LINUX_SFI_ACPI_H
++#define _LINUX_SFI_ACPI_H
++
++#include <linux/acpi.h>
++#include <linux/sfi.h>
++
++#ifdef CONFIG_SFI
++extern int sfi_acpi_table_parse(char *signature, char *oem_id,
++				char *oem_table_id,
++				int (*handler)(struct acpi_table_header *));
++
++static inline int __init acpi_sfi_table_parse(char *signature,
++				int (*handler)(struct acpi_table_header *))
++{
++	if (!acpi_table_parse(signature, handler))
++		return 0;
++
++	return sfi_acpi_table_parse(signature, NULL, NULL, handler);
++}
++#else /* !CONFIG_SFI */
++static inline int sfi_acpi_table_parse(char *signature, char *oem_id,
++				char *oem_table_id,
++				int (*handler)(struct acpi_table_header *))
++{
++	return -1;
++}
++
++static inline int __init acpi_sfi_table_parse(char *signature,
++				int (*handler)(struct acpi_table_header *))
++{
++	return acpi_table_parse(signature, handler);
++}
++#endif /* !CONFIG_SFI */
++
++#endif /*_LINUX_SFI_ACPI_H*/
+diff --git a/init/main.c b/init/main.c
+index 07a3116811c5..1faf03a361d6 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -53,6 +53,7 @@
+ #include <linux/cpuset.h>
+ #include <linux/memcontrol.h>
+ #include <linux/cgroup.h>
++#include <linux/sfi.h>
+ #include <linux/tick.h>
+ #include <linux/sched/isolation.h>
+ #include <linux/interrupt.h>
+@@ -1589,6 +1590,8 @@ static noinline void __init kernel_init_freeable(void)
+ 	async_init();
+ 	padata_init();
+ 	page_alloc_init_late();
++	/* SFI framework carried for KNC: switch the tables from early_ioremap to ioremap */
++	sfi_init_late();
+ 
+ 	do_basic_setup();
+ 

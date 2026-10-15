@@ -1,0 +1,609 @@
+From 7d6deb53cbce1dea52710db7eb882949d89571cf Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 28 Sep 2026 09:57:31 +0200
+Subject: [PATCH 03/16] x86/k1om: add the Intel MIC (l1om/k1om) architecture
+ plumbing
+
+From Intel MPSS 3.8.6 (Linux 2.6.38 card kernel). ARCH=l1om/k1om build
+arch/x86 for the Knights Ferry / Knights Corner coprocessor cores:
+ - ELF machine types EM_L1OM (180) / EM_K1OM (181): ELF_ARCH, kexec
+   vmcore check, the ptrace regset view name, OUTPUT_FORMAT
+   elf64-{l,k}1om for vmlinux, the decompressor and the vDSO; the
+   recordmcount and sorttable host tools treat EM_K1OM like x86-64.
+ - Kconfig: X86_MICPCI platform (selects ML1OM/MK1OM from $(ARCH),
+   virtio for the out-of-tree card block driver), X86_EARLYMIC for the
+   in-order MIC cores, MIC PHYSICAL_START/ALIGN.
+ - Makefile: UTS_MACHINE from $(ARCH), CHECKFLAGS -m64, the
+   MIC_KERNEL_VERSION_* defsym the MPSS card tools look for.
+
+Adaptations for 6.18:
+ - ML1OM/MK1OM sit outside the processor-family choice, which is
+   32-bit only since 6.15 (depends on X86_MICPCI && X86_64); the whole
+   KNC config silently dropped out otherwise.
+ - Kconfig tests use "$(ARCH)" (4.18 no longer imports env symbols).
+ - sorttable.c (new host tool since 3.5) gets the EM_K1OM case.
+ - Dropped from the MPSS delta: the out-of-tree KDB debugger (never
+   built here), the MPSS uconfig fragments, scripts/bin2c, and the
+   VECTOR_MEMCPY option (depends on a Kconfig symbol that no longer
+   exists; its copy_user_generic_vector.S was never linked), the
+   X86_MIC_EMULATION hacks for Intel's pre-silicon emulator, K1OM_TEST
+   (KNC power management on a Knights Ferry) and MPSS's own
+   PARALLEL_AP_BOOT (superseded by the upstream parallel bringup, which
+   works on KNC since 6.5).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ Makefile                               |  6 ++++
+ arch/.gitignore                        |  4 +++
+ arch/x86/Kconfig                       | 19 +++++++++-
+ arch/x86/Kconfig.cpu                   | 41 +++++++++++++++++++--
+ arch/x86/Makefile                      | 24 +++++++++++--
+ arch/x86/boot/compressed/vmlinux.lds.S | 29 +++++++++++++++
+ arch/x86/entry/vdso/Makefile           |  2 +-
+ arch/x86/include/asm/elf.h             | 49 +++++++++++++++++++++++++-
+ arch/x86/include/asm/kexec.h           | 27 +++++++++++++-
+ arch/x86/kernel/ptrace.c               | 30 ++++++++++++++++
+ arch/x86/kernel/vmlinux.lds.S          | 30 ++++++++++++++++
+ include/uapi/linux/elf-em.h            |  2 ++
+ scripts/recordmcount.c                 |  2 ++
+ scripts/recordmcount.pl                | 14 +++++---
+ scripts/sorttable.c                    |  1 +
+ 15 files changed, 266 insertions(+), 14 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index a082a1d7c7d9..1eb64b511ef1 100644
+--- a/Makefile
++++ b/Makefile
+@@ -413,6 +413,12 @@ endif
+ ifeq ($(ARCH),x86_64)
+         SRCARCH := x86
+ endif
++ifeq ($(ARCH),l1om)
++        SRCARCH := x86
++endif
++ifeq ($(ARCH),k1om)
++        SRCARCH := x86
++endif
+ 
+ # Additional ARCH settings for sparc
+ ifeq ($(ARCH),sparc32)
+diff --git a/arch/.gitignore b/arch/.gitignore
+index 756c19c34f99..822d01ef98c7 100644
+--- a/arch/.gitignore
++++ b/arch/.gitignore
+@@ -1,3 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+ /i386/
+ /x86_64/
++i386
++x86_64
++l1om
++k1om
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index 127d0e7c1b12..93c26a46c605 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -339,6 +339,8 @@ config INSTRUCTION_DECODER
+ config OUTPUT_FORMAT
+ 	string
+ 	default "elf32-i386" if X86_32
++	default "elf64-l1om" if "$(ARCH)" = "l1om"
++	default "elf64-k1om" if "$(ARCH)" = "k1om"
+ 	default "elf64-x86-64" if X86_64
+ 
+ config LOCKDEP_SUPPORT
+@@ -564,6 +566,7 @@ config X86_EXTENDED_PLATFORM
+ 
+ 	  64-bit platforms (CONFIG_64BIT=y):
+ 		Numascale NumaChip
++		Intel MIC PCIe coprocessor
+ 		ScaleMP vSMP
+ 		SGI Ultraviolet
+ 		Merrifield/Moorefield MID devices
+@@ -587,6 +590,20 @@ config X86_NUMACHIP
+ 	  enable more than ~168 cores.
+ 	  If you don't have one of these, you should say N here.
+ 
++config X86_MICPCI
++	bool "Intel MIC PCIe coprocessor"
++	depends on X86_64
++	depends on X86_EXTENDED_PLATFORM
++	select ML1OM if "$(ARCH)" = "l1om"
++	select MK1OM if "$(ARCH)" = "k1om"
++	select VIRTIO			# mic_virtblk (out-of-tree) needs the virtio core
++	select VIRTIO_RING
++	select X86_LOCAL_APIC
++	select MMU_NOTIFIER
++	help
++	  Support for Intel Many Integrated Core (Intel MIC) SoC's in a
++	  PCIe coprocessor form factor.
++
+ config X86_VSMP
+ 	bool "ScaleMP vSMP"
+ 	select HYPERVISOR_GUEST
+@@ -2118,7 +2135,7 @@ config X86_NEED_RELOCS
+ 
+ config PHYSICAL_ALIGN
+ 	hex "Alignment value to which kernel should be aligned"
+-	default "0x200000"
++	default "0x1000000"
+ 	range 0x2000 0x1000000 if X86_32
+ 	range 0x200000 0x1000000 if X86_64
+ 	help
+diff --git a/arch/x86/Kconfig.cpu b/arch/x86/Kconfig.cpu
+index f928cf6e3252..cd2b83b6eed7 100644
+--- a/arch/x86/Kconfig.cpu
++++ b/arch/x86/Kconfig.cpu
+@@ -245,6 +245,38 @@ config MATOM
+ 
+ endchoice
+ 
++# Intel MIC cores: outside the (32-bit only) processor family choice since 6.15
++config ML1OM
++	bool "Intel Aubrey Isle"
++	depends on X86_MICPCI && X86_64
++	help
++
++	  Select this for the CPU used in the Intel Many Integrated Core
++	  (Intel MIC) Software Development Vehicle code-named Knights
++	  Ferry. The CPU is an in-order, 4-way SMT design that is mostly
++	  x86-64 compatible but has a different vector unit. The
++	  differences from x86-64 (and Knights Corner) force
++	  incompatible calling conventions, so GCC and binutils assign
++	  it a unique ELF machine type: EM_L1OM.
++
++	  Future Intel products will be part of the x86 ecosystem, *not*
++	  derivatives of this incompatible offshoot.
++
++config MK1OM
++	bool "Intel Knights Corner"
++	depends on X86_MICPCI && X86_64
++	help
++
++	  Select this for the CPU used in the Intel Many Integrated Core
++	  (Intel MIC) products code-named Knights Corner. The CPU is an
++	  in-order, 4-way SMT design that is mostly x86-64 compatible
++	  but has a different vector unit. The differences from x86-64
++	  force incompatible calling conventions, so GCC and binutils
++	  assign it a unique ELF machine type: EM_K1OM.
++
++	  Future Intel products will be part of the x86 ecosystem, *not*
++	  derivatives of this incompatible offshoot.
++
+ config CC_HAS_MARCH_NATIVE
+ 	# This flag might not be available in cross-compilers:
+ 	def_bool $(cc-option, -march=native)
+@@ -291,7 +323,7 @@ config X86_INTERNODE_CACHE_SHIFT
+ config X86_L1_CACHE_SHIFT
+ 	int
+ 	default "7" if MPENTIUM4
+-	default "6" if MK7 || MPENTIUMM || MATOM || MVIAC7 || X86_GENERIC || X86_64
++	default "6" if MK7 || MPENTIUMM || MATOM || MVIAC7 || ML1OM || MK1OM || X86_GENERIC || X86_64
+ 	default "4" if MELAN || M486SX || M486 || MGEODEGX1
+ 	default "5" if MWINCHIP3D || MWINCHIPC6 || MCRUSOE || MEFFICEON || MCYRIXIII || MK6 || MPENTIUMIII || MPENTIUMII || M686 || M586MMX || M586TSC || M586 || MVIAC3_2 || MGEODE_LX
+ 
+@@ -331,7 +363,7 @@ config X86_CX8
+ # generates cmov.
+ config X86_CMOV
+ 	def_bool y
+-	depends on (MK7 || MPENTIUM4 || MPENTIUMM || MPENTIUMIII || MPENTIUMII || M686 || MVIAC3_2 || MVIAC7 || MCRUSOE || MEFFICEON || MATOM || MGEODE_LX || X86_64)
++	depends on (MK7 || MPENTIUM4 || MPENTIUMM || MPENTIUMIII || MPENTIUMII || M686 || MVIAC3_2 || MVIAC7 || MCRUSOE || MEFFICEON || MATOM || MGEODE_LX || X86_64) && !MK1OM	# no cmov on KNC
+ 
+ config X86_MINIMUM_CPU_FAMILY
+ 	int
+@@ -352,6 +384,11 @@ config X86_VMX_FEATURE_NAMES
+ 	def_bool y
+ 	depends on IA32_FEAT_CTL
+ 
++# not-X86_64 wierdness shared by ML1OM and MK1OM
++config X86_EARLYMIC
++       def_bool y
++       depends on ML1OM || MK1OM
++
+ menuconfig PROCESSOR_SELECT
+ 	bool "Supported processor vendors" if EXPERT
+ 	help
+diff --git a/arch/x86/Makefile b/arch/x86/Makefile
+index 87234f971f12..6475f9073f91 100644
+--- a/arch/x86/Makefile
++++ b/arch/x86/Makefile
+@@ -63,6 +63,24 @@ REALMODE_CFLAGS += -Wno-gnu
+ endif
+ export REALMODE_CFLAGS
+ 
++ifeq ($(ARCH),l1om)
++tool-archpref = x86_64-l1om
++else ifeq ($(ARCH),k1om)
++tool-archpref = x86_64-k1om
++endif
++
++# override top level makefile
++ifneq ($(SUBARCH),$(ARCH))
++        ifeq ($(CROSS_COMPILE),)
++                ifneq ($(tool-archpref),)
++                        CROSS_COMPILE := $(call cc-cross-prefix, \
++                                $(tool-archpref)-linux-gnu- \
++                                $(tool-archpref)-linux- \
++                                $(tool-archpref)-unknown-linux-gnu-)
++                endif
++        endif
++endif
++
+ # BITS is used as extension for files which are available in a 32 bit
+ # and a 64 bit version to simplify shared Makefiles.
+ # e.g.: obj-y += foo_$(BITS).o
+@@ -134,8 +152,8 @@ ifeq ($(CONFIG_X86_32),y)
+         percpu_seg := fs
+ else
+         BITS := 64
+-        UTS_MACHINE := x86_64
+-        CHECKFLAGS += -D__x86_64__
++        UTS_MACHINE := $(ARCH)
++        CHECKFLAGS += -D__x86_64__ -m64
+ 
+         KBUILD_AFLAGS += -m64
+         KBUILD_CFLAGS += -m64
+@@ -239,7 +257,7 @@ KBUILD_RUSTFLAGS += $(PADDING_RUSTFLAGS)
+ export PADDING_RUSTFLAGS
+ endif
+ 
+-KBUILD_LDFLAGS += -m elf_$(UTS_MACHINE)
++KBUILD_LDFLAGS += -m elf_$(UTS_MACHINE) --defsym=MIC_KERNEL_VERSION_20626=0
+ 
+ #
+ # The 64-bit kernel must be aligned to 2MB.  Pass -z max-page-size=0x200000 to
+diff --git a/arch/x86/boot/compressed/vmlinux.lds.S b/arch/x86/boot/compressed/vmlinux.lds.S
+index 587ce3e7c504..cf41af0f48ee 100644
+--- a/arch/x86/boot/compressed/vmlinux.lds.S
++++ b/arch/x86/boot/compressed/vmlinux.lds.S
+@@ -1,4 +1,27 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
+ #include <asm-generic/vmlinux.lds.h>
+ 
+ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT)
+@@ -9,7 +32,13 @@ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT)
+ #include <asm/page_types.h>
+ 
+ #ifdef CONFIG_X86_64
++#if defined(CONFIG_ML1OM)
++OUTPUT_ARCH(l1om)
++#elif defined(CONFIG_MK1OM)
++OUTPUT_ARCH(k1om)
++#else
+ OUTPUT_ARCH(i386:x86-64)
++#endif
+ ENTRY(startup_64)
+ #else
+ OUTPUT_ARCH(i386)
+diff --git a/arch/x86/entry/vdso/Makefile b/arch/x86/entry/vdso/Makefile
+index 25b06d4876d0..6d96caa93564 100644
+--- a/arch/x86/entry/vdso/Makefile
++++ b/arch/x86/entry/vdso/Makefile
+@@ -33,7 +33,7 @@ targets += $(foreach x, 64 x32 32, vdso-image-$(x).c vdso$(x).so vdso$(x).so.dbg
+ 
+ CPPFLAGS_vdso.lds += -P -C
+ 
+-VDSO_LDFLAGS_vdso.lds = -m elf_x86_64 -soname linux-vdso.so.1 \
++VDSO_LDFLAGS_vdso.lds = -m elf_$(ARCH) -soname linux-vdso.so.1 \
+ 			-z max-page-size=4096
+ 
+ $(obj)/vdso64.so.dbg: $(obj)/vdso.lds $(vobjs) FORCE
+diff --git a/arch/x86/include/asm/elf.h b/arch/x86/include/asm/elf.h
+index 6c8fdc96be7e..a3cbe124c8b0 100644
+--- a/arch/x86/include/asm/elf.h
++++ b/arch/x86/include/asm/elf.h
+@@ -1,4 +1,28 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ #ifndef _ASM_X86_ELF_H
+ #define _ASM_X86_ELF_H
+ 
+@@ -70,7 +94,13 @@ typedef struct user_i387_struct elf_fpregset_t;
+  */
+ #define ELF_CLASS	ELFCLASS64
+ #define ELF_DATA	ELFDATA2LSB
++#if defined(CONFIG_ML1OM)
++#define ELF_ARCH	EM_L1OM
++#elif defined(CONFIG_MK1OM)
++#define ELF_ARCH	EM_K1OM
++#else
+ #define ELF_ARCH	EM_X86_64
++#endif
+ 
+ #endif
+ 
+@@ -82,8 +112,19 @@ extern unsigned int vdso32_enabled;
+ /*
+  * This is used to ensure we don't load something for the wrong architecture.
+  */
++#if defined(CONFIG_ML1OM)
++
++#define elf_check_arch_ia32(x) ((x)->e_machine == EM_L1OM)
++
++#elif defined(CONFIG_MK1OM)
++
++#define elf_check_arch_ia32(x) ((x)->e_machine == EM_K1OM)
++
++#else
++
+ #define elf_check_arch_ia32(x) \
+ 	(((x)->e_machine == EM_386) || ((x)->e_machine == EM_486))
++#endif
+ 
+ #include <asm/processor.h>
+ 
+@@ -144,7 +185,7 @@ do {						\
+  * This is used to ensure we don't load something for the wrong architecture.
+  */
+ #define elf_check_arch(x)			\
+-	((x)->e_machine == EM_X86_64)
++	((x)->e_machine == ELF_ARCH)
+ 
+ #define compat_elf_check_arch(x)					\
+ 	((elf_check_arch_ia32(x) && ia32_enabled_verbose()) ||		\
+@@ -218,7 +259,13 @@ do {								\
+ } while (0);
+ 
+ /* I'm not sure if we can use '-' here */
++#if defined(CONFIG_ML1OM)
++#define ELF_PLATFORM       ("l1om")
++#elif defined(CONFIG_MK1OM)
++#define ELF_PLATFORM       ("k1om")
++#else
+ #define ELF_PLATFORM       ("x86_64")
++#endif
+ extern void set_personality_64bit(void);
+ extern int force_personality32;
+ 
+diff --git a/arch/x86/include/asm/kexec.h b/arch/x86/include/asm/kexec.h
+index 5cfb27f26583..eae78231937f 100644
+--- a/arch/x86/include/asm/kexec.h
++++ b/arch/x86/include/asm/kexec.h
+@@ -1,4 +1,28 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ #ifndef _ASM_X86_KEXEC_H
+ #define _ASM_X86_KEXEC_H
+ 
+@@ -56,7 +80,8 @@ struct kimage;
+ # define KEXEC_ARCH KEXEC_ARCH_386
+ 
+ /* We can also handle crash dumps from 64 bit kernel. */
+-# define vmcore_elf_check_arch_cross(x) ((x)->e_machine == EM_X86_64)
++# define vmcore_elf_check_arch_cross(x) ((x)->e_machine == EM_X86_64	\
++	|| (x)->e_machine == EM_L1OM || (x)->e_machine == EM_K1OM)
+ #else
+ /* Maximum physical address we can use pages from */
+ # define KEXEC_SOURCE_MEMORY_LIMIT      (MAXMEM-1)
+diff --git a/arch/x86/kernel/ptrace.c b/arch/x86/kernel/ptrace.c
+index 3dcadc13f09a..289e96f2ff4c 100644
+--- a/arch/x86/kernel/ptrace.c
++++ b/arch/x86/kernel/ptrace.c
+@@ -1,4 +1,28 @@
+ // SPDX-License-Identifier: GPL-2.0-only
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ /* By Ross Biro 1/23/92 */
+ /*
+  * Pentium III FXSR, SSE support
+@@ -1282,7 +1306,13 @@ static struct user_regset x86_64_regsets[] __ro_after_init = {
+ };
+ 
+ static const struct user_regset_view user_x86_64_view = {
++#if defined(CONFIG_ML1OM)
++	.name = "l1om", .e_machine = EM_L1OM,
++#elif defined(CONFIG_MK1OM)
++	.name = "k1om", .e_machine = EM_K1OM,
++#else
+ 	.name = "x86_64", .e_machine = EM_X86_64,
++#endif
+ 	.regsets = x86_64_regsets, .n = ARRAY_SIZE(x86_64_regsets)
+ };
+ 
+diff --git a/arch/x86/kernel/vmlinux.lds.S b/arch/x86/kernel/vmlinux.lds.S
+index e48ecd57796d..846c1836c6a2 100644
+--- a/arch/x86/kernel/vmlinux.lds.S
++++ b/arch/x86/kernel/vmlinux.lds.S
+@@ -1,4 +1,28 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ /*
+  * ld script for the x86 kernel
+  *
+@@ -38,7 +62,13 @@ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT)
+ OUTPUT_ARCH(i386)
+ ENTRY(phys_startup_32)
+ #else
++#if defined(CONFIG_ML1OM)
++OUTPUT_ARCH(l1om)
++#elif defined(CONFIG_MK1OM)
++OUTPUT_ARCH(k1om)
++#else
+ OUTPUT_ARCH(i386:x86-64)
++#endif
+ ENTRY(phys_startup_64)
+ #endif
+ 
+diff --git a/include/uapi/linux/elf-em.h b/include/uapi/linux/elf-em.h
+index ef38c2bc5ab7..05e8650fbe92 100644
+--- a/include/uapi/linux/elf-em.h
++++ b/include/uapi/linux/elf-em.h
+@@ -44,6 +44,8 @@
+ #define EM_NDS32	167	/* Andes Technology compact code size
+ 				   embedded RISC processor family */
+ #define EM_AARCH64	183	/* ARM 64 bit */
++#define EM_L1OM		180	/* Intel L1OM */
++#define EM_K1OM		181	/* Intel K1OM */
+ #define EM_TILEPRO	188	/* Tilera TILEPro */
+ #define EM_MICROBLAZE	189	/* Xilinx MicroBlaze */
+ #define EM_TILEGX	191	/* Tilera TILE-Gx */
+diff --git a/scripts/recordmcount.c b/scripts/recordmcount.c
+index 3e4f54799cc0..546c9f5375c3 100644
+--- a/scripts/recordmcount.c
++++ b/scripts/recordmcount.c
+@@ -597,6 +597,8 @@ static int do_file(char const *const fname)
+ 	case EM_S390:	/* reltype: e_class    */ break;
+ 	case EM_SH:	reltype = R_SH_DIR32; gpfx = 0; break;
+ 	case EM_SPARCV9: reltype = R_SPARC_64; break;
++	case 181: /* EM_K1OM (Knights Corner) */
++	case 180: /* EM_L1OM (Larrabee) */
+ 	case EM_X86_64:
+ 		make_nop = make_nop_x86;
+ 		ideal_nop = ideal_nop5_x86_64;
+diff --git a/scripts/recordmcount.pl b/scripts/recordmcount.pl
+index 861b56dda64e..2dddbf8f34b7 100755
+--- a/scripts/recordmcount.pl
++++ b/scripts/recordmcount.pl
+@@ -195,16 +195,20 @@ $section_type = '@progbits';
+ $mcount_adjust = 0;
+ $type = ".long";
+ 
+-if ($arch eq "x86_64") {
+-    $mcount_regex = "^\\s*([0-9a-fA-F]+):.*\\s(mcount|__fentry__)([+-]0x[0-9a-zA-Z]+)?\$";
++if ($arch eq "x86_64" or $arch =~ m/[lk]1om/) {
++    $mcount_regex = "^\s*([0-9a-fA-F]+):.*\s(mcount|__fentry__)([+-]0x[0-9a-zA-Z]+)?$";
+     $type = ".quad";
+     $alignment = 8;
+     $mcount_adjust = -1;
+ 
++    # map x86_64 into x86-64
++    my $dash = $arch;
++    $dash =~ tr/_/-/;
++
+     # force flags for this arch
+-    $ld .= " -m elf_x86_64";
+-    $objdump .= " -M x86-64";
+-    $objcopy .= " -O elf64-x86-64";
++    $ld .= " -m elf_$arch";
++    $objdump .= " -M $dash";
++    $objcopy .= " -O elf64-$dash";
+     $cc .= " -m64";
+ 
+ } elsif ($arch eq "i386") {
+diff --git a/scripts/sorttable.c b/scripts/sorttable.c
+index deed676bfe38..8740c2c3609d 100644
+--- a/scripts/sorttable.c
++++ b/scripts/sorttable.c
+@@ -1265,6 +1265,7 @@ static int do_file(char const *const fname, void *addr)
+ 	case EM_RISCV:
+ 	case EM_S390:
+ 	case EM_X86_64:
++	case 181: /* EM_K1OM (Knights Corner) */
+ 		custom_sort = sort_relative_table_with_data;
+ 		break;
+ 	case EM_PARISC:

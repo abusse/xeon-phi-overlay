@@ -1,0 +1,550 @@
+From 99924ed6f0f1622f561f684959fc61666602b236 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 28 Sep 2026 09:57:33 +0200
+Subject: [PATCH 08/16] x86/mic: KNC APIC, IOAPIC and SMP bringup
+
+From Intel MPSS 3.8.6:
+ - The 9-bit APIC id lives in LAPIC ID bits 31:23 (apicdef.h,
+   physflat get/set_apic_id, the AP id extraction in head_64.S);
+   recalibrate_lapic() for cpufreq changes; no C3STOP on the LAPIC
+   timer.
+ - IOAPIC: memory-mapped register access through mic_def.h, a 64-bit
+   IOAPIC address (unsigned long apicaddr, u64 mp_register_ioapic:
+   KNC's IOAPIC sits above 4G at 0x08007DA800), 25 pins, and the KNC
+   route-entry layout (destination id in bits 32-39).
+ - smpboot: BSP hooks (icache snoop off, SMPT init) and the KNC IOAPIC
+   pin table.
+
+Adaptations for 6.18:
+ - 6.5 parallel bringup: the AP reads its APIC id from the LAPIC and
+   took bits 31:24; on KNC every AP looked up the wrong CPU ("APIC id
+   mismatch") and the boot timed out. Bits 31:23 on EARLYMIC; all 240
+   CPUs come up with x86_cpuinit.parallel_bringup at its default.
+ - 5.11's ioapic_setup_msg_from_msi() writes the destination through
+   the IR index overlay (bits 56-63); the KNC IOAPIC keeps it in bits
+   32-39, so every IOAPIC interrupt targeted APIC 0 with a vector
+   allocated elsewhere. destid_0_7/virt_destid_8_14 are copied by
+   name on EARLYMIC; IO_APIC_route_entry is a union since 5.15.
+ - 4.15's vector domain assigns on activation, spreading vectors over
+   CPUs; the SBOX ICR has one fixed destination, so the doorbell irqs
+   are allocated with mask cpumask_of(0) and program cfg->dest_apicid.
+ - 3.17 sizes the irqdomain and pin_info from the GSI range: 25 pins
+   for both; mp_register_ioapic() keeps the u64 address (3.17 took
+   u32 back and truncated it: fixmap on RAM at 0x7DA800, heap
+   corruption). The mp_irqs pin table is filled right after the SFI
+   IOAPIC registration (setup_IO_APIC runs from late_time_init).
+ - 6.9 topology rework: only physflat remains; the old
+   generic_processor_info()/physid_mask_t users are gone.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ arch/x86/include/asm/apic.h         |  4 ++
+ arch/x86/include/asm/apicdef.h      | 35 ++++++++++++++++
+ arch/x86/include/asm/io_apic.h      | 11 ++++-
+ arch/x86/include/asm/mpspec_def.h   | 26 +++++++++++-
+ arch/x86/kernel/apic/apic.c         | 62 +++++++++++++++++++++++++++-
+ arch/x86/kernel/apic/apic_flat_64.c | 10 ++++-
+ arch/x86/kernel/apic/io_apic.c      | 63 +++++++++++++++++++++++++++--
+ arch/x86/kernel/head_64.S           |  5 +++
+ arch/x86/kernel/smpboot.c           |  8 ++++
+ arch/x86/kernel/tsc.c               |  6 +++
+ 10 files changed, 221 insertions(+), 9 deletions(-)
+
+diff --git a/arch/x86/include/asm/apic.h b/arch/x86/include/asm/apic.h
+index a26e66d66444..c18d074b2ecc 100644
+--- a/arch/x86/include/asm/apic.h
++++ b/arch/x86/include/asm/apic.h
+@@ -628,4 +628,8 @@ extern void __irq_msi_compose_msg(struct irq_cfg *cfg, struct msi_msg *msg,
+ 
+ extern void ioapic_zap_locks(void);
+ 
++
++#if defined(CONFIG_X86_EARLYMIC) && defined(CONFIG_MK1OM)
++void recalibrate_lapic(u_int div, u_int mult);
++#endif
+ #endif /* _ASM_X86_APIC_H */
+diff --git a/arch/x86/include/asm/apicdef.h b/arch/x86/include/asm/apicdef.h
+index be39a543fbe5..31e55ddfb575 100644
+--- a/arch/x86/include/asm/apicdef.h
++++ b/arch/x86/include/asm/apicdef.h
+@@ -1,4 +1,28 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ #ifndef _ASM_X86_APICDEF_H
+ #define _ASM_X86_APICDEF_H
+ 
+@@ -50,9 +74,15 @@
+ #define		APIC_EOI_ACK		0x0 /* Docs say 0 for future compat. */
+ #define	APIC_RRR	0xC0
+ #define	APIC_LDR	0xD0
++#ifdef CONFIG_X86_EARLYMIC
++#define		APIC_LDR_MASK		(0xFFFFu << 16)
++#define		GET_APIC_LOGICAL_ID(x)	(((x) >> 16) & 0xFFFFu)
++#define		SET_APIC_LOGICAL_ID(x)	(((x) << 16))
++#else
+ #define		APIC_LDR_MASK		(0xFFu << 24)
+ #define		GET_APIC_LOGICAL_ID(x)	(((x) >> 24) & 0xFFu)
+ #define		SET_APIC_LOGICAL_ID(x)	(((x) << 24))
++#endif
+ #define		APIC_ALL_CPUS		0xFFu
+ #define	APIC_DFR	0xE0
+ #define		APIC_DFR_CLUSTER		0x0FFFFFFFul
+@@ -98,8 +128,13 @@
+ #define		APIC_DM_EXTINT		0x00700
+ #define		APIC_VECTOR_MASK	0x000FF
+ #define	APIC_ICR2	0x310
++#ifdef CONFIG_X86_EARLYMIC
++#define		GET_XAPIC_DEST_FIELD(x)	(((x) >> 16) & 0xFFFF)
++#define		SET_XAPIC_DEST_FIELD(x)	((x) << 16)
++#else
+ #define		GET_XAPIC_DEST_FIELD(x)	(((x) >> 24) & 0xFF)
+ #define		SET_XAPIC_DEST_FIELD(x)	((x) << 24)
++#endif
+ #define	APIC_LVTT	0x320
+ #define	APIC_LVTTHMR	0x330
+ #define	APIC_LVTPC	0x340
+diff --git a/arch/x86/include/asm/io_apic.h b/arch/x86/include/asm/io_apic.h
+index 0d806513c4b3..4ca31f76b620 100644
+--- a/arch/x86/include/asm/io_apic.h
++++ b/arch/x86/include/asm/io_apic.h
+@@ -67,9 +67,16 @@ struct IO_APIC_route_entry {
+ 				is_level		:  1,
+ 				masked			:  1,
+ 				reserved_0		: 15,
++#ifdef CONFIG_X86_EARLYMIC
++				/* KNC SBOX IOAPIC: destination id in bits 32-39 */
++				destid_0_7		:  8,
++				virt_destid_8_14	:  7,
++				reserved_1		: 17;
++#else
+ 				reserved_1		: 17,
+ 				virt_destid_8_14	:  7,
+ 				destid_0_7		:  8;
++#endif
+ 		};
+ 		struct {
+ 			u64	ir_shared_0		:  8,
+@@ -101,7 +108,7 @@ struct ioapic_domain_cfg;
+ extern int nr_ioapics;
+ 
+ extern int mpc_ioapic_id(int ioapic);
+-extern unsigned int mpc_ioapic_addr(int ioapic);
++extern unsigned long mpc_ioapic_addr(int ioapic);
+ 
+ /* # of MP IRQ source entries */
+ extern int mp_irq_entries;
+@@ -146,7 +153,7 @@ extern int mp_find_ioapic_pin(int ioapic, u32 gsi);
+ extern int mp_map_gsi_to_irq(u32 gsi, unsigned int flags,
+ 			     struct irq_alloc_info *info);
+ extern void mp_unmap_irq(int irq);
+-extern int mp_register_ioapic(int id, u32 address, u32 gsi_base,
++extern int mp_register_ioapic(int id, u64 address, u32 gsi_base,
+ 			      struct ioapic_domain_cfg *cfg);
+ extern int mp_unregister_ioapic(u32 gsi_base);
+ extern int mp_ioapic_registered(u32 gsi_base);
+diff --git a/arch/x86/include/asm/mpspec_def.h b/arch/x86/include/asm/mpspec_def.h
+index 6fb923a34309..92bd35270fb5 100644
+--- a/arch/x86/include/asm/mpspec_def.h
++++ b/arch/x86/include/asm/mpspec_def.h
+@@ -1,4 +1,28 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ #ifndef _ASM_X86_MPSPEC_DEF_H
+ #define _ASM_X86_MPSPEC_DEF_H
+ 
+@@ -108,7 +132,7 @@ struct mpc_ioapic {
+ 	unsigned char apicid;
+ 	unsigned char apicver;
+ 	unsigned char flags;
+-	unsigned int apicaddr;
++	unsigned long apicaddr;
+ };
+ 
+ struct mpc_intsrc {
+diff --git a/arch/x86/kernel/apic/apic.c b/arch/x86/kernel/apic/apic.c
+index 71df4c7fee57..2e97cadf9706 100644
+--- a/arch/x86/kernel/apic/apic.c
++++ b/arch/x86/kernel/apic/apic.c
+@@ -1,4 +1,28 @@
+ // SPDX-License-Identifier: GPL-2.0-only
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ /*
+  *	Local APIC handling, local APIC timers
+  *
+@@ -36,6 +60,7 @@
+ #include <linux/dmi.h>
+ #include <linux/smp.h>
+ #include <linux/mm.h>
++#include <linux/clocksource.h>
+ 
+ #include <xen/xen.h>
+ 
+@@ -499,7 +524,10 @@ static void lapic_timer_broadcast(const struct cpumask *mask)
+ static struct clock_event_device lapic_clockevent = {
+ 	.name				= "lapic",
+ 	.features			= CLOCK_EVT_FEAT_PERIODIC |
+-					  CLOCK_EVT_FEAT_ONESHOT | CLOCK_EVT_FEAT_C3STOP
++					  CLOCK_EVT_FEAT_ONESHOT
++#ifndef CONFIG_X86_EARLYMIC
++					  | CLOCK_EVT_FEAT_C3STOP
++#endif
+ 					  | CLOCK_EVT_FEAT_DUMMY,
+ 	.shift				= 32,
+ 	.set_state_shutdown		= lapic_timer_shutdown,
+@@ -653,6 +681,36 @@ static __initdata unsigned long long lapic_cal_tsc1, lapic_cal_tsc2;
+ static __initdata u32 lapic_cal_pm1, lapic_cal_pm2;
+ static __initdata unsigned long lapic_cal_j1, lapic_cal_j2;
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/*
++ * This is based on the assumption that lowest possible core frequency
++ * is 600MHz and the highest is 1.6GHz. We need two delays since the
++ * delay instruction is limited to 1023 cycles.
++ */
++const int delay_us_cycles = 500;
++int delay_us_cycles_extra = 0;
++
++static inline void delay_us(void)
++{
++	asm volatile ("delay %0" :: "r" (delay_us_cycles) : "memory");
++	asm volatile ("delay %0" :: "r" (delay_us_cycles_extra) : "memory");
++}
++
++static inline void delay_ms(int cnt)
++{
++	int i, j;
++	for (i = 0; i < cnt; i++)
++		for (j = 0; j < 1000; j++)
++			delay_us();
++}
++
++void recalibrate_lapic(u_int div, u_int mult)
++{
++	uint64_t result = (uint64_t) lapic_clockevent.mult * (uint64_t) mult;
++	lapic_clockevent.mult =  (u32) (result / (uint64_t) div);
++}
++#endif
++
+ /*
+  * Temporary interrupt handler and polled calibration function.
+  */
+@@ -1606,6 +1664,7 @@ static void setup_local_APIC(void)
+ 	 * strictly necessary in pure symmetric-IO mode, but sometimes
+ 	 * we delegate interrupts to the 8259A.
+ 	 */
++#ifndef CONFIG_X86_EARLYMIC
+ 	/*
+ 	 * TODO: set up through-local-APIC from through-I/O-APIC? --macro
+ 	 */
+@@ -1617,6 +1676,7 @@ static void setup_local_APIC(void)
+ 		value = APIC_DM_EXTINT | APIC_LVT_MASKED;
+ 		apic_pr_verbose("Masked ExtINT on CPU#%d\n", cpu);
+ 	}
++#endif
+ 	apic_write(APIC_LVT0, value);
+ 
+ 	/*
+diff --git a/arch/x86/kernel/apic/apic_flat_64.c b/arch/x86/kernel/apic/apic_flat_64.c
+index e0308d8c4e6c..1a0471de2a81 100644
+--- a/arch/x86/kernel/apic/apic_flat_64.c
++++ b/arch/x86/kernel/apic/apic_flat_64.c
+@@ -16,7 +16,15 @@
+ 
+ static u32 physflat_get_apic_id(u32 x)
+ {
+-	return (x >> 24) & 0xFF;
++	unsigned int id;
++
++#ifdef CONFIG_X86_EARLYMIC
++	id = (((x) >> 23) & 0x1FFu);	/* MIC: 9-bit APIC id at bits 31:23 */
++#else
++	id = (((x)>>24) & 0xFFu);
++#endif
++
++	return id;
+ }
+ 
+ static int physflat_probe(void)
+diff --git a/arch/x86/kernel/apic/io_apic.c b/arch/x86/kernel/apic/io_apic.c
+index 5ba2feb2c04c..e6596be0d500 100644
+--- a/arch/x86/kernel/apic/io_apic.c
++++ b/arch/x86/kernel/apic/io_apic.c
+@@ -1,4 +1,28 @@
+ // SPDX-License-Identifier: GPL-2.0
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ /*
+  *	Intel IO-APIC support for multi-Pentium hosts.
+  *
+@@ -67,6 +91,9 @@
+ #include <asm/apic.h>
+ #include <asm/pgtable.h>
+ #include <asm/x86_init.h>
++#ifdef CONFIG_X86_EARLYMIC
++#include <asm/mic_def.h>
++#endif
+ 
+ #define	for_each_ioapic(idx)		\
+ 	for ((idx) = 0; (idx) < nr_ioapics; (idx)++)
+@@ -125,7 +152,7 @@ int mpc_ioapic_id(int ioapic_idx)
+ 	return ioapics[ioapic_idx].mp_config.apicid;
+ }
+ 
+-unsigned int mpc_ioapic_addr(int ioapic_idx)
++unsigned long mpc_ioapic_addr(int ioapic_idx)
+ {
+ 	return ioapics[ioapic_idx].mp_config.apicaddr;
+ }
+@@ -270,19 +297,29 @@ static inline void io_apic_eoi(unsigned int apic, unsigned int vector)
+ 
+ unsigned int native_io_apic_read(unsigned int apic, unsigned int reg)
+ {
++#ifdef CONFIG_X86_EARLYMIC
++	volatile u32 *io_apic = (volatile u32 *) io_apic_base(apic);
++	return readl((void __iomem *)(io_apic + reg));
++#else
+ 	struct io_apic __iomem *io_apic = io_apic_base(apic);
+ 
+ 	writel(reg, &io_apic->index);
+ 	return readl(&io_apic->data);
++#endif
+ }
+ 
+ static void io_apic_write(unsigned int apic, unsigned int reg,
+ 			  unsigned int value)
+ {
++#ifdef CONFIG_X86_EARLYMIC
++	volatile u32 *io_apic = (volatile u32 *) io_apic_base(apic);
++	writel(value, (void __iomem *)(io_apic + reg));
++#else
+ 	struct io_apic __iomem *io_apic = io_apic_base(apic);
+ 
+ 	writel(reg, &io_apic->index);
+ 	writel(value, &io_apic->data);
++#endif
+ }
+ 
+ static struct IO_APIC_route_entry __ioapic_read_entry(int apic, int pin)
+@@ -1780,7 +1817,17 @@ static void ioapic_setup_msg_from_msi(struct irq_data *irq_data,
+ 	 * All other modes have bit 0-6 of dmar_index_0_14 cleared and the
+ 	 * topmost 8 bits are destination id bit 0-7 (entry::destid_0_7).
+ 	 */
++#ifdef CONFIG_X86_EARLYMIC
++	/*
++	 * No interrupt remapping on KNC, and its route entry keeps the
++	 * destination id in bits 32-39 (see IO_APIC_route_entry): copy the
++	 * destination by name instead of through the IR index overlay.
++	 */
++	entry->destid_0_7		= msg.arch_addr_lo.destid_0_7;
++	entry->virt_destid_8_14		= msg.arch_addr_lo.virt_destid_8_14;
++#else
+ 	entry->ir_index_0_14		= msg.arch_addr_lo.dmar_index_0_14;
++#endif
+ }
+ 
+ static void ioapic_configure_entry(struct irq_data *irqd)
+@@ -2638,7 +2685,7 @@ static int bad_ioapic_register(int idx)
+ 	reg_02.raw = io_apic_read(idx, 2);
+ 
+ 	if (reg_00.raw == -1 && reg_01.raw == -1 && reg_02.raw == -1) {
+-		pr_warn("I/O APIC 0x%x registers return all ones, skipping!\n",
++		pr_warn("I/O APIC 0x%lx registers return all ones, skipping!\n",
+ 			mpc_ioapic_addr(idx));
+ 		return 1;
+ 	}
+@@ -2662,7 +2709,7 @@ static int find_free_ioapic_entry(void)
+  * @gsi_base:	base of GSI associated with the IOAPIC
+  * @cfg:	configuration information for the IOAPIC
+  */
+-int mp_register_ioapic(int id, u32 address, u32 gsi_base, struct ioapic_domain_cfg *cfg)
++int mp_register_ioapic(int id, u64 address, u32 gsi_base, struct ioapic_domain_cfg *cfg)
+ {
+ 	bool hotplug = !!ioapic_initialized;
+ 	struct mp_ioapic_gsi *gsi_cfg;
+@@ -2706,6 +2753,10 @@ int mp_register_ioapic(int id, u32 address, u32 gsi_base, struct ioapic_domain_c
+ 	 * and to prevent reprogramming of IOAPIC pins (PCI GSIs).
+ 	 */
+ 	entries = io_apic_get_redir_entries(idx);
++#ifdef CONFIG_X86_EARLYMIC
++	/* The version register under-reports: KNC routes 25 SBOX sources. */
++	entries = MIC_NUM_IOAPIC_ENTRIES;
++#endif
+ 	gsi_end = gsi_base + entries - 1;
+ 	for_each_ioapic(ioapic) {
+ 		gsi_cfg = mp_ioapic_gsi_routing(ioapic);
+@@ -2739,15 +2790,19 @@ int mp_register_ioapic(int id, u32 address, u32 gsi_base, struct ioapic_domain_c
+ 		alloc_ioapic_saved_registers(idx);
+ 	}
+ 
++#ifdef CONFIG_X86_EARLYMIC
++	gsi_top = 0;
++#else
+ 	if (gsi_cfg->gsi_end >= gsi_top)
+ 		gsi_top = gsi_cfg->gsi_end + 1;
++#endif
+ 	if (nr_ioapics <= idx)
+ 		nr_ioapics = idx + 1;
+ 
+ 	/* Set nr_registers to mark entry present */
+ 	ioapics[idx].nr_registers = entries;
+ 
+-	pr_info("IOAPIC[%d]: apic_id %d, version %d, address 0x%x, GSI %d-%d\n",
++	pr_info("IOAPIC[%d]: apic_id %d, version %d, address 0x%lx, GSI %d-%d\n",
+ 		idx, mpc_ioapic_id(idx), mpc_ioapic_ver(idx), mpc_ioapic_addr(idx),
+ 		gsi_cfg->gsi_base, gsi_cfg->gsi_end);
+ 
+diff --git a/arch/x86/kernel/head_64.S b/arch/x86/kernel/head_64.S
+index 665b35f70fa9..eda6353d2e0f 100644
+--- a/arch/x86/kernel/head_64.S
++++ b/arch/x86/kernel/head_64.S
+@@ -309,7 +309,12 @@ SYM_INNER_LABEL(common_startup_64, SYM_L_LOCAL)
+ 	movq	apic_mmio_base(%rip), %rcx
+ 	addq	$APIC_ID, %rcx
+ 	movl	(%rcx), %eax
++#ifdef CONFIG_X86_EARLYMIC
++	shr	$23, %eax		/* KNC: 9-bit APIC id at bits 31:23 */
++	andl	$0x1ff, %eax
++#else
+ 	shr	$24, %eax
++#endif
+ 	jmp	.Llookup_AP
+ 
+ .Lread_apicid_msr:
+diff --git a/arch/x86/kernel/smpboot.c b/arch/x86/kernel/smpboot.c
+index eb289abece23..a1b64db0edfd 100644
+--- a/arch/x86/kernel/smpboot.c
++++ b/arch/x86/kernel/smpboot.c
+@@ -169,6 +169,11 @@ static inline void smpboot_restore_warm_reset_vector(void)
+ 
+ }
+ 
++#ifdef CONFIG_X86_EARLYMIC
++extern void disable_icache_snoop(void);
++extern void mic_smpt_init(void) __init;
++#endif
++
+ /* Run the next set of setup steps for the upcoming CPU */
+ static void ap_starting(void)
+ {
+@@ -279,6 +284,9 @@ static void notrace __noendbr start_secondary(void *unused)
+ 	fpu__init_cpu();
+ 	rcutree_report_cpu_starting(raw_smp_processor_id());
+ 	x86_cpuinit.early_percpu_clock_init();
++#ifdef CONFIG_X86_EARLYMIC
++	disable_icache_snoop();		/* we are an AP */
++#endif
+ 
+ 	ap_starting();
+ 
+diff --git a/arch/x86/kernel/tsc.c b/arch/x86/kernel/tsc.c
+index 87e749106dda..1a7cdb5b02da 100644
+--- a/arch/x86/kernel/tsc.c
++++ b/arch/x86/kernel/tsc.c
+@@ -1460,9 +1460,15 @@ static bool __init determine_cpu_tsc_frequencies(bool early)
+ 			clocksource_tsc.freq_khz = tsc_khz;
+ 		}
+ 	} else {
++#ifdef CONFIG_X86_EARLYMIC
++		/* no PIT/HPET/PM timer; the SBOX reference is mappable only now */
++		cpu_khz = x86_platform.calibrate_cpu();
++		tsc_khz = x86_platform.calibrate_tsc();
++#else
+ 		/* We should not be here with non-native cpu calibration */
+ 		WARN_ON(x86_platform.calibrate_cpu != native_calibrate_cpu);
+ 		cpu_khz = pit_hpet_ptimer_calibrate_cpu();
++#endif
+ 	}
+ 
+ 	/*

@@ -1,0 +1,550 @@
+From 5d3f0781b14f642c45dfac435aaf5d2733868f19 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 28 Sep 2026 09:57:31 +0200
+Subject: [PATCH 02/16] x86/k1om: MPSS instruction-set adjustments for the
+ in-order MIC core
+
+From Intel MPSS 3.8.6. The MIC core is x86-64 without SSE/MMX, without
+port I/O, with an in-order pipeline and no fence instructions:
+ - verify_cpu is skipped in the decompressor, in head_64.S and in the
+   real-mode trampoline (it tests for SSE and reads IA32_MISC_ENABLE,
+   which the core does not implement).
+ - barrier.h: mb/rmb/wmb as lock addl; the TSC-deadline mfence in
+   apic.c and weak_wrmsr_fence() are mb().
+ - No port I/O on the card: the in/out helpers are stubs.
+ - prefetch: ARCH_HAS_PREFETCH{,_DST} with the MIC prefetch forms; the
+   prefetch/prefetchnta uses in copy_page and csum-copy are guarded.
+ - MTRR: set_mtrr_state() returns the deferred state on MK1OM.
+ - vmlinux.lds.S: the kernel image-size ASSERT is off for EARLYMIC.
+
+Adaptations for 6.18: the raw in/out helpers moved to asm/shared/io.h
+(6.0) and are stubbed there, asm/io.h keeps the _p/string forms in the
+BUILDIO(bwl, type) shape; weak_wrmsr_fence() became an alternative in
+processor.h (6.12); the TSC-deadline fence guard follows 4.4's apic.c.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ arch/x86/boot/compressed/head_64.S   | 30 ++++++++++++++++++++
+ arch/x86/include/asm/barrier.h       | 10 +++++++
+ arch/x86/include/asm/io.h            | 42 ++++++++++++++++++++++++++++
+ arch/x86/include/asm/processor.h     | 40 ++++++++++++++++++++++++++
+ arch/x86/include/asm/shared/io.h     |  9 ++++++
+ arch/x86/kernel/apic/apic.c          |  4 +++
+ arch/x86/kernel/cpu/mtrr/generic.c   | 30 ++++++++++++++++++++
+ arch/x86/kernel/fpu/core.c           |  4 ++-
+ arch/x86/kernel/head_64.S            | 32 +++++++++++++++++++--
+ arch/x86/kernel/vmlinux.lds.S        |  2 ++
+ arch/x86/lib/copy_page_64.S          |  2 ++
+ arch/x86/lib/csum-copy_64.S          |  2 ++
+ arch/x86/realmode/rm/trampoline_64.S | 26 +++++++++++++++++
+ 13 files changed, 230 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/boot/compressed/head_64.S b/arch/x86/boot/compressed/head_64.S
+index d9dab940ff62..8c0f6c2079d9 100644
+--- a/arch/x86/boot/compressed/head_64.S
++++ b/arch/x86/boot/compressed/head_64.S
+@@ -1,4 +1,28 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the
++* Intel product codenamed: Knights Corner, and are not backward compatible
++* with other Intel products. Additionally, Intel will NOT support the codes
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is
++* also not obligated to provide any updates, enhancements or extensions.  Intel
++* specifically disclaims any warranty of merchantability, non-infringement,
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ /*
+  *  linux/boot/head.S
+  *
+@@ -129,10 +153,16 @@ SYM_FUNC_START(startup_32)
+ 	call	startup32_load_idt
+ #endif
+ 
++/*
++ * verify_cpu returns 0 if the CPU supports long mode & SSE
++ * ML1OM & MK1OM support long mode, but not SSE
++ */
++#ifndef CONFIG_X86_EARLYMIC
+ 	/* Make sure cpu supports long mode. */
+ 	call	verify_cpu
+ 	testl	%eax, %eax
+ 	jnz	.Lno_longmode
++#endif
+ 
+ /*
+  * Compute the delta between where we were compiled to run at
+diff --git a/arch/x86/include/asm/barrier.h b/arch/x86/include/asm/barrier.h
+index db70832232d4..1e3ca5081109 100644
+--- a/arch/x86/include/asm/barrier.h
++++ b/arch/x86/include/asm/barrier.h
+@@ -18,6 +18,11 @@
+ 				       X86_FEATURE_XMM2) ::: "memory", "cc")
+ #define wmb() asm volatile(ALTERNATIVE("lock addl $0,-4(%%esp)", "sfence", \
+ 				       X86_FEATURE_XMM2) ::: "memory", "cc")
++#elif defined(CONFIG_X86_EARLYMIC)
++/* k1om lacks usable mfence/lfence/sfence; serialize via a locked op. */
++#define mb() 	asm volatile("lock; addl $0,0(%%rsp)":::"memory")
++#define rmb()	asm volatile("lock; addl $0,0(%%rsp)":::"memory")
++#define wmb()	asm volatile("lock; addl $0,0(%%rsp)":::"memory")
+ #else
+ #define __mb()	asm volatile("mfence":::"memory")
+ #define __rmb()	asm volatile("lfence":::"memory")
+@@ -45,7 +50,12 @@
+ 	__mask; })
+ 
+ /* Prevent speculative execution past this barrier. */
++#ifdef CONFIG_X86_EARLYMIC
++/* in-order core, and the assembler has no lfence */
++#define barrier_nospec() barrier()
++#else
+ #define barrier_nospec() alternative("", "lfence", X86_FEATURE_LFENCE_RDTSC)
++#endif
+ 
+ #define __dma_rmb()	barrier()
+ #define __dma_wmb()	barrier()
+diff --git a/arch/x86/include/asm/io.h b/arch/x86/include/asm/io.h
+index ca309a3227c7..a8b4867fc763 100644
+--- a/arch/x86/include/asm/io.h
++++ b/arch/x86/include/asm/io.h
+@@ -1,4 +1,28 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ #ifndef _ASM_X86_IO_H
+ #define _ASM_X86_IO_H
+ 
+@@ -248,16 +272,32 @@ extern void io_delay_init(void);
+ 
+ static inline void slow_down_io(void)
+ {
++#ifndef CONFIG_X86_EARLYMIC
+ 	native_io_delay();
+ #ifdef REALLY_SLOW_IO
+ 	native_io_delay();
+ 	native_io_delay();
+ 	native_io_delay();
+ #endif
++#endif
+ }
+ 
+ #endif
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/* no port I/O on the card */
++#define BUILDIO(bwl, type)						\
++static inline void out##bwl##_p(type value, u16 port)			\
++{ slow_down_io(); }							\
++static inline type in##bwl##_p(u16 port)				\
++{ slow_down_io(); return 0; }						\
++static inline void outs##bwl(u16 port, const void *addr, unsigned long count) \
++{ }									\
++static inline void ins##bwl(u16 port, void *addr, unsigned long count)	\
++{ }
++
++#else
++
+ #define BUILDIO(bwl, type)						\
+ static inline void out##bwl##_p(type value, u16 port)			\
+ {									\
+@@ -304,6 +344,8 @@ static inline void ins##bwl(u16 port, void *addr, unsigned long count)	\
+ 	}								\
+ }
+ 
++#endif
++
+ BUILDIO(b, u8)
+ BUILDIO(w, u16)
+ BUILDIO(l, u32)
+diff --git a/arch/x86/include/asm/processor.h b/arch/x86/include/asm/processor.h
+index a24c7805acdb..a17d8ec0d4d5 100644
+--- a/arch/x86/include/asm/processor.h
++++ b/arch/x86/include/asm/processor.h
+@@ -1,4 +1,28 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ #ifndef _ASM_X86_PROCESSOR_H
+ #define _ASM_X86_PROCESSOR_H
+ 
+@@ -606,15 +630,23 @@ extern int			bootloader_version;
+ extern char			ignore_fpu_irq;
+ 
+ #define HAVE_ARCH_PICK_MMAP_LAYOUT 1
++
+ #define ARCH_HAS_PREFETCHW
+ 
+ #ifdef CONFIG_X86_32
+ # define BASE_PREFETCH		""
+ # define ARCH_HAS_PREFETCH
+ #else
++#ifdef CONFIG_X86_EARLYMIC
++#define ARCH_HAS_PREFETCH
++#else
+ # define BASE_PREFETCH		"prefetcht0 %1"
+ #endif
++#endif
+ 
++#ifdef CONFIG_MK1OM
++#define ARCH_HAS_PREFETCH_DST
++#endif
+ /*
+  * Prefetch instructions for Pentium III (+) and AMD Athlon (+)
+  *
+@@ -623,9 +655,11 @@ extern char			ignore_fpu_irq;
+  */
+ static inline void prefetch(const void *x)
+ {
++#ifndef CONFIG_X86_EARLYMIC
+ 	alternative_input(BASE_PREFETCH, "prefetchnta %1",
+ 			  X86_FEATURE_XMM,
+ 			  "m" (*(const char *)x));
++#endif
+ }
+ 
+ /*
+@@ -635,9 +669,11 @@ static inline void prefetch(const void *x)
+  */
+ static __always_inline void prefetchw(const void *x)
+ {
++#ifndef CONFIG_X86_EARLYMIC
+ 	alternative_input(BASE_PREFETCH, "prefetchw %1",
+ 			  X86_FEATURE_3DNOWPREFETCH,
+ 			  "m" (*(const char *)x));
++#endif
+ }
+ 
+ #define TOP_OF_INIT_STACK ((unsigned long)&init_stack + sizeof(init_stack) - \
+@@ -769,7 +805,11 @@ extern bool gds_ucode_mitigated(void);
+  */
+ static inline void weak_wrmsr_fence(void)
+ {
++#ifdef CONFIG_X86_EARLYMIC
++	mb();		/* no mfence/lfence on k1om (no TSC deadline / x2APIC either) */
++#else
+ 	alternative("mfence; lfence", "", ALT_NOT(X86_FEATURE_APIC_MSRS_FENCE));
++#endif
+ }
+ 
+ #endif /* _ASM_X86_PROCESSOR_H */
+diff --git a/arch/x86/include/asm/shared/io.h b/arch/x86/include/asm/shared/io.h
+index 8009d781c2f9..b79f7da2d07e 100644
+--- a/arch/x86/include/asm/shared/io.h
++++ b/arch/x86/include/asm/shared/io.h
+@@ -4,6 +4,14 @@
+ 
+ #include <linux/types.h>
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/* no port I/O on the card */
++#define BUILDIO(bwl, bw, type)						\
++static inline void __out##bwl(type value, u16 port)			\
++{ }									\
++static inline type __in##bwl(u16 port)					\
++{ return 0; }
++#else
+ #define BUILDIO(bwl, bw, type)						\
+ static __always_inline void __out##bwl(type value, u16 port)		\
+ {									\
+@@ -18,6 +26,7 @@ static __always_inline type __in##bwl(u16 port)				\
+ 		     : "=a"(value) : "Nd"(port));			\
+ 	return value;							\
+ }
++#endif
+ 
+ BUILDIO(b, b, u8)
+ BUILDIO(w, w, u16)
+diff --git a/arch/x86/kernel/apic/apic.c b/arch/x86/kernel/apic/apic.c
+index 680d305589a3..71df4c7fee57 100644
+--- a/arch/x86/kernel/apic/apic.c
++++ b/arch/x86/kernel/apic/apic.c
+@@ -302,7 +302,11 @@ static void __setup_APIC_LVTT(unsigned int clocks, int oneshot, int irqen)
+ 		 * writing to the APIC LVTT and TSC_DEADLINE MSR isn't serialized.
+ 		 * According to Intel, MFENCE can do the serialization here.
+ 		 */
++#ifdef CONFIG_X86_EARLYMIC
++		mb();		/* no mfence on k1om (and no TSC deadline timer) */
++#else
+ 		asm volatile("mfence" : : : "memory");
++#endif
+ 		return;
+ 	}
+ 
+diff --git a/arch/x86/kernel/cpu/mtrr/generic.c b/arch/x86/kernel/cpu/mtrr/generic.c
+index 8c18327eb10b..03e3d3cabfc9 100644
+--- a/arch/x86/kernel/cpu/mtrr/generic.c
++++ b/arch/x86/kernel/cpu/mtrr/generic.c
+@@ -1,4 +1,28 @@
+ // SPDX-License-Identifier: GPL-2.0-only
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the
++* Intel product codenamed: Knights Corner, and are not backward compatible
++* with other Intel products. Additionally, Intel will NOT support the codes
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is
++* also not obligated to provide any updates, enhancements or extensions.  Intel
++* specifically disclaims any warranty of merchantability, non-infringement,
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ /*
+  * This only handles 32bit MTRR on 32bit hosts. This is strictly wrong
+  * because MTRRs can span up to 40 bits (36bits on most modern x86)
+@@ -752,8 +776,10 @@ void __init mtrr_state_warn(void)
+ void mtrr_wrmsr(unsigned msr, unsigned a, unsigned b)
+ {
+ 	if (wrmsr_safe(msr, a, b) < 0) {
++#ifndef CONFIG_X86_EARLYMIC
+ 		pr_err("MTRR: CPU %u: Writing MSR %x to %x:%x failed\n",
+ 			smp_processor_id(), msr, a, b);
++#endif
+ 	}
+ }
+ 
+@@ -917,7 +943,11 @@ static u32 deftype_lo, deftype_hi;
+  *       accomplished by taking cache_disable_lock.
+  * RETURNS: 0 if no changes made, else a mask indicating what was changed.
+  */
++#ifndef CONFIG_MK1OM
+ static unsigned long set_mtrr_state(void)
++#else
++unsigned long set_mtrr_state(void)
++#endif
+ {
+ 	unsigned long change_mask = 0;
+ 	unsigned int i;
+diff --git a/arch/x86/kernel/fpu/core.c b/arch/x86/kernel/fpu/core.c
+index e88eacb1b5bb..0c1b27d9d4f2 100644
+--- a/arch/x86/kernel/fpu/core.c
++++ b/arch/x86/kernel/fpu/core.c
+@@ -169,7 +169,9 @@ void restore_fpregs_from_fpstate(struct fpstate *fpstate, u64 mask)
+ 	if (unlikely(static_cpu_has_bug(X86_BUG_FXSAVE_LEAK))) {
+ 		asm volatile(
+ 			"fnclex\n\t"
+-			"emms\n\t"
++#ifndef CONFIG_X86_EARLYMIC
++			"emms\n\t"		/* KNC has no MMX */
++#endif
+ 			"fildl %[addr]"	/* set F?P to defined value */
+ 			: : [addr] "m" (*fpstate));
+ 	}
+diff --git a/arch/x86/kernel/head_64.S b/arch/x86/kernel/head_64.S
+index 21816b48537c..1f02bbddf75c 100644
+--- a/arch/x86/kernel/head_64.S
++++ b/arch/x86/kernel/head_64.S
+@@ -1,4 +1,28 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ /*
+  *  linux/arch/x86/kernel/head_64.S -- start in 32bit and switch to 64bit
+  *
+@@ -94,8 +118,10 @@ SYM_CODE_START_NOALIGN(startup_64)
+ 	call	__pi_sme_enable
+ #endif
+ 
+-	/* Sanitize CPU configuration */
++#ifndef CONFIG_X86_EARLYMIC
++	/* Sanitize CPU configuration (KNC: no SSE, no MISC_ENABLE MSR) */
+ 	call verify_cpu
++#endif
+ 
+ 	/*
+ 	 * Derive the kernel's physical-to-virtual offset from the physical and
+@@ -159,8 +185,10 @@ SYM_CODE_START(secondary_startup_64)
+ 	 * after the boot processor executes this code.
+ 	 */
+ 
+-	/* Sanitize CPU configuration */
++#ifndef CONFIG_X86_EARLYMIC
++	/* Sanitize CPU configuration (KNC: no SSE, no MISC_ENABLE MSR) */
+ 	call verify_cpu
++#endif
+ 
+ 	/*
+ 	 * The secondary_startup_64_no_verify entry point is only used by
+diff --git a/arch/x86/kernel/vmlinux.lds.S b/arch/x86/kernel/vmlinux.lds.S
+index d7af4a64c211..e48ecd57796d 100644
+--- a/arch/x86/kernel/vmlinux.lds.S
++++ b/arch/x86/kernel/vmlinux.lds.S
+@@ -476,9 +476,11 @@ SECTIONS
+ /*
+  * The ASSERT() sync to . is intentional, for binutils 2.14 compatibility:
+  */
++#ifndef CONFIG_X86_EARLYMIC
+ . = ASSERT((_end - LOAD_OFFSET <= KERNEL_IMAGE_SIZE),
+ 	   "kernel image bigger than KERNEL_IMAGE_SIZE");
+ #endif
++#endif /* CONFIG_COMPILE_TEST */
+ 
+ /* needed for Clang - see arch/x86/entry/entry.S */
+ PROVIDE(__ref_stack_chk_guard = __stack_chk_guard);
+diff --git a/arch/x86/lib/copy_page_64.S b/arch/x86/lib/copy_page_64.S
+index d8e87fedc20d..234f8f8a642d 100644
+--- a/arch/x86/lib/copy_page_64.S
++++ b/arch/x86/lib/copy_page_64.S
+@@ -40,7 +40,9 @@ SYM_FUNC_START_LOCAL(copy_page_regs)
+ 	movq	0x8*6(%rsi), %r11
+ 	movq	0x8*7(%rsi), %r12
+ 
++#ifndef CONFIG_X86_EARLYMIC  /* MICBUGBUG */
+ 	prefetcht0 5*64(%rsi)
++#endif
+ 
+ 	movq	%rax, 0x8*0(%rdi)
+ 	movq	%rbx, 0x8*1(%rdi)
+diff --git a/arch/x86/lib/csum-copy_64.S b/arch/x86/lib/csum-copy_64.S
+index d9e16a2cf285..2a3d5519a9a2 100644
+--- a/arch/x86/lib/csum-copy_64.S
++++ b/arch/x86/lib/csum-copy_64.S
+@@ -89,8 +89,10 @@ SYM_FUNC_START(csum_partial_copy_generic)
+ 	 * No _ASM_EXTABLE_UA; this is used for intentional prefetch on a
+ 	 * potentially unmapped kernel address.
+ 	 */
++#ifndef CONFIG_X86_EARLYMIC
+ 	_ASM_EXTABLE(30b, 2f)
+ 	prefetcht0 5*64(%rdi)
++#endif
+ 2:
+ 	adcq  %rbx, %rax
+ 	adcq  %r8, %rax
+diff --git a/arch/x86/realmode/rm/trampoline_64.S b/arch/x86/realmode/rm/trampoline_64.S
+index 14d9c7daf90f..a22ccace0e1d 100644
+--- a/arch/x86/realmode/rm/trampoline_64.S
++++ b/arch/x86/realmode/rm/trampoline_64.S
+@@ -1,4 +1,28 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
+ /*
+  *
+  *	Trampoline.S	Derived from Setup.S by Linus Torvalds
+@@ -71,9 +95,11 @@ SYM_CODE_START(trampoline_start)
+ 
+ 	LOCK_AND_LOAD_REALMODE_ESP
+ 
++#ifndef CONFIG_X86_EARLYMIC
+ 	call	verify_cpu		# Verify the cpu supports long mode
+ 	testl   %eax, %eax		# Check for return code
+ 	jnz	no_longmode
++#endif
+ 
+ .Lswitch_to_protected:
+ 	/*

@@ -1,0 +1,46 @@
+From f3fcebdb43c8c4781c24969a9baf561656d77ebb Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Tue, 29 Sep 2026 09:24:44 +0200
+Subject: [PATCH 16/16] x86/k1om: keep the RAX setup for variadic calls
+
+The kernel passes -mskip-rax-setup because with -mno-sse the x86-64
+variadic prologue never looks at %al. The MPSS k1om gcc has no such
+coupling: its prologue always tests %al and, if it is nonzero, spills
+zmm0-7 into the register save area through mask register k1
+(mov $3,%eax; kmov %eax,%k1; vpackstorelq ...{%k1}). With the RAX setup
+skipped, %al is whatever the caller left in it at all 10,563 variadic
+call sites in vmlinux, so any interrupt or kernel thread that reaches a
+printk-like function clobbers the user's k1 with 3; the FPU code never
+saves or restores around it because upstream assumes kernel code does
+not touch vector state. Seen as vectest "k1 got 3" in 10-30% of runs on
+both cards, including a single process alone on an idle CPU with no
+syscalls (pure interrupt context).
+
+Keep the RAX setup on MK1OM so every caller zeroes %al and the prologue
+never touches the vector unit. The flag entered the x86 Makefile in 4.1,
+so every card kernel since the 4.1 port had this; 3.16/3.18 did not.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ arch/x86/Makefile | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/arch/x86/Makefile b/arch/x86/Makefile
+index 6475f9073f91..eae09b5f5bd5 100644
+--- a/arch/x86/Makefile
++++ b/arch/x86/Makefile
+@@ -178,7 +178,13 @@ else
+         KBUILD_CFLAGS += $(cc_stack_align8)
+ 
+ 	# Use -mskip-rax-setup if supported.
++	# Not for k1om: the MPSS gcc's variadic prologue still tests %al and, if it
++	# is set, spills zmm0-7 through mask register k1 (no -mno-sse equivalent
++	# for the KNC vector unit). Without the RAX setup %al is garbage at every
++	# variadic call, so the kernel clobbers the user's k1 from interrupt context.
++	ifndef CONFIG_MK1OM
+ 	KBUILD_CFLAGS += -mskip-rax-setup
++	endif
+ 
+ ifdef CONFIG_X86_NATIVE_CPU
+         KBUILD_CFLAGS += -march=native

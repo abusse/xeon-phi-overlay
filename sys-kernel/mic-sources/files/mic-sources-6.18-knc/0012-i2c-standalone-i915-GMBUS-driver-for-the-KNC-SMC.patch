@@ -1,0 +1,1740 @@
+From f56083de588ac979b7a7e0aa14d4ea0a95672f6e Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 28 Sep 2026 09:57:35 +0200
+Subject: [PATCH 12/16] i2c: standalone i915 GMBUS driver for the KNC SMC
+
+From Intel MPSS 3.8.6: the i915 GMBUS engine in the KNC DBOX is the
+I2C master for the system management controller (temperatures, power
+rails, fan, ECC state, card serial) read by the micras RAS module.
+intel_i2c.c/.h are built on their own under CONFIG_I2C_I915_GMBUS
+(no DRM), exporting gmbus_i2c_read/write/write_atomic.
+
+Adaptations for 6.18: a platform_driver over ioremap(DBOX_BASE) with
+a local minimal struct intel_gmbus and wait_for/wait_for_atomic
+(the i915 headers are long incompatible), only the GMBUS hardware
+engine (no bitbang/GPIO half); the i915 Makefile builds just
+intel_i2c.o; I2C_CLASS_DDC is gone (6.8).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ drivers/gpu/drm/Makefile           |   1 +
+ drivers/gpu/drm/i915/Makefile      | 437 +------------
+ drivers/gpu/drm/i915/gmbus_trace.h |  67 ++
+ drivers/gpu/drm/i915/intel_i2c.c   | 972 +++++++++++++++++++++++++++++
+ drivers/gpu/drm/i915/intel_i2c.h   | 180 ++++++
+ drivers/i2c/busses/Kconfig         |   7 +
+ 6 files changed, 1230 insertions(+), 434 deletions(-)
+ create mode 100644 drivers/gpu/drm/i915/gmbus_trace.h
+ create mode 100644 drivers/gpu/drm/i915/intel_i2c.c
+ create mode 100644 drivers/gpu/drm/i915/intel_i2c.h
+
+diff --git a/drivers/gpu/drm/Makefile b/drivers/gpu/drm/Makefile
+index da2565e6de71..0891f7e9ddf7 100644
+--- a/drivers/gpu/drm/Makefile
++++ b/drivers/gpu/drm/Makefile
+@@ -177,6 +177,7 @@ obj-$(CONFIG_DRM_KMB_DISPLAY)  += kmb/
+ obj-$(CONFIG_DRM_MGAG200) += mgag200/
+ obj-$(CONFIG_DRM_V3D)  += v3d/
+ obj-$(CONFIG_DRM_VC4)  += vc4/
++obj-$(CONFIG_I2C_I915_GMBUS) += i915/
+ obj-$(CONFIG_DRM_VMWGFX)+= vmwgfx/
+ obj-$(CONFIG_DRM_VGEM)	+= vgem/
+ obj-$(CONFIG_DRM_VKMS)	+= vkms/
+diff --git a/drivers/gpu/drm/i915/Makefile b/drivers/gpu/drm/i915/Makefile
+index b91575380708..c18eff4a2087 100644
+--- a/drivers/gpu/drm/i915/Makefile
++++ b/drivers/gpu/drm/i915/Makefile
+@@ -1,434 +1,3 @@
+-# SPDX-License-Identifier: GPL-2.0
+-#
+-# Makefile for the drm device driver.  This driver provides support for the
+-# Direct Rendering Infrastructure (DRI) in XFree86 4.1.0 and higher.
+-
+-# Enable W=1 warnings not enabled in drm subsystem Makefile
+-subdir-ccflags-y += $(call cc-option, -Wformat-truncation)
+-
+-# Enable -Werror in CI and development
+-subdir-ccflags-$(CONFIG_DRM_I915_WERROR) += -Werror
+-
+-# Support compiling the display code separately for both i915 and xe
+-# drivers. Define I915 when building i915.
+-subdir-ccflags-y += -DI915
+-
+-subdir-ccflags-y += -I$(src)
+-
+-# Please keep these build lists sorted!
+-
+-# core driver code
+-i915-y += \
+-	i915_config.o \
+-	i915_driver.o \
+-	i915_drm_client.o \
+-	i915_getparam.o \
+-	i915_ioctl.o \
+-	i915_irq.o \
+-	i915_mitigations.o \
+-	i915_module.o \
+-	i915_params.o \
+-	i915_pci.o \
+-	i915_scatterlist.o \
+-	i915_switcheroo.o \
+-	i915_sysfs.o \
+-	i915_timer_util.o \
+-	i915_utils.o \
+-	intel_clock_gating.o \
+-	intel_cpu_info.o \
+-	intel_device_info.o \
+-	intel_memory_region.o \
+-	intel_pcode.o \
+-	intel_region_ttm.o \
+-	intel_runtime_pm.o \
+-	intel_step.o \
+-	intel_uncore.o \
+-	intel_uncore_trace.o \
+-	intel_wakeref.o \
+-	vlv_iosf_sb.o \
+-	vlv_suspend.o
+-
+-# core peripheral code
+-i915-y += \
+-	soc/intel_dram.o \
+-	soc/intel_gmch.o \
+-	soc/intel_rom.o
+-
+-# core library code
+-i915-y += \
+-	i915_memcpy.o \
+-	i915_mm.o \
+-	i915_sw_fence.o \
+-	i915_sw_fence_work.o \
+-	i915_syncmap.o \
+-	i915_user_extensions.o
+-
+-i915-$(CONFIG_COMPAT) += \
+-	i915_ioc32.o
+-i915-$(CONFIG_DEBUG_FS) += \
+-	i915_debugfs.o \
+-	i915_debugfs_params.o
+-i915-$(CONFIG_PERF_EVENTS) += \
+-	i915_pmu.o
+-
+-# "Graphics Technology" (aka we talk to the gpu)
+-gt-y += \
+-	gt/gen2_engine_cs.o \
+-	gt/gen6_engine_cs.o \
+-	gt/gen6_ppgtt.o \
+-	gt/gen7_renderclear.o \
+-	gt/gen8_engine_cs.o \
+-	gt/gen8_ppgtt.o \
+-	gt/intel_breadcrumbs.o \
+-	gt/intel_context.o \
+-	gt/intel_context_sseu.o \
+-	gt/intel_engine_cs.o \
+-	gt/intel_engine_heartbeat.o \
+-	gt/intel_engine_pm.o \
+-	gt/intel_engine_user.o \
+-	gt/intel_execlists_submission.o \
+-	gt/intel_ggtt.o \
+-	gt/intel_ggtt_fencing.o \
+-	gt/intel_gt.o \
+-	gt/intel_gt_buffer_pool.o \
+-	gt/intel_gt_ccs_mode.o \
+-	gt/intel_gt_clock_utils.o \
+-	gt/intel_gt_debugfs.o \
+-	gt/intel_gt_engines_debugfs.o \
+-	gt/intel_gt_irq.o \
+-	gt/intel_gt_mcr.o \
+-	gt/intel_gt_pm.o \
+-	gt/intel_gt_pm_debugfs.o \
+-	gt/intel_gt_pm_irq.o \
+-	gt/intel_gt_requests.o \
+-	gt/intel_gt_sysfs.o \
+-	gt/intel_gt_sysfs_pm.o \
+-	gt/intel_gtt.o \
+-	gt/intel_llc.o \
+-	gt/intel_lrc.o \
+-	gt/intel_migrate.o \
+-	gt/intel_mocs.o \
+-	gt/intel_ppgtt.o \
+-	gt/intel_rc6.o \
+-	gt/intel_region_lmem.o \
+-	gt/intel_renderstate.o \
+-	gt/intel_reset.o \
+-	gt/intel_ring.o \
+-	gt/intel_ring_submission.o \
+-	gt/intel_rps.o \
+-	gt/intel_sa_media.o \
+-	gt/intel_sseu.o \
+-	gt/intel_sseu_debugfs.o \
+-	gt/intel_timeline.o \
+-	gt/intel_tlb.o \
+-	gt/intel_wopcm.o \
+-	gt/intel_workarounds.o \
+-	gt/shmem_utils.o \
+-	gt/sysfs_engines.o
+-
+-# x86 intel-gtt module support
+-gt-$(CONFIG_X86) += \
+-	gt/intel_ggtt_gmch.o
+-# autogenerated null render state
+-gt-y += \
+-	gt/gen6_renderstate.o \
+-	gt/gen7_renderstate.o \
+-	gt/gen8_renderstate.o \
+-	gt/gen9_renderstate.o
+-i915-y += $(gt-y)
+-
+-# GEM (Graphics Execution Management) code
+-gem-y += \
+-	gem/i915_gem_busy.o \
+-	gem/i915_gem_clflush.o \
+-	gem/i915_gem_context.o \
+-	gem/i915_gem_create.o \
+-	gem/i915_gem_dmabuf.o \
+-	gem/i915_gem_domain.o \
+-	gem/i915_gem_execbuffer.o \
+-	gem/i915_gem_internal.o \
+-	gem/i915_gem_lmem.o \
+-	gem/i915_gem_mman.o \
+-	gem/i915_gem_object.o \
+-	gem/i915_gem_pages.o \
+-	gem/i915_gem_phys.o \
+-	gem/i915_gem_pm.o \
+-	gem/i915_gem_region.o \
+-	gem/i915_gem_shmem.o \
+-	gem/i915_gem_shrinker.o \
+-	gem/i915_gem_stolen.o \
+-	gem/i915_gem_throttle.o \
+-	gem/i915_gem_tiling.o \
+-	gem/i915_gem_ttm.o \
+-	gem/i915_gem_ttm_move.o \
+-	gem/i915_gem_ttm_pm.o \
+-	gem/i915_gem_userptr.o \
+-	gem/i915_gem_wait.o \
+-	gem/i915_gemfs.o
+-i915-y += \
+-	$(gem-y) \
+-	i915_active.o \
+-	i915_cmd_parser.o \
+-	i915_deps.o \
+-	i915_gem.o \
+-	i915_gem_evict.o \
+-	i915_gem_gtt.o \
+-	i915_gem_ww.o \
+-	i915_query.o \
+-	i915_request.o \
+-	i915_scheduler.o \
+-	i915_trace_points.o \
+-	i915_ttm_buddy_manager.o \
+-	i915_vma.o \
+-	i915_vma_resource.o
+-
+-# general-purpose microcontroller (GuC) support
+-i915-y += \
+-	gt/uc/intel_gsc_fw.o \
+-	gt/uc/intel_gsc_proxy.o \
+-	gt/uc/intel_gsc_uc.o \
+-	gt/uc/intel_gsc_uc_debugfs.o \
+-	gt/uc/intel_gsc_uc_heci_cmd_submit.o\
+-	gt/uc/intel_guc.o \
+-	gt/uc/intel_guc_ads.o \
+-	gt/uc/intel_guc_capture.o \
+-	gt/uc/intel_guc_ct.o \
+-	gt/uc/intel_guc_debugfs.o \
+-	gt/uc/intel_guc_fw.o \
+-	gt/uc/intel_guc_hwconfig.o \
+-	gt/uc/intel_guc_log.o \
+-	gt/uc/intel_guc_log_debugfs.o \
+-	gt/uc/intel_guc_rc.o \
+-	gt/uc/intel_guc_slpc.o \
+-	gt/uc/intel_guc_submission.o \
+-	gt/uc/intel_huc.o \
+-	gt/uc/intel_huc_debugfs.o \
+-	gt/uc/intel_huc_fw.o \
+-	gt/uc/intel_uc.o \
+-	gt/uc/intel_uc_debugfs.o \
+-	gt/uc/intel_uc_fw.o
+-
+-# graphics system controller (GSC) support
+-i915-y += \
+-	gt/intel_gsc.o
+-
+-# graphics hardware monitoring (HWMON) support
+-i915-$(CONFIG_HWMON) += \
+-	i915_hwmon.o
+-
+-# modesetting core code
+-i915-y += \
+-	display/hsw_ips.o \
+-	display/i9xx_display_sr.o \
+-	display/i9xx_plane.o \
+-	display/i9xx_wm.o \
+-	display/intel_alpm.o \
+-	display/intel_atomic.o \
+-	display/intel_audio.o \
+-	display/intel_bios.o \
+-	display/intel_bo.o \
+-	display/intel_bw.o \
+-	display/intel_cdclk.o \
+-	display/intel_cmtg.o \
+-	display/intel_color.o \
+-	display/intel_combo_phy.o \
+-	display/intel_connector.o \
+-	display/intel_crtc.o \
+-	display/intel_crtc_state_dump.o \
+-	display/intel_cursor.o \
+-	display/intel_display.o \
+-	display/intel_display_conversion.o \
+-	display/intel_display_driver.o \
+-	display/intel_display_irq.o \
+-	display/intel_display_params.o \
+-	display/intel_display_power.o \
+-	display/intel_display_power_map.o \
+-	display/intel_display_power_well.o \
+-	display/intel_display_reset.o \
+-	display/intel_display_rpm.o \
+-	display/intel_display_rps.o \
+-	display/intel_display_snapshot.o \
+-	display/intel_display_wa.o \
+-	display/intel_dmc.o \
+-	display/intel_dmc_wl.o \
+-	display/intel_dpio_phy.o \
+-	display/intel_dpll.o \
+-	display/intel_dpll_mgr.o \
+-	display/intel_dpt.o \
+-	display/intel_dpt_common.o \
+-	display/intel_drrs.o \
+-	display/intel_dsb.o \
+-	display/intel_dsb_buffer.o \
+-	display/intel_fb.o \
+-	display/intel_fb_bo.o \
+-	display/intel_fb_pin.o \
+-	display/intel_fbc.o \
+-	display/intel_fdi.o \
+-	display/intel_fifo_underrun.o \
+-	display/intel_flipq.o \
+-	display/intel_frontbuffer.o \
+-	display/intel_global_state.o \
+-	display/intel_hdcp.o \
+-	display/intel_hdcp_gsc.o \
+-	display/intel_hdcp_gsc_message.o \
+-	display/intel_hotplug.o \
+-	display/intel_hotplug_irq.o \
+-	display/intel_hti.o \
+-	display/intel_link_bw.o \
+-	display/intel_load_detect.o \
+-	display/intel_lpe_audio.o \
+-	display/intel_modeset_lock.o \
+-	display/intel_modeset_setup.o \
+-	display/intel_modeset_verify.o \
+-	display/intel_overlay.o \
+-	display/intel_panic.o \
+-	display/intel_pch.o \
+-	display/intel_pch_display.o \
+-	display/intel_pch_refclk.o \
+-	display/intel_plane.o \
+-	display/intel_plane_initial.o \
+-	display/intel_pmdemand.o \
+-	display/intel_psr.o \
+-	display/intel_quirks.o \
+-	display/intel_sbi.o \
+-	display/intel_sprite.o \
+-	display/intel_sprite_uapi.o \
+-	display/intel_tc.o \
+-	display/intel_vblank.o \
+-	display/intel_vga.o \
+-	display/intel_wm.o \
+-	display/skl_scaler.o \
+-	display/skl_universal_plane.o \
+-	display/skl_watermark.o \
+-	display/vlv_sideband.o
+-i915-$(CONFIG_ACPI) += \
+-	display/intel_acpi.o \
+-	display/intel_opregion.o
+-i915-$(CONFIG_DRM_FBDEV_EMULATION) += \
+-	display/intel_fbdev.o \
+-	display/intel_fbdev_fb.o
+-i915-$(CONFIG_DEBUG_FS) += \
+-	display/intel_display_debugfs.o \
+-	display/intel_display_debugfs_params.o \
+-	display/intel_pipe_crc.o
+-
+-# modesetting output/encoder code
+-i915-y += \
+-	display/dvo_ch7017.o \
+-	display/dvo_ch7xxx.o \
+-	display/dvo_ivch.o \
+-	display/dvo_ns2501.o \
+-	display/dvo_sil164.o \
+-	display/dvo_tfp410.o \
+-	display/g4x_dp.o \
+-	display/g4x_hdmi.o \
+-	display/icl_dsi.o \
+-	display/intel_backlight.o \
+-	display/intel_crt.o \
+-	display/intel_cx0_phy.o \
+-	display/intel_ddi.o \
+-	display/intel_ddi_buf_trans.o \
+-	display/intel_display_device.o \
+-	display/intel_display_trace.o \
+-	display/intel_dkl_phy.o \
+-	display/intel_dp.o \
+-	display/intel_dp_aux.o \
+-	display/intel_dp_aux_backlight.o \
+-	display/intel_dp_hdcp.o \
+-	display/intel_dp_link_training.o \
+-	display/intel_dp_mst.o \
+-	display/intel_dp_test.o \
+-	display/intel_dsi.o \
+-	display/intel_dsi_dcs_backlight.o \
+-	display/intel_dsi_vbt.o \
+-	display/intel_dvo.o \
+-	display/intel_encoder.o \
+-	display/intel_gmbus.o \
+-	display/intel_hdmi.o \
+-	display/intel_lspcon.o \
+-	display/intel_lvds.o \
+-	display/intel_panel.o \
+-	display/intel_pfit.o \
+-	display/intel_pps.o \
+-	display/intel_qp_tables.o \
+-	display/intel_sdvo.o \
+-	display/intel_snps_hdmi_pll.o \
+-	display/intel_snps_phy.o \
+-	display/intel_tv.o \
+-	display/intel_vdsc.o \
+-	display/intel_vrr.o \
+-	display/vlv_dsi.o \
+-	display/vlv_dsi_pll.o
+-
+-i915-$(CONFIG_DRM_I915_DP_TUNNEL) += \
+-	display/intel_dp_tunnel.o
+-
+-i915-y += \
+-	i915_perf.o
+-
+-# Protected execution platform (PXP) support. Base support is required for HuC
+-i915-y += \
+-	pxp/intel_pxp.o \
+-	pxp/intel_pxp_huc.o \
+-	pxp/intel_pxp_tee.o
+-
+-i915-$(CONFIG_DRM_I915_PXP) += \
+-	pxp/intel_pxp_cmd.o \
+-	pxp/intel_pxp_debugfs.o \
+-	pxp/intel_pxp_gsccs.o \
+-	pxp/intel_pxp_irq.o \
+-	pxp/intel_pxp_pm.o \
+-	pxp/intel_pxp_session.o
+-
+-# Post-mortem debug and GPU hang state capture
+-i915-$(CONFIG_DRM_I915_CAPTURE_ERROR) += \
+-	i915_gpu_error.o
+-i915-$(CONFIG_DRM_I915_SELFTEST) += \
+-	gem/selftests/i915_gem_client_blt.o \
+-	gem/selftests/igt_gem_utils.o \
+-	selftests/i915_random.o \
+-	selftests/i915_selftest.o \
+-	selftests/igt_atomic.o \
+-	selftests/igt_flush_test.o \
+-	selftests/igt_live_test.o \
+-	selftests/igt_mmap.o \
+-	selftests/igt_reset.o \
+-	selftests/igt_spinner.o \
+-	selftests/intel_scheduler_helpers.o \
+-	selftests/librapl.o
+-
+-# virtual gpu code
+-i915-y += \
+-	i915_vgpu.o
+-
+-i915-$(CONFIG_DRM_I915_GVT) += \
+-	intel_gvt.o \
+-	intel_gvt_mmio_table.o
+-include $(src)/gvt/Makefile
+-
+-obj-$(CONFIG_DRM_I915) += i915.o
+-obj-$(CONFIG_DRM_I915_GVT_KVMGT) += kvmgt.o
+-
+-# kernel-doc test
+-#
+-# Enable locally for CONFIG_DRM_I915_WERROR=y. See also scripts/Makefile.build
+-ifdef CONFIG_DRM_I915_WERROR
+-    cmd_checkdoc = PYTHONDONTWRITEBYTECODE=1 $(PYTHON3) $(KERNELDOC) -none -Werror $<
+-endif
+-
+-# header test
+-
+-# exclude some broken headers from the test coverage
+-no-header-test := \
+-	display/intel_vbt_defs.h
+-
+-always-$(CONFIG_DRM_I915_WERROR) += \
+-	$(patsubst %.h,%.hdrtest, $(filter-out $(no-header-test), \
+-		$(shell cd $(src) && find * -name '*.h')))
+-
+-quiet_cmd_hdrtest = HDRTEST $(patsubst %.hdrtest,%.h,$@)
+-      cmd_hdrtest = $(CC) $(filter-out $(CFLAGS_GCOV), $(c_flags)) -S -o /dev/null -x c /dev/null -include $<; \
+-		$(srctree)/scripts/kernel-doc -none -Werror $<; touch $@
+-
+-$(obj)/%.hdrtest: $(src)/%.h FORCE
+-	$(call if_changed_dep,hdrtest)
++# KNC: standalone i915 GMBUS i2c only (full DRM i915 is not built on the card).
++ccflags-y := -Iinclude/drm
++obj-$(CONFIG_I2C_I915_GMBUS) += intel_i2c.o
+diff --git a/drivers/gpu/drm/i915/gmbus_trace.h b/drivers/gpu/drm/i915/gmbus_trace.h
+new file mode 100644
+index 000000000000..71896c87695d
+--- /dev/null
++++ b/drivers/gpu/drm/i915/gmbus_trace.h
+@@ -0,0 +1,67 @@
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
++#if !defined(_GMBUS_TRACE_H_) || defined(TRACE_HEADER_MULTI_READ)
++#define _GMBUS_TRACE_H_
++
++#include <linux/tracepoint.h>
++
++#undef TRACE_SYSTEM
++#define TRACE_SYSTEM gmbus
++#define TRACE_INCLUDE_FILE gmbus_trace
++
++/* object tracking */
++
++TRACE_EVENT(gmbus_reg_rw,
++           TP_PROTO(bool write, u32 reg, u64 val, int len),
++
++           TP_ARGS(write, reg, val, len),
++
++           TP_STRUCT__entry(
++                   __field(u64, val)
++                   __field(u32, reg)
++                   __field(u16, write)
++                   __field(u16, len)
++                   ),
++
++           TP_fast_assign(
++                   __entry->val = (u64)val;
++                   __entry->reg = reg;
++                   __entry->write = write;
++                   __entry->len = len;
++                   ),
++
++           TP_printk("%s reg=0x%x, len=%d, val=(0x%x, 0x%x)",
++                     __entry->write ? "write" : "read",
++		     __entry->reg, __entry->len,
++		     (u32)(__entry->val & 0xffffffff),
++		     (u32)(__entry->val >> 32))
++);
++
++#endif /* _GMBUS_TRACE_H_ */
++
++/* This part must be outside protection */
++#undef TRACE_INCLUDE_PATH
++#define TRACE_INCLUDE_PATH ../../drivers/gpu/drm/i915
++#include <trace/define_trace.h>
+diff --git a/drivers/gpu/drm/i915/intel_i2c.c b/drivers/gpu/drm/i915/intel_i2c.c
+new file mode 100644
+index 000000000000..a32ba40f21f2
+--- /dev/null
++++ b/drivers/gpu/drm/i915/intel_i2c.c
+@@ -0,0 +1,972 @@
++/* * Copyright (c) 2010 - 2012 Intel Corporation.
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++/*
++ * Copyright (c) 2006 Dave Airlie <airlied@linux.ie>
++ * Copyright © 2006-2008,2010 Intel Corporation
++ *   Jesse Barnes <jesse.barnes@intel.com>
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice (including the next
++ * paragraph) shall be included in all copies or substantial portions of the
++ * Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ *
++ * Authors:
++ *	Eric Anholt <eric@anholt.net>
++ *	Chris Wilson <chris@chris-wilson.co.uk>
++ */
++#include <linux/i2c.h>
++#include <linux/i2c-algo-bit.h>
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/module.h>
++#include <linux/delay.h>
++#include <linux/slab.h>
++#include <linux/jiffies.h>
++#ifndef CONFIG_X86_EARLYMIC
++#include "drmP.h"
++#include "drm.h"
++#include "intel_drv.h"
++#include "i915_drm.h"
++#include "i915_drv.h"
++#endif
++#include "intel_i2c.h"  /* self-contained: DBOX/GMBUS regs, I915_GMBUS_READ/WRITE */
++
++/* Intel GPIO access functions */
++
++#define I2C_RISEFALL_TIME 20
++#define DELAY_75_USECS 75
++
++static void __iomem *dbox_mmio_base;
++static int gmbus_i2c_adap_id[GMBUS_NUM_PORTS];
++#ifdef CONFIG_X86_EARLYMIC
++/* On 3.4 this came from intel_drv.h; the KNC standalone build (no DRM) needs only
++ * the HW-gmbus-engine fields. */
++struct intel_gmbus {
++	struct i2c_adapter adapter;
++	u32 reg0;
++	struct i2c_adapter *force_bit;	/* always NULL on KNC */
++};
++#endif
++
++static void intel_dealloc_gmbus(struct intel_gmbus *gmbus);
++
++atomic_t exception_flag = ATOMIC_INIT(0);
++
++static inline struct intel_gmbus *
++to_intel_gmbus(struct i2c_adapter *i2c)
++{
++	return container_of(i2c, struct intel_gmbus, adapter);
++}
++
++#ifndef CONFIG_X86_EARLYMIC
++struct intel_gpio {
++	struct i2c_adapter adapter;
++	struct i2c_algo_bit_data algo;
++	struct drm_i915_private *dev_priv;
++	u32 reg;
++};
++
++void
++intel_i2c_reset(struct drm_device *dev)
++{
++	struct drm_i915_private *dev_priv = dev->dev_private;
++	if (HAS_PCH_SPLIT(dev))
++		I915_GMBUS_WRITE(PCH_GMBUS0, 0);
++	else
++		I915_GMBUS_WRITE(GMBUS0, 0);
++}
++
++static void intel_i2c_quirk_set(struct drm_i915_private *dev_priv, bool enable)
++{
++	u32 val;
++
++	/* When using bit bashing for I2C, this bit needs to be set to 1 */
++	if (!IS_PINEVIEW(dev_priv->dev))
++		return;
++
++	val = I915_GMBUS_READ(DSPCLK_GATE_D);
++	if (enable)
++		val |= DPCUNIT_CLOCK_GATE_DISABLE;
++	else
++		val &= ~DPCUNIT_CLOCK_GATE_DISABLE;
++	I915_GMBUS_WRITE(DSPCLK_GATE_D, val);
++}
++
++static u32 get_reserved(struct intel_gpio *gpio)
++{
++	struct drm_i915_private *dev_priv = gpio->dev_priv;
++	struct drm_device *dev = dev_priv->dev;
++	u32 reserved = 0;
++
++	/* On most chips, these bits must be preserved in software. */
++	if (!IS_I830(dev) && !IS_845G(dev))
++		reserved = I915_GMBUS_READ_NOTRACE(gpio->reg) &
++					     (GPIO_DATA_PULLUP_DISABLE |
++					      GPIO_CLOCK_PULLUP_DISABLE);
++
++	return reserved;
++}
++
++static int get_clock(void *data)
++{
++	struct intel_gpio *gpio = data;
++	struct drm_i915_private *dev_priv = gpio->dev_priv;
++	u32 reserved = get_reserved(gpio);
++	I915_GMBUS_WRITE_NOTRACE(gpio->reg, reserved | GPIO_CLOCK_DIR_MASK);
++	I915_GMBUS_WRITE_NOTRACE(gpio->reg, reserved);
++	return (I915_GMBUS_READ_NOTRACE(gpio->reg) & GPIO_CLOCK_VAL_IN) != 0;
++}
++
++static int get_data(void *data)
++{
++	struct intel_gpio *gpio = data;
++	struct drm_i915_private *dev_priv = gpio->dev_priv;
++	u32 reserved = get_reserved(gpio);
++	I915_GMBUS_WRITE_NOTRACE(gpio->reg, reserved | GPIO_DATA_DIR_MASK);
++	I915_GMBUS_WRITE_NOTRACE(gpio->reg, reserved);
++	return (I915_GMBUS_READ_NOTRACE(gpio->reg) & GPIO_DATA_VAL_IN) != 0;
++}
++
++static void set_clock(void *data, int state_high)
++{
++	struct intel_gpio *gpio = data;
++	struct drm_i915_private *dev_priv = gpio->dev_priv;
++	u32 reserved = get_reserved(gpio);
++	u32 clock_bits;
++
++	if (state_high)
++		clock_bits = GPIO_CLOCK_DIR_IN | GPIO_CLOCK_DIR_MASK;
++	else
++		clock_bits = GPIO_CLOCK_DIR_OUT | GPIO_CLOCK_DIR_MASK |
++			GPIO_CLOCK_VAL_MASK;
++
++	I915_GMBUS_WRITE_NOTRACE(gpio->reg, reserved | clock_bits);
++	POSTING_READ(gpio->reg);
++}
++
++static void set_data(void *data, int state_high)
++{
++	struct intel_gpio *gpio = data;
++	struct drm_i915_private *dev_priv = gpio->dev_priv;
++	u32 reserved = get_reserved(gpio);
++	u32 data_bits;
++
++	if (state_high)
++		data_bits = GPIO_DATA_DIR_IN | GPIO_DATA_DIR_MASK;
++	else
++		data_bits = GPIO_DATA_DIR_OUT | GPIO_DATA_DIR_MASK |
++			GPIO_DATA_VAL_MASK;
++
++	I915_GMBUS_WRITE_NOTRACE(gpio->reg, reserved | data_bits);
++	POSTING_READ(gpio->reg);
++}
++
++static struct i2c_adapter *
++intel_gpio_create(struct drm_i915_private *dev_priv, u32 pin)
++{
++	static const int map_pin_to_reg[] = {
++		0,
++		GPIOB,
++		GPIOA,
++		GPIOC,
++		GPIOD,
++		GPIOE,
++		0,
++		GPIOF,
++	};
++	struct intel_gpio *gpio;
++
++	if (pin >= ARRAY_SIZE(map_pin_to_reg) || !map_pin_to_reg[pin])
++		return NULL;
++
++	gpio = kzalloc(sizeof(struct intel_gpio), GFP_KERNEL);
++	if (gpio == NULL)
++		return NULL;
++
++	gpio->reg = map_pin_to_reg[pin];
++	if (HAS_PCH_SPLIT(dev_priv->dev))
++		gpio->reg += PCH_GPIOA - GPIOA;
++	gpio->dev_priv = dev_priv;
++
++	snprintf(gpio->adapter.name, sizeof(gpio->adapter.name),
++		 "i915 GPIO%c", "?BACDE?F"[pin]);
++	gpio->adapter.owner = THIS_MODULE;
++	gpio->adapter.algo_data	= &gpio->algo;
++	gpio->adapter.dev.parent = &dev_priv->dev->pdev->dev;
++	gpio->algo.setsda = set_data;
++	gpio->algo.setscl = set_clock;
++	gpio->algo.getsda = get_data;
++	gpio->algo.getscl = get_clock;
++	gpio->algo.udelay = I2C_RISEFALL_TIME;
++	gpio->algo.timeout = usecs_to_jiffies(2200);
++	gpio->algo.data = gpio;
++
++	if (i2c_bit_add_bus(&gpio->adapter))
++		goto out_free;
++
++	return &gpio->adapter;
++
++out_free:
++	kfree(gpio);
++	return NULL;
++}
++
++static int
++intel_i2c_quirk_xfer(struct drm_i915_private *dev_priv,
++		     struct i2c_adapter *adapter,
++		     struct i2c_msg *msgs,
++		     int num)
++{
++	struct intel_gpio *gpio = container_of(adapter,
++					       struct intel_gpio,
++					       adapter);
++	int ret;
++
++	intel_i2c_reset(dev_priv->dev);
++
++	intel_i2c_quirk_set(dev_priv, true);
++	set_data(gpio, 1);
++	set_clock(gpio, 1);
++	udelay(I2C_RISEFALL_TIME);
++
++	ret = adapter->algo->master_xfer(adapter, msgs, num);
++
++	set_data(gpio, 1);
++	set_clock(gpio, 1);
++	intel_i2c_quirk_set(dev_priv, false);
++
++	return ret;
++}
++#endif /* !CONFIG_X86_EARLYMIC (bitbang/GPIO path) */
++
++/**
++ * dummy_read_dbox_regs() - Reads two DBOX registers to recover from
++ * corruption of DBOX registers caused due to clock ratio changes.
++ * HSD # 4118169.
++ */
++static inline void
++dummy_read_dbox_regs(void)
++{
++	I915_GMBUS_READ(DBOX_ADAK_CTRL_REG);
++	I915_GMBUS_READ(DBOX_SW_FLAG_REG);
++}
++
++/**
++ * release_gmbus_hw_mutex() - Releases the GMBUS HW mutex.
++ * @reg_offset - In certain architectures (with gen 5 and 6 render engines).
++ *		the GMBUS registers are at a different offsets from the base.
++ *		reg_offset is the difference in offsets.
++ */
++static inline void 
++release_gmbus_hw_mutex(int reg_offset)
++{
++	/* Read two DBOX registers to recover from any corruption of DBOX */
++	dummy_read_dbox_regs();
++	/* Release the HW mutex by setting the INUSE bit (15) in GMBUS2 reg */
++	I915_GMBUS_WRITE(GMBUS2 + reg_offset, GMBUS_INUSE);
++}
++
++/**
++ * gmbus_reset() - Resets the GMBUS HW Engine.
++ * @reg_offset - In certain architectures (with gen 5 and 6 render engines).
++ *		the GMBUS registers are at a different offsets from the base.
++ *		reg_offset is the difference in offsets.
++ */
++static inline void
++gmbus_reset(int reg_offset)
++{
++	/* Toggle the Software Clear Interrupt bit. This has the effect
++	 * of resetting the GMBUS controller and also clearing the
++	 * BUS_ERROR if raised by the slave's NAK.
++	 */
++	I915_GMBUS_WRITE(GMBUS1 + reg_offset, GMBUS_SW_CLR_INT);
++	I915_GMBUS_WRITE(GMBUS1 + reg_offset, 0);
++}
++
++/*
++ * gmbus_xfer_wait_for_hw_rdy() - Wait for HW_RDY bit to be set after initiating
++ *					a GMBUS I2C read or write.
++ * @reg_offset - In certain architectures (with gen 5 and 6 render engines).
++ *		the GMBUS registers are at a different offsets from the base.
++ *		reg_offset is the difference in offsets.
++ */
++static int
++gmbus_xfer_wait_for_hw_rdy(int reg_offset)
++{
++	uint16_t count = 0;
++	uint32_t reg_val;
++
++	do {
++		/* Read two DBOX registers to recover from any corruption of
++		   DBOX registers which can cause a register read to return 0
++		   even though the register contains non-zero value.
++		*/
++		if (count == 499)
++			dummy_read_dbox_regs();
++
++		reg_val = I915_GMBUS_READ(GMBUS2 + reg_offset);
++		if (reg_val & (GMBUS_STALL_TIMEOUT | GMBUS_SATOER))
++			return GMBUS_I2C_SACK_TO_ERR;
++		if (reg_val & GMBUS_HW_RDY)
++			return 0;
++		udelay(DELAY_75_USECS);
++	} while (++count < 500);  /* Timeout set at approx 37.5 ms */
++	return GMBUS_I2C_TIMEOUT_ERR;
++}
++
++/*
++ * gmbus_start_i2c_xfer() - Initiate a GMBUS I2C transfer by writing to the 
++ *				GMBUS command register.
++ * @reg_offset - In certain architectures (with gen 5 and 6 render engines).
++ *		the GMBUS registers are at a different offsets from the base.
++ *		reg_offset is the difference in offsets.
++ * @byte_count - No of bytes to be transferred in the cycle.
++ * @addr       - Slave device address.
++ * @flags      - GMBUS_SLAVE_READ / GMBUS_SLAVE_WRITE for a read/write transfer
++ */
++static inline void 
++gmbus_start_i2c_xfer(int reg_offset, uint16_t byte_count, uint16_t addr, 
++								uint32_t flags)
++{
++	I915_GMBUS_WRITE(GMBUS1 + reg_offset, (GMBUS_SW_RDY | GMBUS_ENT |
++					GMBUS_CYCLE_INDEX | GMBUS_CYCLE_WAIT | 
++					(byte_count << GMBUS_BYTE_COUNT_SHIFT) |
++					(addr << GMBUS_SLAVE_ADDR_SHIFT) | 
++					flags));
++}
++
++/*
++ * gmbus_stop_i2c_xfer() - End the I2C transaction by sending a STOP bit. 
++ * 		This is accomplished by writing to the GMBUS command register.
++ * @reg_offset - In certain architectures (with gen 5 and 6 render engines).
++ *		the GMBUS registers are at a different offsets from the base.
++ *		reg_offset is the difference in offsets.
++ */
++static inline void
++gmbus_stop_i2c_xfer(int reg_offset)
++{
++	I915_GMBUS_WRITE(GMBUS1 + reg_offset,(GMBUS_SW_RDY | GMBUS_CYCLE_STOP));
++	if (wait_for_atomic(!(I915_GMBUS_READ(GMBUS2 + reg_offset) & 
++						GMBUS_ACTIVE), 5))
++		printk(KERN_ERR "GMBUS timed out after sending a stop bit\n");
++}
++
++/*
++ * GMBUS I2C read/write transfer function.
++ */
++static int
++gmbus_xfer_read_write(uint16_t flags, uint16_t len, uint8_t *buf, uint16_t addr,
++								 int reg_offset)
++{
++	int ret;
++	uint8_t first_loop_iter = 1;
++	uint16_t count, byte_count = 0;
++	uint32_t val, loop;
++
++	while (len > 0) {
++		/* byte count (no of bytes to be transferred in a GMBUS cycle)
++		 * is a 9-bit field (max 511) in the GMBUS command register.
++		 */
++		byte_count = min(len, 511);
++		len -= byte_count;
++
++		/* If Machine Check Exception handler wants to use the GMBUS, 
++		 * it sets this flag. Release GMBUS as soon as possible.
++		 */
++		if (atomic_read(&exception_flag) == 1)
++			return GMBUS_I2C_INTERRUPTED;
++
++		if (flags & I2C_M_RD) { /* GMBUS read transaction */
++			gmbus_start_i2c_xfer(reg_offset, byte_count, addr, 
++							GMBUS_SLAVE_READ);
++			do {
++				loop = 0;
++				ret=gmbus_xfer_wait_for_hw_rdy(reg_offset);
++				if (ret != 0)
++					return ret;
++				val = I915_GMBUS_READ(GMBUS3 + reg_offset);
++				do {
++					*buf++ = val & 0xff;
++					val >>= 8;
++				} while (--byte_count && ++loop < 4);
++				/* If exception handler sets this flag and 
++				 * there are pending bytes to be transferred,
++				 * send a stop bit and exit without completing
++				 * the full transfer to release the GMBUS. 
++				 * If the flag is set but no pending bytes, 
++				 * we'll give up the GMBUS as we are done.
++				 */
++				if ((atomic_read(&exception_flag) == 1) && 
++							(len || byte_count)) {
++					gmbus_stop_i2c_xfer(reg_offset);
++					return GMBUS_I2C_INTERRUPTED;
++				}
++			} while (byte_count);
++		}
++		else {  /* GMBUS write transaction */
++			count = byte_count;
++			while (byte_count) {
++				val = loop = 0;
++				do {
++					val |= *buf++ << (8 * loop);
++				} while (--byte_count && ++loop < 4);
++				I915_GMBUS_WRITE(GMBUS3 + reg_offset, val);
++				if (first_loop_iter) {
++					gmbus_start_i2c_xfer(reg_offset, count,
++						addr, GMBUS_SLAVE_WRITE);
++					first_loop_iter = 0;
++				}
++				ret=gmbus_xfer_wait_for_hw_rdy(reg_offset);
++				if (ret != 0)
++					return ret;
++				if ((atomic_read(&exception_flag) == 1) && 
++							(len || byte_count)) {
++					gmbus_stop_i2c_xfer(reg_offset);
++					return GMBUS_I2C_INTERRUPTED;
++				}
++			}
++		}
++	}
++	return 0;
++}
++
++/*
++ * GMBUS I2C transfer function. Can be invoked via i2c_transfer().
++ */
++static int
++gmbus_xfer(struct i2c_adapter *adapter,
++	   struct i2c_msg *msgs,
++	   int num)
++{
++	struct intel_gmbus *bus = container_of(adapter,
++					       struct intel_gmbus,
++					       adapter);
++#ifdef CONFIG_X86_EARLYMIC
++	void *dev_priv = adapter->algo_data;	/* NULL on KNC (HW gmbus engine) */
++#else
++	struct drm_i915_private *dev_priv = adapter->algo_data;
++#endif
++	int i, reg_offset, num_msgs=0, ret;
++
++#ifndef CONFIG_X86_EARLYMIC
++	if (bus->force_bit)
++		return intel_i2c_quirk_xfer(dev_priv,
++					    bus->force_bit, msgs, num);
++	if (dev_priv)
++		reg_offset = HAS_PCH_SPLIT(dev_priv->dev) ? 
++						PCH_GMBUS0 - GMBUS0 : 0;
++	else
++#endif
++		reg_offset = 0;
++
++	I915_GMBUS_WRITE(GMBUS0 + reg_offset, bus->reg0);
++	I915_GMBUS_WRITE(GMBUS5 + reg_offset, 0);
++
++	/* Check if the GMBUS is already in use by reading the GMBUS HW mutex.
++	 * If mutex is free, the read returns GMBUS not in use and also 
++	 * acquires the HW mutex.
++	 */
++	if (wait_for(!(I915_GMBUS_READ(GMBUS2+reg_offset) & GMBUS_INUSE), 100))
++		return GMBUS_I2C_TIMEOUT_ERR;
++
++	/* Reset the GMBUS before every transaction */
++	gmbus_reset(reg_offset);
++
++	for (i = 0; i < num; i++) {
++		if (msgs[i].len == 0 || msgs[i].buf == NULL)
++			continue;
++		num_msgs++;
++		ret = gmbus_xfer_read_write(msgs[i].flags, msgs[i].len, 
++					msgs[i].buf, msgs[i].addr, reg_offset);
++		if (ret == GMBUS_I2C_TIMEOUT_ERR) {
++			goto timeout;
++		}
++		else if (ret == GMBUS_I2C_SACK_TO_ERR) {
++			goto clear_err;
++		}
++		else if (ret == GMBUS_I2C_INTERRUPTED) {
++			printk(KERN_INFO "GMBUS I2C transaction interrupted\n");
++			release_gmbus_hw_mutex(reg_offset);
++			return GMBUS_I2C_INTERRUPTED;
++		}
++		if (i + 1 < num) {
++			if (wait_for_atomic(I915_GMBUS_READ(GMBUS2 + reg_offset)
++						 & GMBUS_HW_WAIT_PHASE, 10))
++				goto timeout;
++		}
++		else {
++			gmbus_stop_i2c_xfer(reg_offset);
++		}
++	}
++
++	goto done;
++
++clear_err:
++	printk(KERN_ERR "Slave Ack time-out Err \n");
++	gmbus_reset(reg_offset);
++	release_gmbus_hw_mutex(reg_offset);
++	return GMBUS_I2C_SACK_TO_ERR;
++done:
++	/* Mark the GMBUS interface as disabled. We will re-enable it at the
++	 * start of the next xfer, till then let it sleep.
++	 */
++	I915_GMBUS_WRITE(GMBUS0 + reg_offset, 0);
++	release_gmbus_hw_mutex(reg_offset);
++	return num_msgs;
++
++timeout:
++	gmbus_reset(reg_offset);
++	release_gmbus_hw_mutex(reg_offset);
++#ifndef CONFIG_X86_EARLYMIC
++	printk(KERN_INFO "GMBUS timed out, falling back to bit banging on pin %d [%s]\n",
++		 bus->reg0 & 0xff, bus->adapter.name);
++	I915_GMBUS_WRITE(GMBUS0 + reg_offset, 0);
++
++	/* Hardware may not support GMBUS over these pins? Try GPIO bitbanging instead. */
++	bus->force_bit = intel_gpio_create(dev_priv, bus->reg0 & 0xff);
++	if (!bus->force_bit)
++		return -ENOMEM;
++
++	return intel_i2c_quirk_xfer(dev_priv, bus->force_bit, msgs, num);
++#else
++	printk(KERN_ERR "GMBUS timed out \n");
++	return GMBUS_I2C_TIMEOUT_ERR;
++#endif
++}
++
++static u32 gmbus_func(struct i2c_adapter *adapter)
++{
++	struct intel_gmbus *bus = container_of(adapter,
++					       struct intel_gmbus,
++					       adapter);
++
++#ifndef CONFIG_X86_EARLYMIC
++	if (bus->force_bit)
++		bus->force_bit->algo->functionality(bus->force_bit);
++#endif
++
++	return (I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL |
++		/* I2C_FUNC_10BIT_ADDR | */
++		I2C_FUNC_SMBUS_READ_BLOCK_DATA |
++		I2C_FUNC_SMBUS_BLOCK_PROC_CALL);
++}
++
++static const struct i2c_algorithm gmbus_algorithm = {
++	.master_xfer	= gmbus_xfer,
++	.functionality	= gmbus_func
++};
++
++static int 
++intel_alloc_init_gmbus(const char *names[GMBUS_NUM_PORTS], 
++			struct device *parent, void *algo_data, 
++			uint32_t gmbus_rate, struct intel_gmbus **gmbus_ptr)
++{
++	int i, ret;
++	struct intel_gmbus *gmbus;
++
++	*gmbus_ptr = NULL;
++	gmbus = kcalloc(sizeof(struct intel_gmbus),GMBUS_NUM_PORTS,GFP_KERNEL);
++	if (!gmbus)
++		return -ENOMEM;
++
++	for (i = 0; i < GMBUS_NUM_PORTS; i++) {
++		struct intel_gmbus *bus = &gmbus[i];
++
++		bus->adapter.owner = THIS_MODULE;
++		snprintf(bus->adapter.name,
++			 sizeof(bus->adapter.name),
++			 "i915 gmbus %s",
++			 names[i]);
++
++		bus->adapter.dev.parent = parent;
++		bus->adapter.algo_data = algo_data;
++
++		bus->adapter.algo = &gmbus_algorithm;
++		ret = i2c_add_adapter(&bus->adapter);
++		if (ret)
++			goto err;
++		bus->reg0 = i | gmbus_rate | GMBUS_HOLD_EXT;
++		bus->force_bit = 0;
++	}
++
++	*gmbus_ptr = gmbus;
++	return 0;
++
++err:
++	while (--i) {
++		struct intel_gmbus *bus = &gmbus[i];
++		i2c_del_adapter(&bus->adapter);
++	}
++	kfree(gmbus);
++	return ret;
++}
++
++/**
++ * intel_gmbus_setup - instantiate all Intel i2c GMBuses
++ * @dev: DRM device
++ */
++#ifndef CONFIG_X86_EARLYMIC
++int intel_setup_gmbus(struct drm_device *dev)
++{
++	static const char *names[GMBUS_NUM_PORTS] = {
++		"disabled",
++		"ssc",
++		"vga",
++		"panel",
++		"dpc",
++		"dpb",
++		"reserved",
++		"dpd",
++	};
++	struct drm_i915_private *dev_priv = dev->dev_private;
++	int ret, i;
++
++	ret = intel_alloc_init_gmbus(names, &dev->pdev->dev, 
++					dev_priv, GMBUS_RATE_100KHZ, 
++					&dev_priv->gmbus);
++	if (ret != 0)
++		return ret;
++
++	for (i = 0; i < GMBUS_NUM_PORTS; i++) {
++		struct intel_gmbus *bus = &dev_priv->gmbus[i];
++		/* XXX force bit banging until GMBUS is fully debugged */
++		bus->force_bit = intel_gpio_create(dev_priv, i);
++	}
++
++	intel_i2c_reset(dev_priv->dev);
++	return ret;
++}
++#endif /* !CONFIG_X86_EARLYMIC */
++
++static int intel_gmbus_probe(struct platform_device* pdev)
++{
++	static const char *names[GMBUS_NUM_PORTS] = {
++		"disabled",
++		"dvoa",
++		"dvob",
++		"dvoc",
++		"reserved",
++		"reserved",
++		"reserved",
++		"reserved",
++	};
++	int ret, i;
++	struct intel_gmbus *gmbus;
++
++	ret = intel_alloc_init_gmbus(names, NULL, NULL, GMBUS_RATE_100KHZ,
++								&gmbus);
++	if (ret != 0) {
++		printk(KERN_ERR "GMBUS allocation failed \n");
++		return ret;
++	}
++	dbox_mmio_base = ioremap(DBOX_BASE, COMMON_MMIO_BOX_SIZE);
++	if (!dbox_mmio_base) {
++		intel_dealloc_gmbus(gmbus);
++		printk(KERN_ERR "DBOX MMIO failed \n");
++		return -EIO;
++	}
++	for (i = 0; i < GMBUS_NUM_PORTS; i++)
++		gmbus_i2c_adap_id[i] = i2c_adapter_id(&gmbus[i].adapter);
++	printk(KERN_INFO "GMBUS setup successful \n");
++	gmbus_reset(ZERO_OFFSET);
++	platform_set_drvdata(pdev, gmbus);
++	return 0;
++}
++
++void intel_gmbus_set_speed(struct i2c_adapter *adapter, int speed)
++{
++	struct intel_gmbus *bus = to_intel_gmbus(adapter);
++
++	/* speed:
++	 * 0x0 = 100 KHz
++	 * 0x1 = 50 KHz
++	 * 0x2 = 400 KHz
++	 * 0x3 = 1000 Khz
++	 */
++	bus->reg0 = (bus->reg0 & ~(0x3 << 8)) | (speed << 8);
++}
++
++#ifndef CONFIG_X86_EARLYMIC
++void intel_gmbus_force_bit(struct i2c_adapter *adapter, bool force_bit)
++{
++	struct intel_gmbus *bus = to_intel_gmbus(adapter);
++
++	if (force_bit) {
++		if (bus->force_bit == NULL) {
++			struct drm_i915_private *dev_priv = adapter->algo_data;
++			bus->force_bit = intel_gpio_create(dev_priv,
++							   bus->reg0 & 0xff);
++		}
++	} else {
++		if (bus->force_bit) {
++			i2c_del_adapter(bus->force_bit);
++			kfree(bus->force_bit);
++			bus->force_bit = NULL;
++		}
++	}
++}
++#endif /* !CONFIG_X86_EARLYMIC */
++
++/* 
++ * Release all the resources allocated to GMBUS.
++ */
++static void intel_dealloc_gmbus(struct intel_gmbus *gmbus)
++{
++	int i;	
++	for (i = 0; i < GMBUS_NUM_PORTS; i++) {
++		struct intel_gmbus *bus = &gmbus[i];
++#ifndef CONFIG_X86_EARLYMIC
++		if (bus->force_bit) {
++			i2c_del_adapter(bus->force_bit);
++			kfree(bus->force_bit);
++		}
++#endif
++		i2c_del_adapter(&bus->adapter);
++	}
++	kfree(gmbus);
++}
++
++#ifndef CONFIG_X86_EARLYMIC
++void intel_teardown_gmbus(struct drm_device *dev)
++{
++	struct drm_i915_private *dev_priv = dev->dev_private;
++
++	if (dev_priv->gmbus == NULL)
++		return;
++	intel_dealloc_gmbus(dev_priv->gmbus);
++	dev_priv->gmbus = NULL;
++}
++#endif /* !CONFIG_X86_EARLYMIC */
++
++static void intel_gmbus_remove(struct platform_device* pdev)
++{
++	struct intel_gmbus *gmbus = platform_get_drvdata(pdev);
++
++	iounmap(dbox_mmio_base);
++	if (gmbus != NULL)
++		intel_dealloc_gmbus(gmbus);
++}
++
++/**
++ * gmbus_i2c_read() - Read from an i2c slave device using gmbus hw engine.
++ * @port - which port the device is connected to. 1 - DVOA, 2 - DVOB, 3 - DVOC
++ * @tgt  - 7-bit slave address of the device.
++ *	   This is NOT the read or write address of the device.
++ *         Example : If 0b0001001 is the 7-bit slave address, 
++ *                   read address is 0b00010011, write address is 0b00010010
++ * @index - index of the slave device register to read from.
++ * @buf - address of the buffer to read into.
++ * @len - no of bytes to read.
++ *
++ * @return - no of bytes successfully transferred.
++ *           errno for invalid args or unsuccessful transfer.
++ */
++int 
++gmbus_i2c_read(uint8_t port, uint8_t tgt, uint8_t index, 
++						uint8_t *buf, uint16_t len)
++{
++	int ret;
++	struct i2c_msg mesg;
++	struct i2c_adapter *adap_ptr;
++
++	if ((buf == NULL) || (len == 0))
++	   return -EINVAL;
++
++	if ((port == 0) || (port >= GMBUS_NUM_PORTS))
++	   return -EINVAL;
++
++	mesg.addr = tgt | (index << 7);
++	mesg.flags = I2C_M_RD;
++	mesg.len = len;
++	mesg.buf = buf;
++  
++	adap_ptr = i2c_get_adapter(gmbus_i2c_adap_id[port]);
++	ret = i2c_transfer(adap_ptr, &mesg, 1);
++
++	if (ret == 1) {
++		if ((*(uint32_t *)buf == 0xe0e0e0e0) || (*(uint32_t *)buf == 0xe0e0e0e2)) {
++			printk(KERN_INFO "%s : Invalid data returned from slave: 0x%x due to invalid command: 0x%x \n", __func__, tgt, index);
++			return GMBUS_I2C_INVALID_CMD;
++		}
++		return len;
++	} else {
++		return ret;
++	}
++}
++EXPORT_SYMBOL(gmbus_i2c_read);
++
++/**
++ * gmbus_i2c_write() - Write to an i2c slave device using gmbus hw engine.
++ *                     This function cannot be used in exception context as it
++ *		       may sleep. Use gmbus_i2c_write_atomic() instead.
++ * @port - which port the device is connected to. 1 - DVOA, 2 - DVOB, 3 - DVOC
++ * @tgt  - 7-bit slave address of the device. This is NOT the read or write 
++ *         address of the device.
++ *         Example : If 0b0001001 is the 7-bit slave address, 
++ *                   read address is 0b00010011, write address is 0b00010010
++ * @index - index of the slave device register to write to.
++ * @buf - address of the data buffer to write.
++ * @len - no of bytes to write.
++ *
++ * @return - no of bytes successfully transferred.
++ *           errno for invalid args or unsuccessful transfer.
++ */
++int 
++gmbus_i2c_write(uint8_t port, uint8_t tgt, uint8_t index, 
++						uint8_t *buf, uint16_t len)
++{
++	int ret;
++	struct i2c_msg mesg;
++	struct i2c_adapter *adap_ptr;
++
++	if ((buf == NULL) || (len == 0))
++   		return -EINVAL;
++
++	if ((port == 0) || (port >= GMBUS_NUM_PORTS))
++   		return -EINVAL;
++
++	mesg.addr = tgt | (index << 7);
++	mesg.flags = 0;
++	mesg.len = len;
++	mesg.buf = buf;
++
++	adap_ptr = i2c_get_adapter(gmbus_i2c_adap_id[port]);
++	ret = i2c_transfer(adap_ptr, &mesg, 1);
++
++	if (ret == 1)
++		return len;
++	else
++		return ret;
++}
++EXPORT_SYMBOL(gmbus_i2c_write);
++
++/**
++ * gmbus_i2c_write_atomic() - Write to an i2c slave device using gmbus hw 
++ *			      engine. This function can be called in the
++ *			      atomic context. WARNING: This function may 
++ *			      interrupt a current I2C transaction in progress.
++ * @port - which port the device is connected to. 1 - DVOA, 2 - DVOB, 3 - DVOC
++ * @tgt  - 7-bit slave address of the device. This is NOT the read or write 
++ *         address of the device.
++ *         Example : If 0b0001001 is the 7-bit slave address, 
++ *                   read address is 0b00010011, write address is 0b00010010
++ * @index - index of the slave device register to write to.
++ * @buf - address of the data buffer to write.
++ * @len - no of bytes to write.
++ *
++ * @return - 0 for a successful transfer.
++ *           errno for an unsuccessful transfer.
++ */
++int 
++gmbus_i2c_write_atomic(uint8_t port, uint8_t tgt, uint8_t index, 
++						uint8_t *buf, uint16_t len)
++{
++	uint8_t loop = 0;
++	uint16_t addr = tgt | (index << 7);
++	uint16_t byte_count = len;
++	uint32_t val = 0;
++	int ret = 0;
++
++	/* Set the flag so other thread accessing the GMBUS know that there 
++	 * has been an exception and the exception handler wants to use 
++ 	 * the GMBUS to send an I2C message.
++	 */
++	atomic_set(&exception_flag, 1);
++
++	/* Check if the GMBUS HW mutex is acquired by another thread/process. 
++	 * If not acquired, the read returns not in use and will also acquire
++	 * the HW mutex.
++	 * Any thread that is using the GMBUS keeps checking the exception_flag
++	 * frequently. If the flag is set, it releases the GMBUS ASAP. 
++	 */
++	if (wait_for_atomic(!(I915_GMBUS_READ(GMBUS2) & GMBUS_INUSE), 100)) {
++		printk(KERN_ERR "Time out trying to acquire the GMBUS \n");
++		return GMBUS_I2C_TIMEOUT_ERR;
++	}
++
++	gmbus_reset(ZERO_OFFSET);
++	/* Use DVO Port B, 100 KHz Bus rate */
++	I915_GMBUS_WRITE(GMBUS0, 0x2);
++	do {
++		val |= *buf++ << (8 * loop);
++	} while (--byte_count && ++loop < 4);
++
++	I915_GMBUS_WRITE(GMBUS3, val);
++	gmbus_start_i2c_xfer(ZERO_OFFSET, len, addr, GMBUS_SLAVE_WRITE);
++	ret = gmbus_xfer_wait_for_hw_rdy(ZERO_OFFSET);
++	if (ret == 0)
++		gmbus_stop_i2c_xfer(ZERO_OFFSET);
++	release_gmbus_hw_mutex(ZERO_OFFSET);
++	atomic_set(&exception_flag, 0);
++	return ret;
++}
++EXPORT_SYMBOL(gmbus_i2c_write_atomic);
++
++static struct platform_device intel_gmbus_device = {
++	.name = "i915-gmbus"
++};
++
++static struct platform_driver intel_gmbus_driver = {
++	.probe   = intel_gmbus_probe,
++	.remove  = intel_gmbus_remove,
++	.driver  = {
++		.name = "i915-gmbus",
++	},
++};
++
++static int __init gmbus_init_module(void)
++{
++	int ret;
++	ret = platform_device_register(&intel_gmbus_device);
++	if (ret != 0)
++		return ret;
++	ret = platform_driver_register(&intel_gmbus_driver);
++	return ret;
++}
++
++static void __exit gmbus_exit_module(void)
++{
++	platform_driver_unregister(&intel_gmbus_driver);
++	platform_device_unregister(&intel_gmbus_device);
++}
++
++MODULE_ALIAS("platform:i915-gmbus-i2c");
++MODULE_LICENSE("GPL");
++
++module_init(gmbus_init_module);
++module_exit(gmbus_exit_module);
+diff --git a/drivers/gpu/drm/i915/intel_i2c.h b/drivers/gpu/drm/i915/intel_i2c.h
+new file mode 100644
+index 000000000000..781a369f63e3
+--- /dev/null
++++ b/drivers/gpu/drm/i915/intel_i2c.h
+@@ -0,0 +1,180 @@
++#include <linux/io.h>
++/* * Copyright (c) Intel Corporation (2011).
++*
++* Disclaimer: The codes contained in these modules may be specific to the
++* Intel Software Development Platform codenamed: Knights Ferry, and the 
++* Intel product codenamed: Knights Corner, and are not backward compatible 
++* with other Intel products. Additionally, Intel will NOT support the codes 
++* or instruction set in future products.
++*
++* Intel offers no warranty of any kind regarding the code.  This code is
++* licensed on an "AS IS" basis and Intel is not obligated to provide any support,
++* assistance, installation, training, or other services of any kind.  Intel is 
++* also not obligated to provide any updates, enhancements or extensions.  Intel 
++* specifically disclaims any warranty of merchantability, non-infringement, 
++* fitness for any particular purpose, and any other warranty.
++*
++* Further, Intel disclaims all liability of any kind, including but not
++* limited to liability for infringement of any proprietary rights, relating
++* to the use of the code, even if Intel is notified of the possibility of
++* such liability.  Except as expressly stated in an Intel license agreement
++* provided with this code and agreed upon with Intel, no license, express
++* or implied, by estoppel or otherwise, to any intellectual property rights
++* is granted herein.
++*/
++
++#define CREATE_TRACE_POINTS
++#include "gmbus_trace.h"
++
++#define	GMBUS_I2C_TIMEOUT_ERR	-1
++#define GMBUS_I2C_SACK_TO_ERR	-2
++#define GMBUS_I2C_INTERRUPTED	-3
++#define GMBUS_I2C_INVALID_CMD	-4
++
++#define DBOX_BASE               0x08007C0000ULL
++#define COMMON_MMIO_BOX_SIZE    (1<<16)
++
++#define GMBUS0			0x5100 /* clock/port select */
++#define   GMBUS_RATE_100KHZ	(0<<8)
++#define   GMBUS_RATE_50KHZ	(1<<8)
++#define   GMBUS_RATE_400KHZ	(2<<8) /* reserved on Pineview */
++#define   GMBUS_RATE_1MHZ	(3<<8) /* reserved on Pineview */
++#define   GMBUS_HOLD_EXT	(1<<7) /* 300ns hold time, rsvd on Pineview */
++#define   GMBUS_PORT_DISABLED	0
++#define   GMBUS_PORT_SSC	1
++#define   GMBUS_PORT_VGADDC	2
++#define   GMBUS_PORT_PANEL	3
++#define   GMBUS_PORT_DPC	4 /* HDMIC */
++#define   GMBUS_PORT_DPB	5 /* SDVO, HDMIB */
++				  /* 6 reserved */
++#define   GMBUS_PORT_DPD	7 /* HDMID */
++#define   GMBUS_NUM_PORTS       8
++#define GMBUS1			0x5104 /* command/status */
++#define   GMBUS_SW_CLR_INT	(1<<31)
++#define   GMBUS_SW_RDY		(1<<30)
++#define   GMBUS_ENT		(1<<29) /* enable timeout */
++#define   GMBUS_CYCLE_NONE	(0<<25)
++#define   GMBUS_CYCLE_WAIT	(1<<25)
++#define   GMBUS_CYCLE_INDEX	(2<<25)
++#define   GMBUS_CYCLE_STOP	(4<<25)
++#define   GMBUS_BYTE_COUNT_SHIFT 16
++#define   GMBUS_SLAVE_INDEX_SHIFT 8
++#define   GMBUS_SLAVE_ADDR_SHIFT 1
++#define   GMBUS_SLAVE_READ	(1<<0)
++#define   GMBUS_SLAVE_WRITE	(0<<0)
++#define GMBUS2			0x5108 /* status */
++#define   GMBUS_INUSE		(1<<15)
++#define   GMBUS_HW_WAIT_PHASE	(1<<14)
++#define   GMBUS_STALL_TIMEOUT	(1<<13)
++#define   GMBUS_INT		(1<<12)
++#define   GMBUS_HW_RDY		(1<<11)
++#define   GMBUS_SATOER		(1<<10)
++#define   GMBUS_ACTIVE		(1<<9)
++#define GMBUS3			0x510c /* data buffer bytes 3-0 */
++#define GMBUS4			0x5110 /* interrupt mask (Pineview+) */
++#define   GMBUS_SLAVE_TIMEOUT_EN (1<<4)
++#define   GMBUS_NAK_EN		(1<<3)
++#define   GMBUS_IDLE_EN		(1<<2)
++#define   GMBUS_HW_WAIT_EN	(1<<1)
++#define   GMBUS_HW_RDY_EN	(1<<0)
++#define GMBUS5			0x5120 /* byte index */
++#define   GMBUS_2BYTE_INDEX_EN	(1<<31)
++
++#define ZERO_OFFSET 0
++
++#define DBOX_ADAK_CTRL_REG	0x600
++#define DBOX_SW_FLAG_REG	0x2440
++
++#ifndef CONFIG_X86_EARLYMIC
++
++#define I915_GMBUS_READ8(reg) 	I915_READ8(reg)
++#define I915_GMBUS_WRITE8(reg, val) 	I915_WRITE8(reg, val)
++
++#define I915_GMBUS_READ16(reg) 	I915_READ16(reg)
++#define I915_GMBUS_WRITE16(reg, val) I915_WRITE16(reg, val)
++
++#define I915_GMBUS_READ16_NOTRACE(reg) 	I915_READ16_NOTRACE(reg)
++#define I915_GMBUS_WRITE16_NOTRACE(reg, val)	I915_WRITE16_NOTRACE(reg, val)
++
++#define I915_GMBUS_READ(reg)		I915_READ(reg)
++#define I915_GMBUS_WRITE(reg, val)	I915_WRITE(reg, val)
++
++#define I915_GMBUS_READ_NOTRACE(reg)		I915_READ_NOTRACE(reg)
++#define I915_GMBUS_WRITE_NOTRACE(reg, val)	I915_WRITE_NOTRACE(reg, val)
++
++#define I915_GMBUS_WRITE64(reg, val)	I915_WRITE64(reg, val)
++#define I915_GMBUS_READ64(reg)	I915_READ64(reg)
++
++#else
++
++#define __gmbus_read(x, y) \
++static inline u##x gmbus_read##x(void __iomem *dbox_mmio_base, uint32_t reg) { \
++	u##x val = 0; \
++	val = read##y(dbox_mmio_base + reg); \
++	trace_gmbus_reg_rw(false, reg, val, sizeof(val)); \
++	return val; \
++}
++
++__gmbus_read(8, b)
++__gmbus_read(16, w)
++__gmbus_read(32, l)
++__gmbus_read(64, q)
++#undef __gmbus_read
++
++#define __gmbus_write(x, y) \
++static inline void gmbus_write##x(void __iomem *dbox_mmio_base, uint32_t reg, u##x val) { \
++	trace_gmbus_reg_rw(true, reg, val, sizeof(val)); \
++	write##y(val, dbox_mmio_base + reg); \
++}
++__gmbus_write(8, b)
++__gmbus_write(16, w)
++__gmbus_write(32, l)
++__gmbus_write(64, q)
++#undef __gmbus_write
++
++
++#define I915_GMBUS_READ8(reg)	gmbus_read8(dbox_mmio_base, (reg))
++#define I915_GMBUS_WRITE8(reg, val)	gmbus_write8(dbox_mmio_base, (reg), (val))
++
++#define I915_GMBUS_READ16(reg)	gmbus_read16(dbox_mmio_base, (reg))
++#define I915_GMBUS_WRITE16(reg, val)	gmbus_write16(dbox_mmio_base, (reg), (val))
++
++#define I915_GMBUS_READ16_NOTRACE(reg)	readw(dbox_mmio_base + (reg))
++#define I915_GMBUS_WRITE16_NOTRACE(reg, val)	writew(val, dbox_mmio_base + (reg))
++
++#define I915_GMBUS_READ(reg)		gmbus_read32(dbox_mmio_base, (reg))
++#define I915_GMBUS_WRITE(reg, val)	gmbus_write32(dbox_mmio_base, (reg), (val))
++
++#define I915_GMBUS_READ_NOTRACE(reg)		readl(dbox_mmio_base + (reg))
++#define I915_GMBUS_WRITE_NOTRACE(reg, val)	writel(val, dbox_mmio_base + (reg))
++
++#define I915_GMBUS_READ64(reg)	gmbus_read64(dbox_mmio_base, (reg))
++#define I915_GMBUS_WRITE64(reg, val)	gmbus_write64(dbox_mmio_base, (reg), (val))
++
++
++#ifdef CONFIG_X86_EARLYMIC
++#include <linux/jiffies.h>
++#include <linux/delay.h>
++#ifndef wait_for
++#define wait_for(COND, MS) ({ \
++	unsigned long timeout__ = jiffies + msecs_to_jiffies(MS) + 1; \
++	int ret__ = 0; \
++	while (!(COND)) { \
++		if (time_after(jiffies, timeout__)) { ret__ = -ETIMEDOUT; break; } \
++		msleep(1); \
++	} ret__; })
++#endif
++#ifndef wait_for_atomic
++#define wait_for_atomic(COND, MS) ({ \
++	unsigned long timeout__ = jiffies + msecs_to_jiffies(MS) + 1; \
++	int ret__ = 0; \
++	while (!(COND)) { \
++		if (time_after(jiffies, timeout__)) { ret__ = -ETIMEDOUT; break; } \
++		cpu_relax(); \
++	} ret__; })
++#endif
++#endif /* CONFIG_X86_EARLYMIC */
++
++#endif
++
++
+diff --git a/drivers/i2c/busses/Kconfig b/drivers/i2c/busses/Kconfig
+index aa777ba34edf..e76c8049bdef 100644
+--- a/drivers/i2c/busses/Kconfig
++++ b/drivers/i2c/busses/Kconfig
+@@ -965,6 +965,13 @@ config I2C_OCORES
+ 	  This driver can also be built as a module.  If so, the module
+ 	  will be called i2c-ocores.
+ 
++config I2C_I915_GMBUS
++	tristate "GMBUS driven I2C"
++	select I2C_ALGOBIT
++	help
++	  This is an I2C driver for the GMBUS HW engine. GMBUS is present in
++	  the I915 hardware, but also reused in MIC.
++
+ config I2C_OMAP
+ 	tristate "OMAP I2C adapter"
+ 	depends on ARCH_OMAP || ARCH_K3 || COMPILE_TEST

@@ -1,0 +1,301 @@
+From bade03c5fbbd22603b2d008720d0bc31254f1fe4 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 28 Sep 2026 09:57:34 +0200
+Subject: [PATCH 09/16] x86/mce: machine-check interception hooks for the KNC
+ RAS module
+
+From Intel MPSS 3.8.6. The micras card module handles machine checks
+itself (SMC telemetry, MCA bank decoding, host notification):
+ - mce/core.c: the mca_poll/mca_exc_{entry,flt,log,exit,panic}/
+   mca_print hook pointers and the do_mca_* callouts woven into
+   machine_check_poll(), do_machine_check() and mce_panic();
+   mce_entry, the mcelog buffer and mce_chrdev_read_mutex exported.
+ - nmi.c: mca_nmi first pass on the NMI (un-core MC events) and the
+   mca_inject flag.
+ - cpu/common.c: KNC does not advertise MCE/MCA in CPUID but
+   implements the MCA bank MSRs; the caps are forced so
+   mce_available() is true and mcheck_cpu_init() runs.
+
+Adaptations for 6.18: the callouts follow the noinstr
+do_machine_check() of 5.10/6.1 (mce_entry balanced on out:,
+do_mca_poll at clear_it:, the 4.4 lmce path, the mce_hw_err wrapper,
+mce_rdmsrq); mcelog is an allocated buffer in dev-mcelog.c (4.12);
+the KDB NMI hook next to mca_nmi is dropped with KDB.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ arch/x86/include/asm/mce.h           |  2 +
+ arch/x86/kernel/cpu/common.c         |  9 +++
+ arch/x86/kernel/cpu/mce/core.c       | 95 +++++++++++++++++++++++++++-
+ arch/x86/kernel/cpu/mce/dev-mcelog.c | 10 ++-
+ arch/x86/kernel/nmi.c                | 16 +++++
+ 5 files changed, 129 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/include/asm/mce.h b/arch/x86/include/asm/mce.h
+index 31e3cb550fb3..a0cc0220e0ed 100644
+--- a/arch/x86/include/asm/mce.h
++++ b/arch/x86/include/asm/mce.h
+@@ -236,6 +236,8 @@ static inline void enable_copy_mc_fragile(void)
+ {
+ }
+ #endif
++/* KNC RAS: re-added (3.16 dropped it); used by intelmic.c crash path and micras */
++extern atomic_t mce_entry;
+ 
+ struct cper_ia_proc_ctx;
+ 
+diff --git a/arch/x86/kernel/cpu/common.c b/arch/x86/kernel/cpu/common.c
+index fae8948a6c9b..39645f723690 100644
+--- a/arch/x86/kernel/cpu/common.c
++++ b/arch/x86/kernel/cpu/common.c
+@@ -1984,6 +1984,15 @@ static void identify_cpu(struct cpuinfo_x86 *c)
+ 	generic_identify(c);
+ 
+ 	cpu_parse_topology(c);
++#ifdef CONFIG_X86_EARLYMIC
++	/*
++	 * KNC does not advertise MCE/MCA in CPUID, but it does implement the MCA
++	 * bank MSRs; force the caps so mce_available() is true and mcheck inits
++	 * (required for RAS/micras machine-check interception).
++	 */
++	set_cpu_cap(c, X86_FEATURE_MCA);
++	set_cpu_cap(c, X86_FEATURE_MCE);
++#endif
+ 
+ 	if (this_cpu->c_identify)
+ 		this_cpu->c_identify(c);
+diff --git a/arch/x86/kernel/cpu/mce/core.c b/arch/x86/kernel/cpu/mce/core.c
+index 460e90a1a0b1..e883608a653f 100644
+--- a/arch/x86/kernel/cpu/mce/core.c
++++ b/arch/x86/kernel/cpu/mce/core.c
+@@ -66,6 +66,11 @@ static DEFINE_MUTEX(mce_sysfs_mutex);
+ 
+ #define SPINUNIT		100	/* 100ns */
+ 
++atomic_t mce_entry;
++#ifdef CONFIG_X86_EARLYMIC
++EXPORT_SYMBOL_GPL(mce_entry);
++#endif
++
+ DEFINE_PER_CPU(unsigned, mce_exception_count);
+ 
+ DEFINE_PER_CPU_READ_MOSTLY(unsigned int, mce_num_banks);
+@@ -83,6 +88,65 @@ static struct mce_bank_dev mce_bank_devs[MAX_NR_BANKS];
+ 
+ struct mce_vendor_flags mce_flags __read_mostly;
+ 
++#ifdef CONFIG_X86_EARLYMIC
++/*
++ * KNC RAS intercept hooks. micras registers these to receive MC events and to
++ * report the CTL bank register the generic handler ignores. Exported so the
++ * out-of-tree micras module can set them; null when micras is not loaded.
++ */
++void (*mca_poll)(struct mce *, uint64_t, int);
++void (*mca_exc_flt)(struct mce *, uint64_t, int);
++void (*mca_exc_entry)(struct mce *, int, int, int, char *);
++void (*mca_exc_log)(struct mce *, uint64_t, int, int, char *, int, int);
++void (*mca_exc_panic)(struct mce *, char *, char *, int);
++void (*mca_exc_exit)(struct mce *, int, int, int, int);
++int  (*mca_print)(char *, ...) __attribute__((format(printf, 1, 2)));
++EXPORT_SYMBOL_GPL(mca_poll);
++EXPORT_SYMBOL_GPL(mca_exc_flt);
++EXPORT_SYMBOL_GPL(mca_exc_entry);
++EXPORT_SYMBOL_GPL(mca_exc_log);
++EXPORT_SYMBOL_GPL(mca_exc_panic);
++EXPORT_SYMBOL_GPL(mca_exc_exit);
++EXPORT_SYMBOL_GPL(mca_print);
++int mce_disabled __read_mostly;		/* mirrors mca_cfg.disabled for micras */
++EXPORT_SYMBOL_GPL(mce_disabled);
++
++#define __do_mca_callout(which, ...)	do { if (which) which(__VA_ARGS__); } while (0)
++#define do_mca_exc_entry(...) __do_mca_callout(mca_exc_entry, __VA_ARGS__)
++#define do_mca_exc_panic(...) __do_mca_callout(mca_exc_panic, __VA_ARGS__)
++#define do_mca_exc_exit(...)  __do_mca_callout(mca_exc_exit,  __VA_ARGS__)
++#define do_mca_print(...)     __do_mca_callout(mca_print,     __VA_ARGS__)
++static inline void do_mca_exc_flt(struct mce *mce, int fake)
++{
++	u64 ctl;
++	if (mca_exc_flt) {
++		ctl = mce_rdmsrq(MSR_IA32_MCx_CTL(mce->bank));
++		if (mce->status & MCI_STATUS_MISCV)
++			mce->misc = mce_rdmsrq(MSR_IA32_MCx_MISC(mce->bank));
++		if (mce->status & MCI_STATUS_ADDRV)
++			mce->addr = mce_rdmsrq(MSR_IA32_MCx_ADDR(mce->bank));
++		mca_exc_flt(mce, ctl, fake);
++	}
++}
++static inline void do_mca_poll(struct mce *mce, int fake)
++{
++	u64 ctl;
++	if (mca_poll) {
++		ctl = mce_rdmsrq(MSR_IA32_MCx_CTL(mce->bank));
++		mca_poll(mce, ctl, fake);
++	}
++}
++static inline void do_mca_exc_log(struct mce *mce, int fake, int nwo,
++				  char *msg, int bad, int worst)
++{
++	u64 ctl;
++	if (mca_exc_log) {
++		ctl = mce_rdmsrq(MSR_IA32_MCx_CTL(mce->bank));
++		mca_exc_log(mce, ctl, fake, nwo, msg, bad, worst);
++	}
++}
++#endif
++
+ struct mca_config mca_cfg __read_mostly = {
+ 	.bootlog  = -1,
+ 	.monarch_timeout = -1
+@@ -272,6 +336,9 @@ static noinstr void mce_panic(const char *msg, struct mce_hw_err *final, char *e
+ 	 * matters a whole lot since the machine is going to panic anyway.
+ 	 */
+ 	instrumentation_begin();
++#ifdef CONFIG_X86_EARLYMIC
++	do_mca_exc_panic(&final->m, msg, exp, fake_panic);	/* 6.15: mce_hw_err */
++#endif
+ 
+ 	if (!fake_panic) {
+ 		/*
+@@ -839,6 +906,9 @@ void machine_check_poll(enum mcp_flags flags, mce_banks_t *b)
+ 			mce_log(&err);
+ 
+ clear_it:
++#ifdef CONFIG_X86_EARLYMIC
++		do_mca_poll(m, __this_cpu_read(injectm.finished));
++#endif
+ 		clear_bank(m);
+ 	}
+ 
+@@ -1354,8 +1424,12 @@ __mc_scan_banks(struct mce_hw_err *err, struct pt_regs *regs,
+ 		 * machine_check_poll(). Leave them alone, unless this panics.
+ 		 */
+ 		if (!(m->status & (cfg->ser ? MCI_STATUS_S : MCI_STATUS_UC)) &&
+-			!no_way_out)
++			!no_way_out) {
++#ifdef CONFIG_X86_EARLYMIC
++			do_mca_exc_flt(m, __this_cpu_read(injectm.finished));
++#endif
+ 			continue;
++		}
+ 
+ 		/* Set taint even when machine check was not enabled. */
+ 		taint++;
+@@ -1524,6 +1598,9 @@ static noinstr void unexpected_machine_check(struct pt_regs *regs)
+ noinstr void do_machine_check(struct pt_regs *regs)
+ {
+ 	int worst = 0, order, no_way_out, kill_current_task, lmce, taint = 0;
++#ifdef CONFIG_X86_EARLYMIC
++	int entry = 0, fake = 0;
++#endif
+ 	DECLARE_BITMAP(valid_banks, MAX_NR_BANKS) = { 0 };
+ 	DECLARE_BITMAP(toclear, MAX_NR_BANKS) = { 0 };
+ 	struct mce_hw_err *final;
+@@ -1564,6 +1641,10 @@ noinstr void do_machine_check(struct pt_regs *regs)
+ 	 * on Intel.
+ 	 */
+ 	lmce = 1;
++#ifdef CONFIG_X86_EARLYMIC
++	entry = atomic_inc_return(&mce_entry);
++	fake = __this_cpu_read(injectm.finished);
++#endif
+ 
+ 	this_cpu_inc(mce_exception_count);
+ 
+@@ -1606,8 +1687,14 @@ noinstr void do_machine_check(struct pt_regs *regs)
+ 	} else {
+ 		order = mce_start(&no_way_out);
+ 	}
++#ifdef CONFIG_X86_EARLYMIC
++	do_mca_exc_entry(m, fake, no_way_out, entry, msg);
++#endif
+ 
+ 	taint = __mc_scan_banks(&err, regs, final, toclear, valid_banks, no_way_out, &worst);
++#ifdef CONFIG_X86_EARLYMIC
++	do_mca_exc_log(m, fake, no_way_out, msg, worst, worst);
++#endif
+ 
+ 	if (!no_way_out)
+ 		mce_clear_state(toclear);
+@@ -1638,6 +1725,9 @@ noinstr void do_machine_check(struct pt_regs *regs)
+ 			mce_panic("Local fatal machine check!", &err, msg);
+ 		}
+ 	}
++#ifdef CONFIG_X86_EARLYMIC
++	do_mca_exc_exit(m, no_way_out, worst, entry, order);
++#endif
+ 
+ 	/*
+ 	 * Enable instrumentation around the external facilities like task_work_add()
+@@ -1701,6 +1791,9 @@ noinstr void do_machine_check(struct pt_regs *regs)
+ 
+ out:
+ 	instrumentation_end();
++#ifdef CONFIG_X86_EARLYMIC
++	atomic_dec(&mce_entry);
++#endif
+ 
+ clear:
+ 	mce_wrmsrq(MSR_IA32_MCG_STATUS, 0);
+diff --git a/arch/x86/kernel/cpu/mce/dev-mcelog.c b/arch/x86/kernel/cpu/mce/dev-mcelog.c
+index 8d023239ce18..0e0537ee99ef 100644
+--- a/arch/x86/kernel/cpu/mce/dev-mcelog.c
++++ b/arch/x86/kernel/cpu/mce/dev-mcelog.c
+@@ -18,7 +18,10 @@
+ 
+ static BLOCKING_NOTIFIER_HEAD(mce_injector_chain);
+ 
+-static DEFINE_MUTEX(mce_chrdev_read_mutex);
++DEFINE_MUTEX(mce_chrdev_read_mutex);
++#ifdef CONFIG_X86_EARLYMIC
++EXPORT_SYMBOL_GPL(mce_chrdev_read_mutex);	/* micras locks the mcelog buffer */
++#endif
+ 
+ static char mce_helper[128];
+ static char *mce_helper_argv[2] = { mce_helper, NULL };
+@@ -29,7 +32,10 @@ static char *mce_helper_argv[2] = { mce_helper, NULL };
+  * separate MCEs from kernel messages to avoid bogus bug reports.
+  */
+ 
+-static struct mce_log_buffer *mcelog;
++struct mce_log_buffer *mcelog;
++#ifdef CONFIG_X86_EARLYMIC
++EXPORT_SYMBOL_GPL(mcelog);	/* micras scans it for new events */
++#endif
+ 
+ static DECLARE_WAIT_QUEUE_HEAD(mce_chrdev_wait);
+ 
+diff --git a/arch/x86/kernel/nmi.c b/arch/x86/kernel/nmi.c
+index be93ec7255bf..81bc1162fc5d 100644
+--- a/arch/x86/kernel/nmi.c
++++ b/arch/x86/kernel/nmi.c
+@@ -321,6 +321,15 @@ io_check_error(unsigned char reason, struct pt_regs *regs)
+ }
+ NOKPROBE_SYMBOL(io_check_error);
+ 
++
++#ifdef CONFIG_X86_EARLYMIC
++/* Intercept hook for RAS module */
++int (*mca_nmi)(int);
++EXPORT_SYMBOL_GPL(mca_nmi);
++atomic_t mca_inject;
++EXPORT_SYMBOL_GPL(mca_inject);
++#endif
++
+ static void
+ unknown_nmi_error(unsigned char reason, struct pt_regs *regs)
+ {
+@@ -357,6 +366,13 @@ static noinstr void default_do_nmi(struct pt_regs *regs)
+ 	unsigned char reason = 0;
+ 	int handled;
+ 	bool b2b = false;
++	int cpu = smp_processor_id();
++
++#ifdef CONFIG_X86_EARLYMIC
++	/* RAS module first pass on the NMI (un-core MC events) */
++	if (!atomic_read(&mca_inject) && mca_nmi && mca_nmi(cpu))
++		return;
++#endif
+ 
+ 	/*
+ 	 * Back-to-back NMIs are detected by comparing the RIP of the
