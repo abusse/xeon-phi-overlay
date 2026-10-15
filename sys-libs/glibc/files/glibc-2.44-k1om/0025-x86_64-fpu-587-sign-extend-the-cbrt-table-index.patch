@@ -1,0 +1,61 @@
+From d0a61d3491735d378e6cc12e0058ebf5a08bbe06 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 23:34:09 +0200
+Subject: [PATCH 25/49] x86_64/fpu/587: sign-extend the cbrt table index
+
+The i386 code computes the index into the cube-root factor table as a
+signed 32-bit value (-2..2) and Intel's port uses it as a 64-bit index
+without sign extension: cbrt of any argument with a negative remainder
+reads 4 GiB past the table and faults (math/test-double, test-float and
+test-ldouble crashed in MPSS 3.8.6 as well).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/587/s_cbrt.S  | 3 ++-
+ sysdeps/x86_64/fpu/587/s_cbrtf.S | 3 ++-
+ sysdeps/x86_64/fpu/587/s_cbrtl.S | 3 ++-
+ 3 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/sysdeps/x86_64/fpu/587/s_cbrt.S b/sysdeps/x86_64/fpu/587/s_cbrt.S
+index 7b8e28b80b..0ba4f94853 100644
+--- a/sysdeps/x86_64/fpu/587/s_cbrt.S
++++ b/sysdeps/x86_64/fpu/587/s_cbrt.S
+@@ -145,7 +145,8 @@ ENTRY(__cbrt)
+ 	fadd	%st(0)			/* 2*t2 : t2+2*xm : u : xm */
+ 			subl	%edx, %ecx
+ 	faddp	%st, %st(3)		/* t2+2*xm : u : 2*t2+xm */
+-			shll	$3, %ecx
++			movslq	%ecx, %rcx
++			shlq	$3, %rcx
+ 	fmulp				/* u*(t2+2*xm) : 2*t2+xm */
+ 	fdivp	%st, %st(1)		/* u*(t2+2*xm)/(2*t2+xm) */
+ #ifdef PIC
+diff --git a/sysdeps/x86_64/fpu/587/s_cbrtf.S b/sysdeps/x86_64/fpu/587/s_cbrtf.S
+index 173d8fe8f7..73d8d66ae1 100644
+--- a/sysdeps/x86_64/fpu/587/s_cbrtf.S
++++ b/sysdeps/x86_64/fpu/587/s_cbrtf.S
+@@ -122,7 +122,8 @@ ENTRY(__cbrtf)
+ 	fadd	%st(0)			/* 2*t2 : t2+2*xm : u : xm */
+ 			subl	%edx, %ecx
+ 	faddp	%st, %st(3)		/* t2+2*xm : u : 2*t2+xm */
+-			shll	$3, %ecx
++			movslq	%ecx, %rcx
++			shlq	$3, %rcx
+ 	fmulp				/* u*(t2+2*xm) : 2*t2+xm */
+ 	fdivp	%st, %st(1)		/* u*(t2+2*xm)/(2*t2+xm) */
+ #ifdef PIC
+diff --git a/sysdeps/x86_64/fpu/587/s_cbrtl.S b/sysdeps/x86_64/fpu/587/s_cbrtl.S
+index 30eddd3898..05ef0bea41 100644
+--- a/sysdeps/x86_64/fpu/587/s_cbrtl.S
++++ b/sysdeps/x86_64/fpu/587/s_cbrtl.S
+@@ -170,7 +170,8 @@ ENTRY(__cbrtl)
+ 	fadd	%st(0)			/* 2*t2 : t2+2*xm : u : xm */
+ 			subl	%edx, %ecx
+ 	faddp	%st, %st(3)		/* t2+2*xm : u : 2*t2+xm */
+-			shll	$4, %ecx
++			movslq	%ecx, %rcx
++			shlq	$4, %rcx
+ 	fmulp				/* u*(t2+2*xm) : 2*t2+xm */
+ 	fdivp	%st, %st(1)		/* u*(t2+2*xm)/(2*t2+xm) */
+ #ifdef PIC

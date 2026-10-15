@@ -1,0 +1,38 @@
+From 3053bc08daf75cf7e98c4c76c2220bb533b31b06 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 22:39:00 +0200
+Subject: [PATCH 15/49] x86_64/k1om: do not build libmvec
+
+libmvec (2.22) is SSE/AVX/AVX-512 code only.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/preconfigure    | 1 +
+ sysdeps/x86_64/preconfigure.ac | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/sysdeps/x86_64/preconfigure b/sysdeps/x86_64/preconfigure
+index 6dcca40371..5fd28ad699 100644
+--- a/sysdeps/x86_64/preconfigure
++++ b/sysdeps/x86_64/preconfigure
+@@ -63,6 +63,7 @@ x86_64/k1om)
+     libc_cv_localedir='${exec_prefix}/lib/locale'
+   fi
+   multi_arch=no
++  build_mathvec=no
+   libc_cv_cc_sse4=no
+   libc_cv_cc_avx=no
+   libc_cv_cc_avx512=no
+diff --git a/sysdeps/x86_64/preconfigure.ac b/sysdeps/x86_64/preconfigure.ac
+index a6a5d27438..d1b10eae2a 100644
+--- a/sysdeps/x86_64/preconfigure.ac
++++ b/sysdeps/x86_64/preconfigure.ac
+@@ -36,6 +36,7 @@ x86_64/k1om)
+     libc_cv_localedir='${exec_prefix}/lib/locale'
+   fi
+   multi_arch=no
++  build_mathvec=no
+   libc_cv_cc_sse4=no
+   libc_cv_cc_avx=no
+   libc_cv_cc_avx512=no

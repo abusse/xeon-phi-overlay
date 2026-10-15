@@ -1,0 +1,50 @@
+From 09d794182289573c4aca8e086ef9879644ae3105 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Thu, 1 Oct 2026 06:28:44 +0200
+Subject: [PATCH 44/49] x86_64/fpu/587: f32x add, sub, mul, div from f64 like
+ i386
+
+The generic versions round twice (x87 extended, then double); i386 sets
+double precision around the operation.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/587/s_f32xaddf64.c | 1 +
+ sysdeps/x86_64/fpu/587/s_f32xdivf64.c | 1 +
+ sysdeps/x86_64/fpu/587/s_f32xmulf64.c | 1 +
+ sysdeps/x86_64/fpu/587/s_f32xsubf64.c | 1 +
+ 4 files changed, 4 insertions(+)
+ create mode 100644 sysdeps/x86_64/fpu/587/s_f32xaddf64.c
+ create mode 100644 sysdeps/x86_64/fpu/587/s_f32xdivf64.c
+ create mode 100644 sysdeps/x86_64/fpu/587/s_f32xmulf64.c
+ create mode 100644 sysdeps/x86_64/fpu/587/s_f32xsubf64.c
+
+diff --git a/sysdeps/x86_64/fpu/587/s_f32xaddf64.c b/sysdeps/x86_64/fpu/587/s_f32xaddf64.c
+new file mode 100644
+index 0000000000..3c5e4ef652
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/s_f32xaddf64.c
+@@ -0,0 +1 @@
++#include <sysdeps/i386/fpu/s_f32xaddf64.c>
+diff --git a/sysdeps/x86_64/fpu/587/s_f32xdivf64.c b/sysdeps/x86_64/fpu/587/s_f32xdivf64.c
+new file mode 100644
+index 0000000000..9db6d5fa2f
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/s_f32xdivf64.c
+@@ -0,0 +1 @@
++#include <sysdeps/i386/fpu/s_f32xdivf64.c>
+diff --git a/sysdeps/x86_64/fpu/587/s_f32xmulf64.c b/sysdeps/x86_64/fpu/587/s_f32xmulf64.c
+new file mode 100644
+index 0000000000..83ec824edb
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/s_f32xmulf64.c
+@@ -0,0 +1 @@
++#include <sysdeps/i386/fpu/s_f32xmulf64.c>
+diff --git a/sysdeps/x86_64/fpu/587/s_f32xsubf64.c b/sysdeps/x86_64/fpu/587/s_f32xsubf64.c
+new file mode 100644
+index 0000000000..4344c6b146
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/s_f32xsubf64.c
+@@ -0,0 +1 @@
++#include <sysdeps/i386/fpu/s_f32xsubf64.c>

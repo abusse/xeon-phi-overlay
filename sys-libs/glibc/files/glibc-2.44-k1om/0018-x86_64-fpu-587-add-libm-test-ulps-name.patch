@@ -1,0 +1,21 @@
+From e4b165ca7bd2608d82f72cb9e0a0d761bbf07891 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 23:01:01 +0200
+Subject: [PATCH 18/49] x86_64/fpu/587: add libm-test-ulps-name
+
+Required next to libm-test-ulps since 2.25.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/587/libm-test-ulps-name | 1 +
+ 1 file changed, 1 insertion(+)
+ create mode 100644 sysdeps/x86_64/fpu/587/libm-test-ulps-name
+
+diff --git a/sysdeps/x86_64/fpu/587/libm-test-ulps-name b/sysdeps/x86_64/fpu/587/libm-test-ulps-name
+new file mode 100644
+index 0000000000..15b950a544
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/libm-test-ulps-name
+@@ -0,0 +1 @@
++x86_64 x87 (K1OM)

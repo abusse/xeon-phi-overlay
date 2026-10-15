@@ -1,0 +1,59 @@
+From 528b6d86617606f4c1de96b35869e0aa56bb34a0 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Fri, 2 Oct 2026 14:33:13 +0200
+Subject: [PATCH 48/49] x86_64/k1om: accept ld.so.cache hwcaps entries without
+ ISA level
+
+ld.so skips glibc-hwcaps cache entries whose ISA level the CPU lacks.
+An entry for an object without an ISA level marker has level 0, which
+the x86 check turns into the x86-64 baseline bit, and K1OM has no
+baseline (no SSE2): every named hwcaps entry was ignored, so
+glibc-hwcaps subdirectories only worked without the cache
+(elf/tst-glibc-hwcaps-prepend-cache).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/k1om/dl-isa-level.h | 33 ++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+ create mode 100644 sysdeps/x86_64/k1om/dl-isa-level.h
+
+diff --git a/sysdeps/x86_64/k1om/dl-isa-level.h b/sysdeps/x86_64/k1om/dl-isa-level.h
+new file mode 100644
+index 0000000000..d0804fa150
+--- /dev/null
++++ b/sysdeps/x86_64/k1om/dl-isa-level.h
+@@ -0,0 +1,33 @@
++/* Support for reading ISA level in /etc/ld.so.cache files written by
++   Linux ldconfig.  K1OM version.
++   Copyright (C) 2026 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#include <sys/platform/x86.h>
++
++/* K1OM has none of the x86-64 ISA levels (no SSE2), and K1OM objects
++   carry no ISA level marker, which ldconfig records as level 0.  */
++static inline bool
++dl_cache_hwcap_isa_level_compatible (struct file_entry_new *entry)
++{
++  const struct cpu_features *cpu_features = __get_cpu_features ();
++  unsigned int level = (entry->hwcap >> 32) & DL_CACHE_HWCAP_ISA_LEVEL_MASK;
++
++  if (level == 0)
++    return true;
++  return ((1 << level) & cpu_features->isa_1) == (1 << level);
++}

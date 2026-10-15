@@ -1,0 +1,41 @@
+From 66ce6b59fda71331ecbe3b034ff814102320b175 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Thu, 1 Oct 2026 06:19:49 +0200
+Subject: [PATCH 41/49] x86/fpu: soft-fp takes the K1OM trap state from the x87
+ control word
+
+soft-fp derives the trapping exceptions from the MXCSR masks, which are
+always clear on K1OM: every exception looked unmasked, so float128
+operations signalled underflow for exact tiny results and the narrowing
+operations rounded as with traps enabled (math/test-float128-*,
+test-*-float128-add/sub/mul/div/fma).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86/fpu/sfp-machine.h | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/sysdeps/x86/fpu/sfp-machine.h b/sysdeps/x86/fpu/sfp-machine.h
+index aae0653c83..5d7d0dcb64 100644
+--- a/sysdeps/x86/fpu/sfp-machine.h
++++ b/sysdeps/x86/fpu/sfp-machine.h
+@@ -218,7 +218,17 @@ void __sfp_handle_exceptions (int);
+       __sfp_handle_exceptions (_fex);		\
+   } while (0);
+ 
+-#define FP_TRAPPING_EXCEPTIONS ((~_fcw >> FP_EX_SHIFT) & FP_EX_ALL)
++#ifdef __KNC__
++/* The K1OM MXCSR exception masks cannot be set (vector exceptions are
++   always masked); which exceptions trap is set in the x87 control word,
++   whose low bits have the same layout.  */
++# define FP_TRAPPING_EXCEPTIONS					\
++  ({ unsigned short int __knc_cw;				\
++     __asm__ __volatile__ ("fnstcw %0" : "=m" (__knc_cw));	\
++     (~__knc_cw) & FP_EX_ALL; })
++#else
++# define FP_TRAPPING_EXCEPTIONS ((~_fcw >> FP_EX_SHIFT) & FP_EX_ALL)
++#endif
+ 
+ #define FP_ROUNDMODE		(_fcw & FP_RND_MASK)
+ 

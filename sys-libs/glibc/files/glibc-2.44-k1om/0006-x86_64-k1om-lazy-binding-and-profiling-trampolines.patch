@@ -1,0 +1,356 @@
+From 30af95cc8e0d2788c97120f8f6f9df6f1decb64c Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 22:31:19 +0200
+Subject: [PATCH 06/49] x86_64/k1om: lazy-binding and profiling trampolines
+
+Since 2.23 _dl_runtime_resolve saves the vector state with fxsave or
+xsave, which K1OM does not have (fxsave does not cover zmm).  Add a
+USE_VEC_SAVE variant of the template that saves zmm0-7 through the
+STORE/LOAD_VEC_REG hooks in the same 512-byte area, build only
+_dl_runtime_resolve_knc and _dl_runtime_profile_knc for K1OM and select
+them in elf_machine_runtime_setup.  The profiler stores the argument
+registers through the hooks as well, and the MPX bound register code
+(including the bnd prefix) is left out.
+
+[2.39: resolver selection moved to cpu-features.c and TLS descriptors
+got fxsave/xsave variants: on K1OM those names are aliases of the K1OM
+variants, and _dl_tlsdesc_dynamic_knc preserves the x87 state, zmm0-31
+and k1-k7 as the TLS descriptor ABI requires.]
+
+[2.26: cpu-features.h no longer needs ifunc-defines.h; the k1om copy of
+ifunc-defines.sym is gone.]
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/dl-machine.h          |  10 +++
+ sysdeps/x86_64/dl-tlsdesc-dynamic.h  | 100 ++++++++++++++++++++++++++-
+ sysdeps/x86_64/dl-tlsdesc.S          |  19 ++++-
+ sysdeps/x86_64/dl-trampoline-state.h |   8 ++-
+ sysdeps/x86_64/dl-trampoline.S       |  35 ++++++++++
+ sysdeps/x86_64/dl-trampoline.h       |  38 +++++++---
+ 6 files changed, 195 insertions(+), 15 deletions(-)
+
+diff --git a/sysdeps/x86_64/dl-machine.h b/sysdeps/x86_64/dl-machine.h
+index a94cb1a8af..f9b66a5a20 100644
+--- a/sysdeps/x86_64/dl-machine.h
++++ b/sysdeps/x86_64/dl-machine.h
+@@ -74,6 +74,8 @@ elf_machine_runtime_setup (struct link_map *l, struct r_scope_elem *scope[],
+   extern void _dl_runtime_profile_sse (ElfW(Word)) attribute_hidden;
+   extern void _dl_runtime_profile_avx (ElfW(Word)) attribute_hidden;
+   extern void _dl_runtime_profile_avx512 (ElfW(Word)) attribute_hidden;
++  extern void _dl_runtime_resolve_knc (ElfW(Word)) attribute_hidden;
++  extern void _dl_runtime_profile_knc (ElfW(Word)) attribute_hidden;
+ 
+   if (l->l_info[DT_JMPREL] && lazy)
+     {
+@@ -103,12 +105,16 @@ elf_machine_runtime_setup (struct link_map *l, struct r_scope_elem *scope[],
+       if (__glibc_unlikely (profile))
+ 	{
+ 	  const struct cpu_features* cpu_features = __get_cpu_features ();
++#ifdef __KNC__
++	  *(ElfW(Addr) *) (got + 2) = (ElfW(Addr)) &_dl_runtime_profile_knc;
++#else
+ 	  if (X86_ISA_CPU_FEATURE_USABLE_P (cpu_features, AVX512F))
+ 	    *(ElfW(Addr) *) (got + 2) = (ElfW(Addr)) &_dl_runtime_profile_avx512;
+ 	  else if (X86_ISA_CPU_FEATURE_USABLE_P (cpu_features, AVX))
+ 	    *(ElfW(Addr) *) (got + 2) = (ElfW(Addr)) &_dl_runtime_profile_avx;
+ 	  else
+ 	    *(ElfW(Addr) *) (got + 2) = (ElfW(Addr)) &_dl_runtime_profile_sse;
++#endif
+ 
+ 	  if (GLRO(dl_profile) != NULL
+ 	      && _dl_name_match_p (GLRO(dl_profile), l))
+@@ -122,8 +128,12 @@ elf_machine_runtime_setup (struct link_map *l, struct r_scope_elem *scope[],
+ 	  /* This function will get called to fix up the GOT entry
+ 	     indicated by the offset on the stack, and then jump to
+ 	     the resolved address.  */
++#ifdef __KNC__
++	  *(ElfW(Addr) *) (got + 2) = (ElfW(Addr)) &_dl_runtime_resolve_knc;
++#else
+ 	  *(ElfW(Addr) *) (got + 2)
+ 	    = (ElfW(Addr)) GLRO(dl_x86_64_runtime_resolve);
++#endif
+ 	}
+     }
+ 
+diff --git a/sysdeps/x86_64/dl-tlsdesc-dynamic.h b/sysdeps/x86_64/dl-tlsdesc-dynamic.h
+index f9148e4f29..4975d5333c 100644
+--- a/sysdeps/x86_64/dl-tlsdesc-dynamic.h
++++ b/sysdeps/x86_64/dl-tlsdesc-dynamic.h
+@@ -109,7 +109,55 @@ _dl_tlsdesc_dynamic:
+ 	movq	%r9, REGISTER_SAVE_R9(%rsp)
+ 	movq	%r10, REGISTER_SAVE_R10(%rsp)
+ 	movq	%r11, REGISTER_SAVE_R11(%rsp)
+-#ifdef USE_FXSAVE
++#ifdef USE_KNC_SAVE
++	fxsave	STATE_SAVE_OFFSET(%rsp)
++	vmovaps	%zmm0, (STATE_SAVE_OFFSET + 512 + 0 * 64)(%rsp)
++	vmovaps	%zmm1, (STATE_SAVE_OFFSET + 512 + 1 * 64)(%rsp)
++	vmovaps	%zmm2, (STATE_SAVE_OFFSET + 512 + 2 * 64)(%rsp)
++	vmovaps	%zmm3, (STATE_SAVE_OFFSET + 512 + 3 * 64)(%rsp)
++	vmovaps	%zmm4, (STATE_SAVE_OFFSET + 512 + 4 * 64)(%rsp)
++	vmovaps	%zmm5, (STATE_SAVE_OFFSET + 512 + 5 * 64)(%rsp)
++	vmovaps	%zmm6, (STATE_SAVE_OFFSET + 512 + 6 * 64)(%rsp)
++	vmovaps	%zmm7, (STATE_SAVE_OFFSET + 512 + 7 * 64)(%rsp)
++	vmovaps	%zmm8, (STATE_SAVE_OFFSET + 512 + 8 * 64)(%rsp)
++	vmovaps	%zmm9, (STATE_SAVE_OFFSET + 512 + 9 * 64)(%rsp)
++	vmovaps	%zmm10, (STATE_SAVE_OFFSET + 512 + 10 * 64)(%rsp)
++	vmovaps	%zmm11, (STATE_SAVE_OFFSET + 512 + 11 * 64)(%rsp)
++	vmovaps	%zmm12, (STATE_SAVE_OFFSET + 512 + 12 * 64)(%rsp)
++	vmovaps	%zmm13, (STATE_SAVE_OFFSET + 512 + 13 * 64)(%rsp)
++	vmovaps	%zmm14, (STATE_SAVE_OFFSET + 512 + 14 * 64)(%rsp)
++	vmovaps	%zmm15, (STATE_SAVE_OFFSET + 512 + 15 * 64)(%rsp)
++	vmovaps	%zmm16, (STATE_SAVE_OFFSET + 512 + 16 * 64)(%rsp)
++	vmovaps	%zmm17, (STATE_SAVE_OFFSET + 512 + 17 * 64)(%rsp)
++	vmovaps	%zmm18, (STATE_SAVE_OFFSET + 512 + 18 * 64)(%rsp)
++	vmovaps	%zmm19, (STATE_SAVE_OFFSET + 512 + 19 * 64)(%rsp)
++	vmovaps	%zmm20, (STATE_SAVE_OFFSET + 512 + 20 * 64)(%rsp)
++	vmovaps	%zmm21, (STATE_SAVE_OFFSET + 512 + 21 * 64)(%rsp)
++	vmovaps	%zmm22, (STATE_SAVE_OFFSET + 512 + 22 * 64)(%rsp)
++	vmovaps	%zmm23, (STATE_SAVE_OFFSET + 512 + 23 * 64)(%rsp)
++	vmovaps	%zmm24, (STATE_SAVE_OFFSET + 512 + 24 * 64)(%rsp)
++	vmovaps	%zmm25, (STATE_SAVE_OFFSET + 512 + 25 * 64)(%rsp)
++	vmovaps	%zmm26, (STATE_SAVE_OFFSET + 512 + 26 * 64)(%rsp)
++	vmovaps	%zmm27, (STATE_SAVE_OFFSET + 512 + 27 * 64)(%rsp)
++	vmovaps	%zmm28, (STATE_SAVE_OFFSET + 512 + 28 * 64)(%rsp)
++	vmovaps	%zmm29, (STATE_SAVE_OFFSET + 512 + 29 * 64)(%rsp)
++	vmovaps	%zmm30, (STATE_SAVE_OFFSET + 512 + 30 * 64)(%rsp)
++	vmovaps	%zmm31, (STATE_SAVE_OFFSET + 512 + 31 * 64)(%rsp)
++	kmov	%k1, %edx
++	movw	%dx, (STATE_SAVE_OFFSET + 512 + 32 * 64 + 1 * 2)(%rsp)
++	kmov	%k2, %edx
++	movw	%dx, (STATE_SAVE_OFFSET + 512 + 32 * 64 + 2 * 2)(%rsp)
++	kmov	%k3, %edx
++	movw	%dx, (STATE_SAVE_OFFSET + 512 + 32 * 64 + 3 * 2)(%rsp)
++	kmov	%k4, %edx
++	movw	%dx, (STATE_SAVE_OFFSET + 512 + 32 * 64 + 4 * 2)(%rsp)
++	kmov	%k5, %edx
++	movw	%dx, (STATE_SAVE_OFFSET + 512 + 32 * 64 + 5 * 2)(%rsp)
++	kmov	%k6, %edx
++	movw	%dx, (STATE_SAVE_OFFSET + 512 + 32 * 64 + 6 * 2)(%rsp)
++	kmov	%k7, %edx
++	movw	%dx, (STATE_SAVE_OFFSET + 512 + 32 * 64 + 7 * 2)(%rsp)
++#elif defined USE_FXSAVE
+ 	fxsave	STATE_SAVE_OFFSET(%rsp)
+ #else
+ 	movl	$TLSDESC_CALL_STATE_SAVE_MASK, %eax
+@@ -134,7 +182,55 @@ _dl_tlsdesc_dynamic:
+ 	/* %rdi already points to the tlsinfo data structure.  */
+ 	call	HIDDEN_JUMPTARGET (__tls_get_addr)
+ 	# Get register content back.
+-#ifdef USE_FXSAVE
++#ifdef USE_KNC_SAVE
++	movzwl	(STATE_SAVE_OFFSET + 512 + 32 * 64 + 1 * 2)(%rsp), %edx
++	kmov	%edx, %k1
++	movzwl	(STATE_SAVE_OFFSET + 512 + 32 * 64 + 2 * 2)(%rsp), %edx
++	kmov	%edx, %k2
++	movzwl	(STATE_SAVE_OFFSET + 512 + 32 * 64 + 3 * 2)(%rsp), %edx
++	kmov	%edx, %k3
++	movzwl	(STATE_SAVE_OFFSET + 512 + 32 * 64 + 4 * 2)(%rsp), %edx
++	kmov	%edx, %k4
++	movzwl	(STATE_SAVE_OFFSET + 512 + 32 * 64 + 5 * 2)(%rsp), %edx
++	kmov	%edx, %k5
++	movzwl	(STATE_SAVE_OFFSET + 512 + 32 * 64 + 6 * 2)(%rsp), %edx
++	kmov	%edx, %k6
++	movzwl	(STATE_SAVE_OFFSET + 512 + 32 * 64 + 7 * 2)(%rsp), %edx
++	kmov	%edx, %k7
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 0 * 64)(%rsp), %zmm0
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 1 * 64)(%rsp), %zmm1
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 2 * 64)(%rsp), %zmm2
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 3 * 64)(%rsp), %zmm3
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 4 * 64)(%rsp), %zmm4
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 5 * 64)(%rsp), %zmm5
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 6 * 64)(%rsp), %zmm6
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 7 * 64)(%rsp), %zmm7
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 8 * 64)(%rsp), %zmm8
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 9 * 64)(%rsp), %zmm9
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 10 * 64)(%rsp), %zmm10
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 11 * 64)(%rsp), %zmm11
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 12 * 64)(%rsp), %zmm12
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 13 * 64)(%rsp), %zmm13
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 14 * 64)(%rsp), %zmm14
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 15 * 64)(%rsp), %zmm15
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 16 * 64)(%rsp), %zmm16
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 17 * 64)(%rsp), %zmm17
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 18 * 64)(%rsp), %zmm18
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 19 * 64)(%rsp), %zmm19
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 20 * 64)(%rsp), %zmm20
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 21 * 64)(%rsp), %zmm21
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 22 * 64)(%rsp), %zmm22
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 23 * 64)(%rsp), %zmm23
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 24 * 64)(%rsp), %zmm24
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 25 * 64)(%rsp), %zmm25
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 26 * 64)(%rsp), %zmm26
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 27 * 64)(%rsp), %zmm27
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 28 * 64)(%rsp), %zmm28
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 29 * 64)(%rsp), %zmm29
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 30 * 64)(%rsp), %zmm30
++	vmovaps	(STATE_SAVE_OFFSET + 512 + 31 * 64)(%rsp), %zmm31
++	fxrstor	STATE_SAVE_OFFSET(%rsp)
++#elif defined USE_FXSAVE
+ 	fxrstor	STATE_SAVE_OFFSET(%rsp)
+ #else
+ 	/* Save and retore __tls_get_addr return value stored in RAX.  */
+diff --git a/sysdeps/x86_64/dl-tlsdesc.S b/sysdeps/x86_64/dl-tlsdesc.S
+index 4acdb2ab42..3dbf5bcebf 100644
+--- a/sysdeps/x86_64/dl-tlsdesc.S
++++ b/sysdeps/x86_64/dl-tlsdesc.S
+@@ -78,7 +78,24 @@ _dl_tlsdesc_undefweak:
+ 	cfi_endproc
+ 	.size	_dl_tlsdesc_undefweak, .-_dl_tlsdesc_undefweak
+ 
+-#ifdef SHARED
++#if defined SHARED && defined __KNC__
++# define USE_KNC_SAVE
++# define STATE_SAVE_ALIGNMENT	64
++# define _dl_tlsdesc_dynamic	_dl_tlsdesc_dynamic_knc
++# include "dl-tlsdesc-dynamic.h"
++# undef _dl_tlsdesc_dynamic
++# undef USE_KNC_SAVE
++/* Whatever cpu-features.c selects is the K1OM variant.  */
++	.globl _dl_tlsdesc_dynamic_fxsave
++	.hidden _dl_tlsdesc_dynamic_fxsave
++	.set _dl_tlsdesc_dynamic_fxsave, _dl_tlsdesc_dynamic_knc
++	.globl _dl_tlsdesc_dynamic_xsave
++	.hidden _dl_tlsdesc_dynamic_xsave
++	.set _dl_tlsdesc_dynamic_xsave, _dl_tlsdesc_dynamic_knc
++	.globl _dl_tlsdesc_dynamic_xsavec
++	.hidden _dl_tlsdesc_dynamic_xsavec
++	.set _dl_tlsdesc_dynamic_xsavec, _dl_tlsdesc_dynamic_knc
++#elif defined SHARED
+ # if MINIMUM_X86_ISA_LEVEL < AVX_X86_ISA_LEVEL
+ #  define USE_FXSAVE
+ #  define STATE_SAVE_ALIGNMENT	16
+diff --git a/sysdeps/x86_64/dl-trampoline-state.h b/sysdeps/x86_64/dl-trampoline-state.h
+index 21cc9d5082..4653e3deea 100644
+--- a/sysdeps/x86_64/dl-trampoline-state.h
++++ b/sysdeps/x86_64/dl-trampoline-state.h
+@@ -28,8 +28,12 @@
+ /* Local stack area before jumping to function address: RBX.  */
+ # define LOCAL_STORAGE_AREA	8
+ # define BASE			rbx
+-# ifdef USE_FXSAVE
+-/* Use fxsave to save XMM registers.  */
++# ifdef USE_KNC_SAVE
++/* K1OM: x87 state (fxsave), zmm0-31 and k1-k7.  */
++#  define REGISTER_SAVE_AREA	(512 + 32 * 64 + 64 + STATE_SAVE_OFFSET)
++# elif defined USE_FXSAVE || defined USE_VEC_SAVE
++/* Use fxsave to save XMM registers, or save the 8 argument vector
++   registers of K1OM (8 x 64 bytes).  */
+ #  define REGISTER_SAVE_AREA	(512 + STATE_SAVE_OFFSET)
+ #  if (REGISTER_SAVE_AREA % 16) != 0
+ #   error REGISTER_SAVE_AREA must be multiple of 16
+diff --git a/sysdeps/x86_64/dl-trampoline.S b/sysdeps/x86_64/dl-trampoline.S
+index c3845717a0..d4a7ba6be5 100644
+--- a/sysdeps/x86_64/dl-trampoline.S
++++ b/sysdeps/x86_64/dl-trampoline.S
+@@ -33,6 +33,40 @@
+ #define REGISTER_SAVE_R8	(REGISTER_SAVE_RDI + 8)
+ #define REGISTER_SAVE_R9	(REGISTER_SAVE_R8 + 8)
+ 
++#ifdef __KNC__
++/* K1OM passes FP and vector arguments in zmm0-7; it has neither SSE,
++   AVX nor XSAVE.  */
++# define VEC_SIZE		64
++# define VMOVA			vmovaps
++# define VEC(i)			zmm##i
++# ifdef SHARED
++# define _dl_runtime_profile	_dl_runtime_profile_knc
++# include "dl-trampoline.h"
++# undef _dl_runtime_profile
++# endif
++# undef VEC
++# undef VMOVA
++# undef VEC_SIZE
++
++# define USE_VEC_SAVE
++# define STATE_SAVE_ALIGNMENT	64
++# define _dl_runtime_resolve	_dl_runtime_resolve_knc
++# include "dl-trampoline.h"
++# undef _dl_runtime_resolve
++# undef USE_VEC_SAVE
++# undef STATE_SAVE_ALIGNMENT
++/* Whatever cpu-features.c selects is the K1OM variant.  */
++	.globl _dl_runtime_resolve_fxsave
++	.hidden _dl_runtime_resolve_fxsave
++	.set _dl_runtime_resolve_fxsave, _dl_runtime_resolve_knc
++	.globl _dl_runtime_resolve_xsave
++	.hidden _dl_runtime_resolve_xsave
++	.set _dl_runtime_resolve_xsave, _dl_runtime_resolve_knc
++	.globl _dl_runtime_resolve_xsavec
++	.hidden _dl_runtime_resolve_xsavec
++	.set _dl_runtime_resolve_xsavec, _dl_runtime_resolve_knc
++#else
++
+ #define RESTORE_AVX
+ 
+ #ifdef SHARED
+@@ -102,3 +136,4 @@
+ #undef _dl_runtime_resolve
+ #undef USE_XSAVEC
+ #undef STATE_SAVE_ALIGNMENT
++#endif
+diff --git a/sysdeps/x86_64/dl-trampoline.h b/sysdeps/x86_64/dl-trampoline.h
+index f405e86434..b3a4a2604d 100644
+--- a/sysdeps/x86_64/dl-trampoline.h
++++ b/sysdeps/x86_64/dl-trampoline.h
+@@ -69,7 +69,16 @@ _dl_runtime_resolve:
+ 	movq %rdi, REGISTER_SAVE_RDI(%rsp)
+ 	movq %r8, REGISTER_SAVE_R8(%rsp)
+ 	movq %r9, REGISTER_SAVE_R9(%rsp)
+-# ifdef USE_FXSAVE
++# ifdef USE_VEC_SAVE
++	STORE_VEC_REG (0, (STATE_SAVE_OFFSET + 0 * 64)(%rsp))
++	STORE_VEC_REG (1, (STATE_SAVE_OFFSET + 1 * 64)(%rsp))
++	STORE_VEC_REG (2, (STATE_SAVE_OFFSET + 2 * 64)(%rsp))
++	STORE_VEC_REG (3, (STATE_SAVE_OFFSET + 3 * 64)(%rsp))
++	STORE_VEC_REG (4, (STATE_SAVE_OFFSET + 4 * 64)(%rsp))
++	STORE_VEC_REG (5, (STATE_SAVE_OFFSET + 5 * 64)(%rsp))
++	STORE_VEC_REG (6, (STATE_SAVE_OFFSET + 6 * 64)(%rsp))
++	STORE_VEC_REG (7, (STATE_SAVE_OFFSET + 7 * 64)(%rsp))
++# elif defined USE_FXSAVE
+ 	fxsave STATE_SAVE_OFFSET(%rsp)
+ # else
+ 	movl $STATE_SAVE_MASK, %eax
+@@ -98,7 +107,16 @@ _dl_runtime_resolve:
+ 	call _dl_fixup		# Call resolver.
+ 	mov %RAX_LP, %R11_LP	# Save return value
+ 	# Get register content back.
+-# ifdef USE_FXSAVE
++# ifdef USE_VEC_SAVE
++	LOAD_VEC_REG ((STATE_SAVE_OFFSET + 0 * 64)(%rsp), 0)
++	LOAD_VEC_REG ((STATE_SAVE_OFFSET + 1 * 64)(%rsp), 1)
++	LOAD_VEC_REG ((STATE_SAVE_OFFSET + 2 * 64)(%rsp), 2)
++	LOAD_VEC_REG ((STATE_SAVE_OFFSET + 3 * 64)(%rsp), 3)
++	LOAD_VEC_REG ((STATE_SAVE_OFFSET + 4 * 64)(%rsp), 4)
++	LOAD_VEC_REG ((STATE_SAVE_OFFSET + 5 * 64)(%rsp), 5)
++	LOAD_VEC_REG ((STATE_SAVE_OFFSET + 6 * 64)(%rsp), 6)
++	LOAD_VEC_REG ((STATE_SAVE_OFFSET + 7 * 64)(%rsp), 7)
++# elif defined USE_FXSAVE
+ 	fxrstor STATE_SAVE_OFFSET(%rsp)
+ # else
+ 	movl $STATE_SAVE_MASK, %eax
+@@ -191,14 +209,14 @@ _dl_runtime_profile:
+ 	/* We always store the XMM registers even if AVX is available.
+ 	   This is to provide backward binary compatibility for existing
+ 	   audit modules.  */
+-	VMOVA %xmm0, (LR_XMM_OFFSET + XMM_SIZE*0)(%rsp)
+-	VMOVA %xmm1, (LR_XMM_OFFSET + XMM_SIZE*1)(%rsp)
+-	VMOVA %xmm2, (LR_XMM_OFFSET + XMM_SIZE*2)(%rsp)
+-	VMOVA %xmm3, (LR_XMM_OFFSET + XMM_SIZE*3)(%rsp)
+-	VMOVA %xmm4, (LR_XMM_OFFSET + XMM_SIZE*4)(%rsp)
+-	VMOVA %xmm5, (LR_XMM_OFFSET + XMM_SIZE*5)(%rsp)
+-	VMOVA %xmm6, (LR_XMM_OFFSET + XMM_SIZE*6)(%rsp)
+-	VMOVA %xmm7, (LR_XMM_OFFSET + XMM_SIZE*7)(%rsp)
++	STORE_VEC_REG (0, (LR_XMM_OFFSET)(%rsp))
++	STORE_VEC_REG (1, (LR_XMM_OFFSET + XMM_SIZE*1)(%rsp))
++	STORE_VEC_REG (2, (LR_XMM_OFFSET + XMM_SIZE*2)(%rsp))
++	STORE_VEC_REG (3, (LR_XMM_OFFSET + XMM_SIZE*3)(%rsp))
++	STORE_VEC_REG (4, (LR_XMM_OFFSET + XMM_SIZE*4)(%rsp))
++	STORE_VEC_REG (5, (LR_XMM_OFFSET + XMM_SIZE*5)(%rsp))
++	STORE_VEC_REG (6, (LR_XMM_OFFSET + XMM_SIZE*6)(%rsp))
++	STORE_VEC_REG (7, (LR_XMM_OFFSET + XMM_SIZE*7)(%rsp))
+ 
+ # ifdef RESTORE_AVX
+ 	/* This is to support AVX audit modules.  */

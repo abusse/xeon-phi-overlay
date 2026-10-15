@@ -1,0 +1,593 @@
+From 73af29667d3c5a9eca1bc0a71bddd99f8f2e210c Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Thu, 1 Oct 2026 00:51:08 +0200
+Subject: [PATCH 34/49] x86_64/fpu/587: accurate sin, cos, tan and sincos
+
+The x87 fsin, fcos and fptan are inaccurate (large errors for big
+arguments; about 800 failures in math/test-double and test-float).  Use
+the generic dbl-64 and flt-32 implementations like i386 and drop the
+empty stubs that kept the dbl-64 helpers out.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/587/branred.c   |  1 -
+ sysdeps/x86_64/fpu/587/dosincos.c  |  1 -
+ sysdeps/x86_64/fpu/587/halfulp.c   |  1 -
+ sysdeps/x86_64/fpu/587/mpa.c       |  1 -
+ sysdeps/x86_64/fpu/587/mpatan.c    |  1 -
+ sysdeps/x86_64/fpu/587/mpatan2.c   |  1 -
+ sysdeps/x86_64/fpu/587/mpexp.c     |  1 -
+ sysdeps/x86_64/fpu/587/mplog.c     |  1 -
+ sysdeps/x86_64/fpu/587/mpsqrt.c    |  1 -
+ sysdeps/x86_64/fpu/587/mptan.c     |  1 -
+ sysdeps/x86_64/fpu/587/s_cos.S     | 48 -----------------------------
+ sysdeps/x86_64/fpu/587/s_cosf.S    | 48 -----------------------------
+ sysdeps/x86_64/fpu/587/s_sin.S     | 48 -----------------------------
+ sysdeps/x86_64/fpu/587/s_sincos.c  | 49 ------------------------------
+ sysdeps/x86_64/fpu/587/s_sincosf.S | 49 ------------------------------
+ sysdeps/x86_64/fpu/587/s_sinf.S    | 48 -----------------------------
+ sysdeps/x86_64/fpu/587/s_tan.S     | 49 ------------------------------
+ sysdeps/x86_64/fpu/587/s_tanf.S    | 49 ------------------------------
+ sysdeps/x86_64/fpu/587/sincos32.c  |  1 -
+ sysdeps/x86_64/fpu/587/slowexp.c   |  1 -
+ sysdeps/x86_64/fpu/587/slowpow.c   |  1 -
+ sysdeps/x86_64/fpu/587/t_exp.c     |  1 -
+ 22 files changed, 402 deletions(-)
+ delete mode 100644 sysdeps/x86_64/fpu/587/branred.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/dosincos.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/halfulp.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/mpa.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/mpatan.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/mpatan2.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/mpexp.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/mplog.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/mpsqrt.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/mptan.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/s_cos.S
+ delete mode 100644 sysdeps/x86_64/fpu/587/s_cosf.S
+ delete mode 100644 sysdeps/x86_64/fpu/587/s_sin.S
+ delete mode 100644 sysdeps/x86_64/fpu/587/s_sincos.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/s_sincosf.S
+ delete mode 100644 sysdeps/x86_64/fpu/587/s_sinf.S
+ delete mode 100644 sysdeps/x86_64/fpu/587/s_tan.S
+ delete mode 100644 sysdeps/x86_64/fpu/587/s_tanf.S
+ delete mode 100644 sysdeps/x86_64/fpu/587/sincos32.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/slowexp.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/slowpow.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/t_exp.c
+
+diff --git a/sysdeps/x86_64/fpu/587/branred.c b/sysdeps/x86_64/fpu/587/branred.c
+deleted file mode 100644
+index 1cc8931700..0000000000
+--- a/sysdeps/x86_64/fpu/587/branred.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/dosincos.c b/sysdeps/x86_64/fpu/587/dosincos.c
+deleted file mode 100644
+index 1cc8931700..0000000000
+--- a/sysdeps/x86_64/fpu/587/dosincos.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/halfulp.c b/sysdeps/x86_64/fpu/587/halfulp.c
+deleted file mode 100644
+index 1cc8931700..0000000000
+--- a/sysdeps/x86_64/fpu/587/halfulp.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/mpa.c b/sysdeps/x86_64/fpu/587/mpa.c
+deleted file mode 100644
+index 1cc8931700..0000000000
+--- a/sysdeps/x86_64/fpu/587/mpa.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/mpatan.c b/sysdeps/x86_64/fpu/587/mpatan.c
+deleted file mode 100644
+index 1cc8931700..0000000000
+--- a/sysdeps/x86_64/fpu/587/mpatan.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/mpatan2.c b/sysdeps/x86_64/fpu/587/mpatan2.c
+deleted file mode 100644
+index 1cc8931700..0000000000
+--- a/sysdeps/x86_64/fpu/587/mpatan2.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/mpexp.c b/sysdeps/x86_64/fpu/587/mpexp.c
+deleted file mode 100644
+index 1cc8931700..0000000000
+--- a/sysdeps/x86_64/fpu/587/mpexp.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/mplog.c b/sysdeps/x86_64/fpu/587/mplog.c
+deleted file mode 100644
+index 1cc8931700..0000000000
+--- a/sysdeps/x86_64/fpu/587/mplog.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/mpsqrt.c b/sysdeps/x86_64/fpu/587/mpsqrt.c
+deleted file mode 100644
+index 1cc8931700..0000000000
+--- a/sysdeps/x86_64/fpu/587/mpsqrt.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/mptan.c b/sysdeps/x86_64/fpu/587/mptan.c
+deleted file mode 100644
+index 1cc8931700..0000000000
+--- a/sysdeps/x86_64/fpu/587/mptan.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/s_cos.S b/sysdeps/x86_64/fpu/587/s_cos.S
+deleted file mode 100644
+index d30d0ce37e..0000000000
+--- a/sysdeps/x86_64/fpu/587/s_cos.S
++++ /dev/null
+@@ -1,48 +0,0 @@
+-/*
+- * Written by J.T. Conklin <jtc@netbsd.org>.
+- * Fixed errno handling by Ulrich Drepper <drepper@redhat.com>.
+- * Public domain.
+- */
+-
+-#define __need_Emath
+-#include <errno.h>
+-#include <machine/asm.h>
+-
+-RCSID("$NetBSD: s_cos.S,v 1.5 1995/05/08 23:54:00 jtc Exp $")
+-
+-ENTRY(__cos)
+-	LOAD_REG_K1
+-	STORE_DOUBLE_REG (0, -8(%rsp))
+-	fldl	-8(%rsp)
+-	fxam
+-	fstsw	%ax
+-	movb	$0x45, %dh
+-	andb	%ah, %dh
+-	cmpb	$0x05, %dh
+-	je	3f
+-4:	fcos
+-	fnstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	1f
+-	fstpl	-8(%rsp)
+-	LOAD_DOUBLE_REG (-8(%rsp), 0)
+-	ret
+-	.align ALIGNARG(4)
+-1:	fldpi
+-	fadd	%st(0)
+-	fxch	%st(1)
+-2:	fprem1
+-	fnstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	2b
+-	fstp	%st(1)
+-	fcos
+-	fstpl	-8(%rsp)
+-	LOAD_DOUBLE_REG (-8(%rsp), 0)
+-	ret
+-3:
+-	call	__errno_location@PLT
+-	movl	$EDOM, (%rax)
+-	jmp	4b
+-END (__cos)
+-weak_alias (__cos, cos)
+diff --git a/sysdeps/x86_64/fpu/587/s_cosf.S b/sysdeps/x86_64/fpu/587/s_cosf.S
+deleted file mode 100644
+index 70e5760760..0000000000
+--- a/sysdeps/x86_64/fpu/587/s_cosf.S
++++ /dev/null
+@@ -1,48 +0,0 @@
+-/*
+- * Written by J.T. Conklin <jtc@netbsd.org>.
+- * Fixed errno handling by Ulrich Drepper <drepper@redhat.com>.
+- * Public domain.
+- */
+-
+-#define __need_Emath
+-#include <errno.h>
+-#include <machine/asm.h>
+-
+-RCSID("$NetBSD: s_cosf.S,v 1.3 1995/05/08 23:55:16 jtc Exp $")
+-
+-ENTRY(__cosf)
+-	LOAD_REG_K1
+-	STORE_FLOAT_REG (0, -4(%rsp))
+-	flds	-4(%rsp)
+-	fxam
+-	fstsw	%ax
+-	movb	$0x45, %dh
+-	andb	%ah, %dh
+-	cmpb	$0x05, %dh
+-	je	3f
+-4:	fcos
+-	fnstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	1f
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-	.align ALIGNARG(4)
+-1:	fldpi
+-	fadd	%st(0)
+-	fxch	%st(1)
+-2:	fprem1
+-	fnstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	2b
+-	fstp	%st(1)
+-	fcos
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-3:
+-	call	__errno_location@PLT
+-	movl	$EDOM, (%rax)
+-	jmp	4b
+-END (__cosf)
+-weak_alias (__cosf, cosf)
+diff --git a/sysdeps/x86_64/fpu/587/s_sin.S b/sysdeps/x86_64/fpu/587/s_sin.S
+deleted file mode 100644
+index 1cddc2325e..0000000000
+--- a/sysdeps/x86_64/fpu/587/s_sin.S
++++ /dev/null
+@@ -1,48 +0,0 @@
+-/*
+- * Written by J.T. Conklin <jtc@netbsd.org>.
+- * Fixed errno handling by Ulrich Drepper <drepper@redhat.com>.
+- * Public domain.
+- */
+-
+-#define __need_Emath
+-#include <errno.h>
+-#include <machine/asm.h>
+-
+-RCSID("$NetBSD: s_sin.S,v 1.5 1995/05/09 00:25:54 jtc Exp $")
+-
+-ENTRY(__sin)
+-	LOAD_REG_K1
+-	STORE_DOUBLE_REG (0, -8(%rsp))
+-	fldl	-8(%rsp)
+-	fxam
+-	fstsw	%ax
+-	movb	$0x45, %dh
+-	andb	%ah, %dh
+-	cmpb	$0x05, %dh
+-	je	3f
+-4:	fsin
+-	fnstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	1f
+-	fstpl	-8(%rsp)
+-	LOAD_DOUBLE_REG (-8(%rsp), 0)
+-	ret
+-	.align ALIGNARG(4)
+-1:	fldpi
+-	fadd	%st(0)
+-	fxch	%st(1)
+-2:	fprem1
+-	fnstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	2b
+-	fstp	%st(1)
+-	fsin
+-	fstpl	-8(%rsp)
+-	LOAD_DOUBLE_REG (-8(%rsp), 0)
+-	ret
+-3:
+-	call	__errno_location@PLT
+-	movl	$EDOM, (%rax)
+-	jmp	4b
+-END (__sin)
+-weak_alias (__sin, sin)
+diff --git a/sysdeps/x86_64/fpu/587/s_sincos.c b/sysdeps/x86_64/fpu/587/s_sincos.c
+deleted file mode 100644
+index aa77bf7539..0000000000
+--- a/sysdeps/x86_64/fpu/587/s_sincos.c
++++ /dev/null
+@@ -1,49 +0,0 @@
+-/* Compute sine and cosine of argument, using the x87 sin and cos.
+-   Copyright (C) 1997-2016 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, see
+-   <http://www.gnu.org/licenses/>.  */
+-
+-#include <errno.h>
+-#include <math.h>
+-
+-#include <math_private.h>
+-
+-
+-void
+-__sincos (double x, double *sinx, double *cosx)
+-{
+-  int32_t ix;
+-
+-  GET_HIGH_WORD (ix, x);
+-  ix &= 0x7fffffff;
+-  if (ix >= 0x7ff00000)
+-    {
+-      /* sin(Inf or NaN) is NaN.  */
+-      *sinx = *cosx = x - x;
+-      if (isinf (x))
+-	__set_errno (EDOM);
+-    }
+-  else
+-    {
+-      *sinx = __sin (x);
+-      *cosx = __cos (x);
+-    }
+-}
+-weak_alias (__sincos, sincos)
+-#ifdef NO_LONG_DOUBLE
+-strong_alias (__sincos, __sincosl)
+-weak_alias (__sincos, sincosl)
+-#endif
+diff --git a/sysdeps/x86_64/fpu/587/s_sincosf.S b/sysdeps/x86_64/fpu/587/s_sincosf.S
+deleted file mode 100644
+index 172678d6d1..0000000000
+--- a/sysdeps/x86_64/fpu/587/s_sincosf.S
++++ /dev/null
+@@ -1,49 +0,0 @@
+-/* Compute sine and cosine of argument.
+-   Copyright (C) 2011 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-#include <machine/asm.h>
+-
+-	.text
+-ENTRY (__sincosf)
+-	LOAD_REG_K1
+-	STORE_FLOAT_REG (0, -4(%rsp))
+-	flds	-4(%rsp)
+-	fsincos
+-	fnstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	1f
+-	fstps	(%rsi)
+-	fstps	(%rdi)
+-	ret
+-
+-	.align ALIGNARG(4)
+-1:	fldpi
+-	fadd	%st(0)
+-	fxch	%st(1)
+-2:	fprem1
+-	fnstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	2b
+-	fstp	%st(1)
+-	fsincos
+-	fstps	(%rsi)
+-	fstps	(%rdi)
+-	ret
+-END (__sincosf)
+-weak_alias (__sincosf, sincosf)
+diff --git a/sysdeps/x86_64/fpu/587/s_sinf.S b/sysdeps/x86_64/fpu/587/s_sinf.S
+deleted file mode 100644
+index ac480373f9..0000000000
+--- a/sysdeps/x86_64/fpu/587/s_sinf.S
++++ /dev/null
+@@ -1,48 +0,0 @@
+-/*
+- * Written by J.T. Conklin <jtc@netbsd.org>.
+- * Fixed errno handling by Ulrich Drepper <drepper@redhat.com>.
+- * Public domain.
+- */
+-
+-#define __need_Emath
+-#include <errno.h>
+-#include <machine/asm.h>
+-
+-RCSID("$NetBSD: s_sinf.S,v 1.3 1995/05/09 00:27:53 jtc Exp $")
+-
+-ENTRY(__sinf)
+-	LOAD_REG_K1
+-	STORE_FLOAT_REG (0, -4(%rsp))
+-	flds	-4(%rsp)
+-	fxam
+-	fstsw	%ax
+-	movb	$0x45, %dh
+-	andb	%ah, %dh
+-	cmpb	$0x05, %dh
+-	je	3f
+-4:	fsin
+-	fnstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	1f
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-	.align ALIGNARG(4)
+-1:	fldpi
+-	fadd	%st(0)
+-	fxch	%st(1)
+-2:	fprem1
+-	fnstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	2b
+-	fstp	%st(1)
+-	fsin
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-3:
+-	call	__errno_location@PLT
+-	movl	$EDOM, (%rax)
+-	jmp	4b
+-END (__sinf)
+-weak_alias (__sinf, sinf)
+diff --git a/sysdeps/x86_64/fpu/587/s_tan.S b/sysdeps/x86_64/fpu/587/s_tan.S
+deleted file mode 100644
+index 273b812fd5..0000000000
+--- a/sysdeps/x86_64/fpu/587/s_tan.S
++++ /dev/null
+@@ -1,49 +0,0 @@
+-/*
+- * Written by J.T. Conklin <jtc@netbsd.org>.
+- * Fixed errno handling by Ulrich Drepper <drepper@redhat.com>.
+- * Public domain.
+- */
+-
+-#define __need_Emath
+-#include <errno.h>
+-#include <machine/asm.h>
+-
+-RCSID("$NetBSD: s_tan.S,v 1.5 1995/05/09 00:30:00 jtc Exp $")
+-
+-ENTRY(__tan)
+-	LOAD_REG_K1
+-	STORE_DOUBLE_REG (0, -8(%rsp))
+-	fldl	-8(%rsp)
+-	fxam
+-	fstsw	%ax
+-	movb	$0x45, %dh
+-	andb	%ah, %dh
+-	cmpb	$0x05, %dh
+-	je	3f
+-4:	fptan
+-	fnstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	1f
+-	fstp	%st(0)
+-	fstpl	-8(%rsp)
+-	LOAD_DOUBLE_REG (-8(%rsp), 0)
+-	ret
+-1:	fldpi
+-	fadd	%st(0)
+-	fxch	%st(1)
+-2:	fprem1
+-	fstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	2b
+-	fstp	%st(1)
+-	fptan
+-	fstp	%st(0)
+-	fstpl	-8(%rsp)
+-	LOAD_DOUBLE_REG (-8(%rsp), 0)
+-	ret
+-3:
+-	call	__errno_location@PLT
+-	movl	$EDOM, (%rax)
+-	jmp	4b
+-END (__tan)
+-weak_alias (__tan, tan)
+diff --git a/sysdeps/x86_64/fpu/587/s_tanf.S b/sysdeps/x86_64/fpu/587/s_tanf.S
+deleted file mode 100644
+index 72fd6aa9ae..0000000000
+--- a/sysdeps/x86_64/fpu/587/s_tanf.S
++++ /dev/null
+@@ -1,49 +0,0 @@
+-/*
+- * Written by J.T. Conklin <jtc@netbsd.org>.
+- * Fixed errno handling by Ulrich Drepper <drepper@redhat.com>.
+- * Public domain.
+- */
+-
+-#define __need_Emath
+-#include <errno.h>
+-#include <machine/asm.h>
+-
+-RCSID("$NetBSD: s_tanf.S,v 1.3 1995/05/09 00:31:09 jtc Exp $")
+-
+-ENTRY(__tanf)
+-	LOAD_REG_K1
+-	STORE_FLOAT_REG (0, -4(%rsp))
+-	flds	-4(%rsp)
+-	fxam
+-	fstsw	%ax
+-	movb	$0x45, %dh
+-	andb	%ah, %dh
+-	cmpb	$0x05, %dh
+-	je	3f
+-4:	fptan
+-	fnstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	1f
+-	fstp	%st(0)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-1:	fldpi
+-	fadd	%st(0)
+-	fxch	%st(1)
+-2:	fprem1
+-	fstsw	%ax
+-	testl	$0x400,%eax
+-	jnz	2b
+-	fstp	%st(1)
+-	fptan
+-	fstp	%st(0)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-3:
+-	call	__errno_location@PLT
+-	movl	$EDOM, (%rax)
+-	jmp	4b
+-END (__tanf)
+-weak_alias (__tanf, tanf)
+diff --git a/sysdeps/x86_64/fpu/587/sincos32.c b/sysdeps/x86_64/fpu/587/sincos32.c
+deleted file mode 100644
+index 1cc8931700..0000000000
+--- a/sysdeps/x86_64/fpu/587/sincos32.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/slowexp.c b/sysdeps/x86_64/fpu/587/slowexp.c
+deleted file mode 100644
+index 1cc8931700..0000000000
+--- a/sysdeps/x86_64/fpu/587/slowexp.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/slowpow.c b/sysdeps/x86_64/fpu/587/slowpow.c
+deleted file mode 100644
+index 1cc8931700..0000000000
+--- a/sysdeps/x86_64/fpu/587/slowpow.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/t_exp.c b/sysdeps/x86_64/fpu/587/t_exp.c
+deleted file mode 100644
+index fd37963b05..0000000000
+--- a/sysdeps/x86_64/fpu/587/t_exp.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Empty.  Not needed. */

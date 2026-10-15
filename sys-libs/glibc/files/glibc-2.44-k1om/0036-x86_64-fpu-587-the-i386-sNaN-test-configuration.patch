@@ -1,0 +1,23 @@
+From 646c7b3234469dea45a3825639212bf5eb5bebc1 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Thu, 1 Oct 2026 05:11:08 +0200
+Subject: [PATCH 36/49] x86_64/fpu/587: the i386 sNaN test configuration
+
+Scalar float and double go through the x87 stack on K1OM, and loading a
+signaling NaN there raises INVALID and quiets it (GCC PR56831), so the
+float and double sNaN tests cannot work, exactly as on i386.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/587/math-tests-snan.h | 1 +
+ 1 file changed, 1 insertion(+)
+ create mode 100644 sysdeps/x86_64/fpu/587/math-tests-snan.h
+
+diff --git a/sysdeps/x86_64/fpu/587/math-tests-snan.h b/sysdeps/x86_64/fpu/587/math-tests-snan.h
+new file mode 100644
+index 0000000000..06d4ad1e4d
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/math-tests-snan.h
+@@ -0,0 +1 @@
++#include <sysdeps/i386/fpu/math-tests-snan.h>

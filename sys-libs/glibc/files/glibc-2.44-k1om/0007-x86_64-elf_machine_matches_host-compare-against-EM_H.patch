@@ -1,0 +1,25 @@
+From 1f421c3768094c7f93a9841eca902d4f28f1d0d8 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 1 Jul 2019 22:45:00 +0200
+Subject: [PATCH 07/49] x86_64: elf_machine_matches_host: compare against
+ EM_HOST_MACHINE_TYPE
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/dl-machine.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/sysdeps/x86_64/dl-machine.h b/sysdeps/x86_64/dl-machine.h
+index f9b66a5a20..cb161c5128 100644
+--- a/sysdeps/x86_64/dl-machine.h
++++ b/sysdeps/x86_64/dl-machine.h
+@@ -43,7 +43,7 @@
+ static inline int __attribute__ ((unused))
+ elf_machine_matches_host (const ElfW(Ehdr) *ehdr)
+ {
+-  return ehdr->e_machine == EM_X86_64;
++  return ehdr->e_machine == EM_HOST_MACHINE_TYPE;
+ }
+ 
+ 

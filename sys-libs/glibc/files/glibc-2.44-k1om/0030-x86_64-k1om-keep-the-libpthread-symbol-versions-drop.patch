@@ -1,0 +1,902 @@
+From f06ec6b934526e0afe26263411276d3205d3cdbe Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Thu, 1 Oct 2026 00:00:32 +0200
+Subject: [PATCH 30/49] x86_64/k1om: keep the libpthread symbol versions
+ dropped upstream
+
+Upstream removed libpthread symbols such as nanosleep@GLIBC_2.2.5 or
+open@GLIBC_2.2.5 once libc exported the same name@version, which holds
+on x86_64 but not on K1OM, whose libc starts at GLIBC_2.14: binaries
+built against MPSS 3.8.6 stop resolving them.  Keep them in libpthread
+as tail-call stubs to the libc functions.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/unix/sysv/linux/x86_64/k1om/Makefile  |   5 +
+ sysdeps/unix/sysv/linux/x86_64/k1om/Versions  | 117 +++
+ .../linux/x86_64/k1om/k1om-pthread-compat.S   | 740 ++++++++++++++++++
+ 3 files changed, 862 insertions(+)
+ create mode 100644 sysdeps/unix/sysv/linux/x86_64/k1om/k1om-pthread-compat.S
+
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/Makefile b/sysdeps/unix/sysv/linux/x86_64/k1om/Makefile
+index a7b6dc5a53..2ae0de7e2d 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/Makefile
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/Makefile
+@@ -1,2 +1,7 @@
+ # The default ABI is 64.
+ default-abi := 64
++
++ifeq ($(subdir),nptl)
++libpthread-routines += k1om-pthread-compat
++libpthread-shared-only-routines += k1om-pthread-compat
++endif
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/Versions b/sysdeps/unix/sysv/linux/x86_64/k1om/Versions
+index 5f1ba627a6..ecb4c1f345 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/Versions
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/Versions
+@@ -1 +1,118 @@
+ !libc_pre_versions GLIBC_2.2.5 GLIBC_2.2.6 GLIBC_2.3.2 GLIBC_2.3.3 GLIBC_2.3.4 GLIBC_2.4 GLIBC_2.11 GLIBC_2.12
++libpthread {
++  GLIBC_2.2.5 {
++    _IO_flockfile;
++    _IO_ftrylockfile;
++    _IO_funlockfile;
++    __close;
++    __connect;
++    __errno_location;
++    __fcntl;
++    __fork;
++    __h_errno_location;
++    __libc_allocate_rtsig;
++    __libc_current_sigrtmax;
++    __libc_current_sigrtmin;
++    __lseek;
++    __open;
++    __open64;
++    __pread64;
++    __pthread_mutexattr_destroy;
++    __pwrite64;
++    __read;
++    __res_state;
++    __send;
++    __sigaction;
++    __vfork;
++    __wait;
++    __write;
++    accept;
++    close;
++    connect;
++    fcntl;
++    flockfile;
++    fork;
++    fsync;
++    ftrylockfile;
++    funlockfile;
++    longjmp;
++    lseek;
++    lseek64;
++    msync;
++    nanosleep;
++    open;
++    open64;
++    pause;
++    pread;
++    pread64;
++    pthread_attr_destroy;
++    pthread_attr_getdetachstate;
++    pthread_attr_getinheritsched;
++    pthread_attr_getschedparam;
++    pthread_attr_getschedpolicy;
++    pthread_attr_getscope;
++    pthread_attr_init;
++    pthread_attr_setdetachstate;
++    pthread_attr_setinheritsched;
++    pthread_attr_setschedparam;
++    pthread_attr_setschedpolicy;
++    pthread_attr_setscope;
++    pthread_cond_destroy;
++    pthread_cond_init;
++    pthread_condattr_destroy;
++    pthread_condattr_init;
++    pthread_detach;
++    pthread_equal;
++    pthread_exit;
++    pthread_getattr_np;
++    pthread_getschedparam;
++    pthread_join;
++    pthread_kill;
++    pthread_mutex_destroy;
++    pthread_mutexattr_destroy;
++    pthread_self;
++    pthread_setcancelstate;
++    pthread_setcanceltype;
++    pthread_setschedparam;
++    pthread_sigmask;
++    pthread_testcancel;
++    pwrite;
++    pwrite64;
++    raise;
++    read;
++    recv;
++    recvfrom;
++    recvmsg;
++    send;
++    sendmsg;
++    sendto;
++    sigaction;
++    siglongjmp;
++    sigwait;
++    system;
++    tcdrain;
++    vfork;
++    wait;
++    waitpid;
++    write;
++  }
++  GLIBC_2.2.6 {
++    __nanosleep;
++  }
++  GLIBC_2.3.2 {
++    pthread_cond_broadcast;
++    pthread_cond_destroy;
++    pthread_cond_init;
++    pthread_cond_timedwait;
++    pthread_cond_wait;
++  }
++  GLIBC_2.3.3 {
++    pthread_attr_setaffinity_np;
++    pthread_getaffinity_np;
++    pthread_tryjoin_np;
++  }
++  GLIBC_2.3.4 {
++    pthread_attr_setaffinity_np;
++    pthread_getaffinity_np;
++  }
++}
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/k1om-pthread-compat.S b/sysdeps/unix/sysv/linux/x86_64/k1om/k1om-pthread-compat.S
+new file mode 100644
+index 0000000000..efc6ae39e9
+--- /dev/null
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/k1om-pthread-compat.S
+@@ -0,0 +1,740 @@
++/* libpthread symbol versions of the K1OM ABI that upstream dropped
++   because x86_64 libc exports the same name@version; the K1OM libc
++   starts at GLIBC_2.14.  Each forwards to the libc function.  */
++
++	.text
++	.p2align 4
++	.globl __k1om_compat_0
++	.type __k1om_compat_0, @function
++__k1om_compat_0:
++	jmp _IO_flockfile@PLT
++	.size __k1om_compat_0, .-__k1om_compat_0
++	.symver __k1om_compat_0, _IO_flockfile@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_1
++	.type __k1om_compat_1, @function
++__k1om_compat_1:
++	jmp _IO_ftrylockfile@PLT
++	.size __k1om_compat_1, .-__k1om_compat_1
++	.symver __k1om_compat_1, _IO_ftrylockfile@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_2
++	.type __k1om_compat_2, @function
++__k1om_compat_2:
++	jmp _IO_funlockfile@PLT
++	.size __k1om_compat_2, .-__k1om_compat_2
++	.symver __k1om_compat_2, _IO_funlockfile@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_3
++	.type __k1om_compat_3, @function
++__k1om_compat_3:
++	jmp __close@PLT
++	.size __k1om_compat_3, .-__k1om_compat_3
++	.symver __k1om_compat_3, __close@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_4
++	.type __k1om_compat_4, @function
++__k1om_compat_4:
++	jmp __connect@PLT
++	.size __k1om_compat_4, .-__k1om_compat_4
++	.symver __k1om_compat_4, __connect@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_5
++	.type __k1om_compat_5, @function
++__k1om_compat_5:
++	jmp __errno_location@PLT
++	.size __k1om_compat_5, .-__k1om_compat_5
++	.symver __k1om_compat_5, __errno_location@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_6
++	.type __k1om_compat_6, @function
++__k1om_compat_6:
++	jmp __fcntl@PLT
++	.size __k1om_compat_6, .-__k1om_compat_6
++	.symver __k1om_compat_6, __fcntl@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_7
++	.type __k1om_compat_7, @function
++__k1om_compat_7:
++	jmp __fork@PLT
++	.size __k1om_compat_7, .-__k1om_compat_7
++	.symver __k1om_compat_7, __fork@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_8
++	.type __k1om_compat_8, @function
++__k1om_compat_8:
++	jmp __h_errno_location@PLT
++	.size __k1om_compat_8, .-__k1om_compat_8
++	.symver __k1om_compat_8, __h_errno_location@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_9
++	.type __k1om_compat_9, @function
++__k1om_compat_9:
++	jmp __libc_allocate_rtsig@PLT
++	.size __k1om_compat_9, .-__k1om_compat_9
++	.symver __k1om_compat_9, __libc_allocate_rtsig@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_10
++	.type __k1om_compat_10, @function
++__k1om_compat_10:
++	jmp __libc_current_sigrtmax@PLT
++	.size __k1om_compat_10, .-__k1om_compat_10
++	.symver __k1om_compat_10, __libc_current_sigrtmax@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_11
++	.type __k1om_compat_11, @function
++__k1om_compat_11:
++	jmp __libc_current_sigrtmin@PLT
++	.size __k1om_compat_11, .-__k1om_compat_11
++	.symver __k1om_compat_11, __libc_current_sigrtmin@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_12
++	.type __k1om_compat_12, @function
++__k1om_compat_12:
++	jmp __lseek@PLT
++	.size __k1om_compat_12, .-__k1om_compat_12
++	.symver __k1om_compat_12, __lseek@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_13
++	.type __k1om_compat_13, @function
++__k1om_compat_13:
++	jmp __nanosleep@PLT
++	.size __k1om_compat_13, .-__k1om_compat_13
++	.symver __k1om_compat_13, __nanosleep@GLIBC_2.2.6
++	.p2align 4
++	.globl __k1om_compat_14
++	.type __k1om_compat_14, @function
++__k1om_compat_14:
++	jmp __open@PLT
++	.size __k1om_compat_14, .-__k1om_compat_14
++	.symver __k1om_compat_14, __open@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_15
++	.type __k1om_compat_15, @function
++__k1om_compat_15:
++	jmp __open64@PLT
++	.size __k1om_compat_15, .-__k1om_compat_15
++	.symver __k1om_compat_15, __open64@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_16
++	.type __k1om_compat_16, @function
++__k1om_compat_16:
++	jmp __pread64@PLT
++	.size __k1om_compat_16, .-__k1om_compat_16
++	.symver __k1om_compat_16, __pread64@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_17
++	.type __k1om_compat_17, @function
++__k1om_compat_17:
++	jmp pthread_mutexattr_destroy@PLT
++	.size __k1om_compat_17, .-__k1om_compat_17
++	.symver __k1om_compat_17, __pthread_mutexattr_destroy@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_18
++	.type __k1om_compat_18, @function
++__k1om_compat_18:
++	jmp __pwrite64@PLT
++	.size __k1om_compat_18, .-__k1om_compat_18
++	.symver __k1om_compat_18, __pwrite64@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_19
++	.type __k1om_compat_19, @function
++__k1om_compat_19:
++	jmp __read@PLT
++	.size __k1om_compat_19, .-__k1om_compat_19
++	.symver __k1om_compat_19, __read@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_20
++	.type __k1om_compat_20, @function
++__k1om_compat_20:
++	jmp __res_state@PLT
++	.size __k1om_compat_20, .-__k1om_compat_20
++	.symver __k1om_compat_20, __res_state@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_21
++	.type __k1om_compat_21, @function
++__k1om_compat_21:
++	jmp __send@PLT
++	.size __k1om_compat_21, .-__k1om_compat_21
++	.symver __k1om_compat_21, __send@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_22
++	.type __k1om_compat_22, @function
++__k1om_compat_22:
++	jmp __sigaction@PLT
++	.size __k1om_compat_22, .-__k1om_compat_22
++	.symver __k1om_compat_22, __sigaction@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_23
++	.type __k1om_compat_23, @function
++__k1om_compat_23:
++	jmp __vfork@PLT
++	.size __k1om_compat_23, .-__k1om_compat_23
++	.symver __k1om_compat_23, __vfork@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_24
++	.type __k1om_compat_24, @function
++__k1om_compat_24:
++	jmp __wait@PLT
++	.size __k1om_compat_24, .-__k1om_compat_24
++	.symver __k1om_compat_24, __wait@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_25
++	.type __k1om_compat_25, @function
++__k1om_compat_25:
++	jmp __write@PLT
++	.size __k1om_compat_25, .-__k1om_compat_25
++	.symver __k1om_compat_25, __write@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_26
++	.type __k1om_compat_26, @function
++__k1om_compat_26:
++	jmp accept@PLT
++	.size __k1om_compat_26, .-__k1om_compat_26
++	.symver __k1om_compat_26, accept@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_27
++	.type __k1om_compat_27, @function
++__k1om_compat_27:
++	jmp close@PLT
++	.size __k1om_compat_27, .-__k1om_compat_27
++	.symver __k1om_compat_27, close@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_28
++	.type __k1om_compat_28, @function
++__k1om_compat_28:
++	jmp connect@PLT
++	.size __k1om_compat_28, .-__k1om_compat_28
++	.symver __k1om_compat_28, connect@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_29
++	.type __k1om_compat_29, @function
++__k1om_compat_29:
++	jmp fcntl@PLT
++	.size __k1om_compat_29, .-__k1om_compat_29
++	.symver __k1om_compat_29, fcntl@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_30
++	.type __k1om_compat_30, @function
++__k1om_compat_30:
++	jmp flockfile@PLT
++	.size __k1om_compat_30, .-__k1om_compat_30
++	.symver __k1om_compat_30, flockfile@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_31
++	.type __k1om_compat_31, @function
++__k1om_compat_31:
++	jmp fork@PLT
++	.size __k1om_compat_31, .-__k1om_compat_31
++	.symver __k1om_compat_31, fork@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_32
++	.type __k1om_compat_32, @function
++__k1om_compat_32:
++	jmp fsync@PLT
++	.size __k1om_compat_32, .-__k1om_compat_32
++	.symver __k1om_compat_32, fsync@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_33
++	.type __k1om_compat_33, @function
++__k1om_compat_33:
++	jmp ftrylockfile@PLT
++	.size __k1om_compat_33, .-__k1om_compat_33
++	.symver __k1om_compat_33, ftrylockfile@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_34
++	.type __k1om_compat_34, @function
++__k1om_compat_34:
++	jmp funlockfile@PLT
++	.size __k1om_compat_34, .-__k1om_compat_34
++	.symver __k1om_compat_34, funlockfile@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_35
++	.type __k1om_compat_35, @function
++__k1om_compat_35:
++	jmp longjmp@PLT
++	.size __k1om_compat_35, .-__k1om_compat_35
++	.symver __k1om_compat_35, longjmp@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_36
++	.type __k1om_compat_36, @function
++__k1om_compat_36:
++	jmp lseek@PLT
++	.size __k1om_compat_36, .-__k1om_compat_36
++	.symver __k1om_compat_36, lseek@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_37
++	.type __k1om_compat_37, @function
++__k1om_compat_37:
++	jmp lseek64@PLT
++	.size __k1om_compat_37, .-__k1om_compat_37
++	.symver __k1om_compat_37, lseek64@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_38
++	.type __k1om_compat_38, @function
++__k1om_compat_38:
++	jmp msync@PLT
++	.size __k1om_compat_38, .-__k1om_compat_38
++	.symver __k1om_compat_38, msync@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_39
++	.type __k1om_compat_39, @function
++__k1om_compat_39:
++	jmp nanosleep@PLT
++	.size __k1om_compat_39, .-__k1om_compat_39
++	.symver __k1om_compat_39, nanosleep@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_40
++	.type __k1om_compat_40, @function
++__k1om_compat_40:
++	jmp open@PLT
++	.size __k1om_compat_40, .-__k1om_compat_40
++	.symver __k1om_compat_40, open@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_41
++	.type __k1om_compat_41, @function
++__k1om_compat_41:
++	jmp open64@PLT
++	.size __k1om_compat_41, .-__k1om_compat_41
++	.symver __k1om_compat_41, open64@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_42
++	.type __k1om_compat_42, @function
++__k1om_compat_42:
++	jmp pause@PLT
++	.size __k1om_compat_42, .-__k1om_compat_42
++	.symver __k1om_compat_42, pause@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_43
++	.type __k1om_compat_43, @function
++__k1om_compat_43:
++	jmp pread@PLT
++	.size __k1om_compat_43, .-__k1om_compat_43
++	.symver __k1om_compat_43, pread@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_44
++	.type __k1om_compat_44, @function
++__k1om_compat_44:
++	jmp pread64@PLT
++	.size __k1om_compat_44, .-__k1om_compat_44
++	.symver __k1om_compat_44, pread64@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_45
++	.type __k1om_compat_45, @function
++__k1om_compat_45:
++	jmp pthread_attr_destroy@PLT
++	.size __k1om_compat_45, .-__k1om_compat_45
++	.symver __k1om_compat_45, pthread_attr_destroy@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_46
++	.type __k1om_compat_46, @function
++__k1om_compat_46:
++	jmp pthread_attr_getdetachstate@PLT
++	.size __k1om_compat_46, .-__k1om_compat_46
++	.symver __k1om_compat_46, pthread_attr_getdetachstate@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_47
++	.type __k1om_compat_47, @function
++__k1om_compat_47:
++	jmp pthread_attr_getinheritsched@PLT
++	.size __k1om_compat_47, .-__k1om_compat_47
++	.symver __k1om_compat_47, pthread_attr_getinheritsched@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_48
++	.type __k1om_compat_48, @function
++__k1om_compat_48:
++	jmp pthread_attr_getschedparam@PLT
++	.size __k1om_compat_48, .-__k1om_compat_48
++	.symver __k1om_compat_48, pthread_attr_getschedparam@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_49
++	.type __k1om_compat_49, @function
++__k1om_compat_49:
++	jmp pthread_attr_getschedpolicy@PLT
++	.size __k1om_compat_49, .-__k1om_compat_49
++	.symver __k1om_compat_49, pthread_attr_getschedpolicy@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_50
++	.type __k1om_compat_50, @function
++__k1om_compat_50:
++	jmp pthread_attr_getscope@PLT
++	.size __k1om_compat_50, .-__k1om_compat_50
++	.symver __k1om_compat_50, pthread_attr_getscope@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_51
++	.type __k1om_compat_51, @function
++__k1om_compat_51:
++	jmp pthread_attr_init@PLT
++	.size __k1om_compat_51, .-__k1om_compat_51
++	.symver __k1om_compat_51, pthread_attr_init@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_52
++	.type __k1om_compat_52, @function
++__k1om_compat_52:
++	jmp pthread_attr_setaffinity_np@PLT
++	.size __k1om_compat_52, .-__k1om_compat_52
++	.symver __k1om_compat_52, pthread_attr_setaffinity_np@GLIBC_2.3.3
++	.p2align 4
++	.globl __k1om_compat_53
++	.type __k1om_compat_53, @function
++__k1om_compat_53:
++	jmp pthread_attr_setaffinity_np@PLT
++	.size __k1om_compat_53, .-__k1om_compat_53
++	.symver __k1om_compat_53, pthread_attr_setaffinity_np@GLIBC_2.3.4
++	.p2align 4
++	.globl __k1om_compat_54
++	.type __k1om_compat_54, @function
++__k1om_compat_54:
++	jmp pthread_attr_setdetachstate@PLT
++	.size __k1om_compat_54, .-__k1om_compat_54
++	.symver __k1om_compat_54, pthread_attr_setdetachstate@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_55
++	.type __k1om_compat_55, @function
++__k1om_compat_55:
++	jmp pthread_attr_setinheritsched@PLT
++	.size __k1om_compat_55, .-__k1om_compat_55
++	.symver __k1om_compat_55, pthread_attr_setinheritsched@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_56
++	.type __k1om_compat_56, @function
++__k1om_compat_56:
++	jmp pthread_attr_setschedparam@PLT
++	.size __k1om_compat_56, .-__k1om_compat_56
++	.symver __k1om_compat_56, pthread_attr_setschedparam@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_57
++	.type __k1om_compat_57, @function
++__k1om_compat_57:
++	jmp pthread_attr_setschedpolicy@PLT
++	.size __k1om_compat_57, .-__k1om_compat_57
++	.symver __k1om_compat_57, pthread_attr_setschedpolicy@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_58
++	.type __k1om_compat_58, @function
++__k1om_compat_58:
++	jmp pthread_attr_setscope@PLT
++	.size __k1om_compat_58, .-__k1om_compat_58
++	.symver __k1om_compat_58, pthread_attr_setscope@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_59
++	.type __k1om_compat_59, @function
++__k1om_compat_59:
++	jmp pthread_cond_broadcast@PLT
++	.size __k1om_compat_59, .-__k1om_compat_59
++	.symver __k1om_compat_59, pthread_cond_broadcast@GLIBC_2.3.2
++	.p2align 4
++	.globl __k1om_compat_60
++	.type __k1om_compat_60, @function
++__k1om_compat_60:
++	jmp pthread_cond_destroy@PLT
++	.size __k1om_compat_60, .-__k1om_compat_60
++	.symver __k1om_compat_60, pthread_cond_destroy@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_61
++	.type __k1om_compat_61, @function
++__k1om_compat_61:
++	jmp pthread_cond_destroy@PLT
++	.size __k1om_compat_61, .-__k1om_compat_61
++	.symver __k1om_compat_61, pthread_cond_destroy@GLIBC_2.3.2
++	.p2align 4
++	.globl __k1om_compat_62
++	.type __k1om_compat_62, @function
++__k1om_compat_62:
++	jmp pthread_cond_init@PLT
++	.size __k1om_compat_62, .-__k1om_compat_62
++	.symver __k1om_compat_62, pthread_cond_init@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_63
++	.type __k1om_compat_63, @function
++__k1om_compat_63:
++	jmp pthread_cond_init@PLT
++	.size __k1om_compat_63, .-__k1om_compat_63
++	.symver __k1om_compat_63, pthread_cond_init@GLIBC_2.3.2
++	.p2align 4
++	.globl __k1om_compat_64
++	.type __k1om_compat_64, @function
++__k1om_compat_64:
++	jmp pthread_cond_timedwait@PLT
++	.size __k1om_compat_64, .-__k1om_compat_64
++	.symver __k1om_compat_64, pthread_cond_timedwait@GLIBC_2.3.2
++	.p2align 4
++	.globl __k1om_compat_65
++	.type __k1om_compat_65, @function
++__k1om_compat_65:
++	jmp pthread_cond_wait@PLT
++	.size __k1om_compat_65, .-__k1om_compat_65
++	.symver __k1om_compat_65, pthread_cond_wait@GLIBC_2.3.2
++	.p2align 4
++	.globl __k1om_compat_66
++	.type __k1om_compat_66, @function
++__k1om_compat_66:
++	jmp pthread_condattr_destroy@PLT
++	.size __k1om_compat_66, .-__k1om_compat_66
++	.symver __k1om_compat_66, pthread_condattr_destroy@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_67
++	.type __k1om_compat_67, @function
++__k1om_compat_67:
++	jmp pthread_condattr_init@PLT
++	.size __k1om_compat_67, .-__k1om_compat_67
++	.symver __k1om_compat_67, pthread_condattr_init@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_68
++	.type __k1om_compat_68, @function
++__k1om_compat_68:
++	jmp pthread_detach@PLT
++	.size __k1om_compat_68, .-__k1om_compat_68
++	.symver __k1om_compat_68, pthread_detach@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_69
++	.type __k1om_compat_69, @function
++__k1om_compat_69:
++	jmp pthread_equal@PLT
++	.size __k1om_compat_69, .-__k1om_compat_69
++	.symver __k1om_compat_69, pthread_equal@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_70
++	.type __k1om_compat_70, @function
++__k1om_compat_70:
++	jmp pthread_exit@PLT
++	.size __k1om_compat_70, .-__k1om_compat_70
++	.symver __k1om_compat_70, pthread_exit@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_71
++	.type __k1om_compat_71, @function
++__k1om_compat_71:
++	jmp pthread_getaffinity_np@PLT
++	.size __k1om_compat_71, .-__k1om_compat_71
++	.symver __k1om_compat_71, pthread_getaffinity_np@GLIBC_2.3.3
++	.p2align 4
++	.globl __k1om_compat_72
++	.type __k1om_compat_72, @function
++__k1om_compat_72:
++	jmp pthread_getaffinity_np@PLT
++	.size __k1om_compat_72, .-__k1om_compat_72
++	.symver __k1om_compat_72, pthread_getaffinity_np@GLIBC_2.3.4
++	.p2align 4
++	.globl __k1om_compat_73
++	.type __k1om_compat_73, @function
++__k1om_compat_73:
++	jmp pthread_getattr_np@PLT
++	.size __k1om_compat_73, .-__k1om_compat_73
++	.symver __k1om_compat_73, pthread_getattr_np@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_74
++	.type __k1om_compat_74, @function
++__k1om_compat_74:
++	jmp pthread_getschedparam@PLT
++	.size __k1om_compat_74, .-__k1om_compat_74
++	.symver __k1om_compat_74, pthread_getschedparam@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_75
++	.type __k1om_compat_75, @function
++__k1om_compat_75:
++	jmp pthread_join@PLT
++	.size __k1om_compat_75, .-__k1om_compat_75
++	.symver __k1om_compat_75, pthread_join@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_76
++	.type __k1om_compat_76, @function
++__k1om_compat_76:
++	jmp pthread_kill@PLT
++	.size __k1om_compat_76, .-__k1om_compat_76
++	.symver __k1om_compat_76, pthread_kill@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_77
++	.type __k1om_compat_77, @function
++__k1om_compat_77:
++	jmp pthread_mutex_destroy@PLT
++	.size __k1om_compat_77, .-__k1om_compat_77
++	.symver __k1om_compat_77, pthread_mutex_destroy@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_78
++	.type __k1om_compat_78, @function
++__k1om_compat_78:
++	jmp pthread_mutexattr_destroy@PLT
++	.size __k1om_compat_78, .-__k1om_compat_78
++	.symver __k1om_compat_78, pthread_mutexattr_destroy@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_79
++	.type __k1om_compat_79, @function
++__k1om_compat_79:
++	jmp pthread_self@PLT
++	.size __k1om_compat_79, .-__k1om_compat_79
++	.symver __k1om_compat_79, pthread_self@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_80
++	.type __k1om_compat_80, @function
++__k1om_compat_80:
++	jmp pthread_setcancelstate@PLT
++	.size __k1om_compat_80, .-__k1om_compat_80
++	.symver __k1om_compat_80, pthread_setcancelstate@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_81
++	.type __k1om_compat_81, @function
++__k1om_compat_81:
++	jmp pthread_setcanceltype@PLT
++	.size __k1om_compat_81, .-__k1om_compat_81
++	.symver __k1om_compat_81, pthread_setcanceltype@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_82
++	.type __k1om_compat_82, @function
++__k1om_compat_82:
++	jmp pthread_setschedparam@PLT
++	.size __k1om_compat_82, .-__k1om_compat_82
++	.symver __k1om_compat_82, pthread_setschedparam@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_83
++	.type __k1om_compat_83, @function
++__k1om_compat_83:
++	jmp pthread_sigmask@PLT
++	.size __k1om_compat_83, .-__k1om_compat_83
++	.symver __k1om_compat_83, pthread_sigmask@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_84
++	.type __k1om_compat_84, @function
++__k1om_compat_84:
++	jmp pthread_testcancel@PLT
++	.size __k1om_compat_84, .-__k1om_compat_84
++	.symver __k1om_compat_84, pthread_testcancel@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_85
++	.type __k1om_compat_85, @function
++__k1om_compat_85:
++	jmp pthread_tryjoin_np@PLT
++	.size __k1om_compat_85, .-__k1om_compat_85
++	.symver __k1om_compat_85, pthread_tryjoin_np@GLIBC_2.3.3
++	.p2align 4
++	.globl __k1om_compat_86
++	.type __k1om_compat_86, @function
++__k1om_compat_86:
++	jmp pwrite@PLT
++	.size __k1om_compat_86, .-__k1om_compat_86
++	.symver __k1om_compat_86, pwrite@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_87
++	.type __k1om_compat_87, @function
++__k1om_compat_87:
++	jmp pwrite64@PLT
++	.size __k1om_compat_87, .-__k1om_compat_87
++	.symver __k1om_compat_87, pwrite64@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_88
++	.type __k1om_compat_88, @function
++__k1om_compat_88:
++	jmp raise@PLT
++	.size __k1om_compat_88, .-__k1om_compat_88
++	.symver __k1om_compat_88, raise@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_89
++	.type __k1om_compat_89, @function
++__k1om_compat_89:
++	jmp read@PLT
++	.size __k1om_compat_89, .-__k1om_compat_89
++	.symver __k1om_compat_89, read@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_90
++	.type __k1om_compat_90, @function
++__k1om_compat_90:
++	jmp recv@PLT
++	.size __k1om_compat_90, .-__k1om_compat_90
++	.symver __k1om_compat_90, recv@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_91
++	.type __k1om_compat_91, @function
++__k1om_compat_91:
++	jmp recvfrom@PLT
++	.size __k1om_compat_91, .-__k1om_compat_91
++	.symver __k1om_compat_91, recvfrom@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_92
++	.type __k1om_compat_92, @function
++__k1om_compat_92:
++	jmp recvmsg@PLT
++	.size __k1om_compat_92, .-__k1om_compat_92
++	.symver __k1om_compat_92, recvmsg@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_93
++	.type __k1om_compat_93, @function
++__k1om_compat_93:
++	jmp send@PLT
++	.size __k1om_compat_93, .-__k1om_compat_93
++	.symver __k1om_compat_93, send@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_94
++	.type __k1om_compat_94, @function
++__k1om_compat_94:
++	jmp sendmsg@PLT
++	.size __k1om_compat_94, .-__k1om_compat_94
++	.symver __k1om_compat_94, sendmsg@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_95
++	.type __k1om_compat_95, @function
++__k1om_compat_95:
++	jmp sendto@PLT
++	.size __k1om_compat_95, .-__k1om_compat_95
++	.symver __k1om_compat_95, sendto@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_96
++	.type __k1om_compat_96, @function
++__k1om_compat_96:
++	jmp sigaction@PLT
++	.size __k1om_compat_96, .-__k1om_compat_96
++	.symver __k1om_compat_96, sigaction@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_97
++	.type __k1om_compat_97, @function
++__k1om_compat_97:
++	jmp siglongjmp@PLT
++	.size __k1om_compat_97, .-__k1om_compat_97
++	.symver __k1om_compat_97, siglongjmp@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_98
++	.type __k1om_compat_98, @function
++__k1om_compat_98:
++	jmp sigwait@PLT
++	.size __k1om_compat_98, .-__k1om_compat_98
++	.symver __k1om_compat_98, sigwait@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_99
++	.type __k1om_compat_99, @function
++__k1om_compat_99:
++	jmp system@PLT
++	.size __k1om_compat_99, .-__k1om_compat_99
++	.symver __k1om_compat_99, system@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_100
++	.type __k1om_compat_100, @function
++__k1om_compat_100:
++	jmp tcdrain@PLT
++	.size __k1om_compat_100, .-__k1om_compat_100
++	.symver __k1om_compat_100, tcdrain@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_101
++	.type __k1om_compat_101, @function
++__k1om_compat_101:
++	jmp vfork@PLT
++	.size __k1om_compat_101, .-__k1om_compat_101
++	.symver __k1om_compat_101, vfork@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_102
++	.type __k1om_compat_102, @function
++__k1om_compat_102:
++	jmp wait@PLT
++	.size __k1om_compat_102, .-__k1om_compat_102
++	.symver __k1om_compat_102, wait@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_103
++	.type __k1om_compat_103, @function
++__k1om_compat_103:
++	jmp waitpid@PLT
++	.size __k1om_compat_103, .-__k1om_compat_103
++	.symver __k1om_compat_103, waitpid@GLIBC_2.2.5
++	.p2align 4
++	.globl __k1om_compat_104
++	.type __k1om_compat_104, @function
++__k1om_compat_104:
++	jmp write@PLT
++	.size __k1om_compat_104, .-__k1om_compat_104
++	.symver __k1om_compat_104, write@GLIBC_2.2.5

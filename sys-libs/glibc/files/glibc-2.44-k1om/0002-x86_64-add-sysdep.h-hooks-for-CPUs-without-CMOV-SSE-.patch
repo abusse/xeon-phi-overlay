@@ -1,0 +1,106 @@
+From f7ce63562e9abde7daa17c58b39a302617ce8540 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 1 Jul 2019 22:45:00 +0200
+Subject: [PATCH 02/49] x86_64: add sysdep.h hooks for CPUs without CMOV, SSE
+ and MMX
+
+Default definitions of CMOVE, LOAD/STORE_MXCSR, LOAD/STORE/SAVE/RESTORE
+_VEC_REG, LOAD/STORE_FLOAT_REG, LOAD/STORE_DOUBLE_REG, LOAD_REG_K1,
+FP_INVALID_EXCEPTION, FP_DIVBYZERO_EXCEPTION and EM_HOST_MACHINE_TYPE
+that expand to the existing x86-64 code, so a sub-architecture can
+override them.
+
+[2.27: ENTRY/END moved to sysdeps/x86/sysdep.h; only ASM_TYPE_DIRECTIVE
+is added here.]
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/sysdep.h | 60 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 60 insertions(+)
+
+diff --git a/sysdeps/x86_64/sysdep.h b/sysdeps/x86_64/sysdep.h
+index f71f49213f..2246b96c6c 100644
+--- a/sysdeps/x86_64/sysdep.h
++++ b/sysdeps/x86_64/sysdep.h
+@@ -75,6 +75,9 @@ enum cf_protection_level
+ #define cfi_offset_rel_rsp(regn, off)	.cfi_escape 0x10, regn, 0x4, 0x13, \
+ 					0x77, off & 0x7F | 0x80, off >> 7
+ 
++/* Used by the x87 (587) libm assembler files.  */
++#define ASM_TYPE_DIRECTIVE(name,typearg) .type name,typearg;
++
+ /* If compiled for profiling, call `mcount' at the start of each function.  */
+ #ifdef	PROF
+ /* The mcount code relies on a normal frame pointer being on the stack
+@@ -175,6 +178,37 @@ lose:									      \
+ # define VZEROUPPER_RETURN	VZEROUPPER; ret
+ #endif
+ 
++/* Load MXCSR instruction.  */
++#define LOAD_MXCSR ldmxcsr
++/* Store MXCSR instruction.  */
++#define STORE_MXCSR stmxcsr
++
++/* Conditional move.  */
++#define CMOVE(TRUE_COND, FALSE_COND, SRC, DST, LABEL) \
++  cmov##TRUE_COND SRC, DST
++
++/* Load vector registers.  */
++#define LOAD_VEC_REG(SRC, REGNO) movaps SRC, %xmm##REGNO
++/* Store vector registers.  */
++#define STORE_VEC_REG(REGNO, DEST) movaps %xmm##REGNO, DEST
++/* Save vector registers.  */
++#define SAVE_VEC_REG(REGNO, DEST) movdqa %xmm##REGNO, DEST
++/* Restore vector registers.  */
++#define RESTORE_VEC_REG(SRC, REGNO) movdqa SRC, %xmm##REGNO
++
++/* Store float registers.  */
++#define STORE_FLOAT_REG(REGNO, DEST) movss %xmm##REGNO, DEST
++/* Load float registers.  */
++#define LOAD_FLOAT_REG(SRC, REGNO) movss SRC, %xmm##REGNO
++
++/* Store double registers.  */
++#define STORE_DOUBLE_REG(REGNO, DEST) movsd %xmm##REGNO, DEST
++/* Load double registers.  */
++#define LOAD_DOUBLE_REG(SRC, REGNO) movsd SRC, %xmm##REGNO
++
++/* Load mask register k1.  Not used by x86-64.  */
++#define LOAD_REG_K1
++
+ #else	/* __ASSEMBLER__ */
+ 
+ /* Instruction to operate on long and pointer.  */
+@@ -201,6 +235,32 @@ lose:									      \
+ #define R14_LP	"r14"
+ #define R15_LP	"r15"
+ 
++/* Load MXCSR instruction.  */
++#define LOAD_MXCSR "ldmxcsr"
++/* Store MXCSR instruction.  */
++#define STORE_MXCSR "stmxcsr"
++
++/* FP invalid exception.  */
++#define FP_INVALID_EXCEPTION                                   \
++  {                                                            \
++    /* One example of a invalid operation is 0.0 / 0.0.  */    \
++    float f = 0.0;                                             \
++    __asm__ __volatile__ ("divss %0, %0 " : : "x" (f));                \
++    (void) &f;                                                 \
++  }
++
++/* FP invalid exception.  */
++#define FP_DIVBYZERO_EXCEPTION                                 \
++  {                                                            \
++    float f = 1.0;                                             \
++    float g = 0.0;                                             \
++    __asm__ __volatile__ ("divss %1, %0" : : "x" (f), "x" (g));        \
++    (void) &f;                                                 \
++  }
++
++/* Machine type in ELF header compatible with the running host.  */
++#define EM_HOST_MACHINE_TYPE EM_X86_64
++
+ #endif	/* __ASSEMBLER__ */
+ 
+ #endif	/* _X86_64_SYSDEP_H */

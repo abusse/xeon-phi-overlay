@@ -1,0 +1,659 @@
+From 831f188f3c76c5f642961c40bb3c9ff191d9bf66 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 23:20:15 +0200
+Subject: [PATCH 23/49] x86_64/fpu/587: use the generic expf, exp2f, logf,
+ log2f and powf
+
+2.27 replaced them by new flt-32 C implementations with new symbol
+versions and no wrappers; the x87 versions only provide __ieee754_*f and
+break the link (__expf).  i386 dropped its x87 versions the same way.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/587/e_exp2f.S |  50 -----
+ sysdeps/x86_64/fpu/587/e_expf.S  |  55 -----
+ sysdeps/x86_64/fpu/587/e_log2f.S |  66 ------
+ sysdeps/x86_64/fpu/587/e_logf.S  |  68 ------
+ sysdeps/x86_64/fpu/587/e_powf.S  | 365 -------------------------------
+ 5 files changed, 604 deletions(-)
+ delete mode 100644 sysdeps/x86_64/fpu/587/e_exp2f.S
+ delete mode 100644 sysdeps/x86_64/fpu/587/e_expf.S
+ delete mode 100644 sysdeps/x86_64/fpu/587/e_log2f.S
+ delete mode 100644 sysdeps/x86_64/fpu/587/e_logf.S
+ delete mode 100644 sysdeps/x86_64/fpu/587/e_powf.S
+
+diff --git a/sysdeps/x86_64/fpu/587/e_exp2f.S b/sysdeps/x86_64/fpu/587/e_exp2f.S
+deleted file mode 100644
+index b286628927..0000000000
+--- a/sysdeps/x86_64/fpu/587/e_exp2f.S
++++ /dev/null
+@@ -1,50 +0,0 @@
+-/*
+- * Written by J.T. Conklin <jtc@netbsd.org>.
+- * Adapted for exp2 by Ulrich Drepper <drepper@cygnus.com>.
+- * Public domain.
+- */
+-
+-#include <machine/asm.h>
+-
+-	.section .rodata
+-	.p2align 2
+-zero:	.float 0.0
+-
+-	.text
+-ENTRY(__ieee754_exp2f)
+-	LOAD_REG_K1
+-	STORE_FLOAT_REG (0, -4(%rsp))
+-	flds	-4(%rsp)
+-/* I added the following ugly construct because exp(+-Inf) resulted
+-   in NaN.  The ugliness results from the bright minds at Intel.
+-   For the i686 the code can be written better.
+-   -- drepper@cygnus.com.  */
+-	fxam				/* Is NaN or +-Inf?  */
+-	fstsw	%ax
+-	movb	$0x45, %dh
+-	andb	%ah, %dh
+-	cmpb	$0x05, %dh
+-	je	1f			/* Is +-Inf, jump.  */
+-	fld	%st
+-	frndint				/* int(x) */
+-	fsubr	%st,%st(1)		/* fract(x) */
+-	fxch
+-	f2xm1				/* 2^(fract(x)) - 1 */
+-	fld1
+-	faddp				/* 2^(fract(x)) */
+-	fscale				/* e^x */
+-	fstp	%st(1)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-1:	testl	$0x200, %eax		/* Test sign.  */
+-	jz	2f			/* If positive, jump.  */
+-	fstp	%st
+-	LOAD_FLOAT_REG (zero(%rip), 0)	/* Set result to 0.  */
+-	ret
+-2:
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-END (__ieee754_exp2f)
+diff --git a/sysdeps/x86_64/fpu/587/e_expf.S b/sysdeps/x86_64/fpu/587/e_expf.S
+deleted file mode 100644
+index a0789c01f6..0000000000
+--- a/sysdeps/x86_64/fpu/587/e_expf.S
++++ /dev/null
+@@ -1,55 +0,0 @@
+-/*
+- * Written by J.T. Conklin <jtc@netbsd.org>.
+- * Public domain.
+- * Adapted for float type by Ulrich Drepper <drepper@cygnus.com>.
+- */
+-
+-#include <machine/asm.h>
+-
+-RCSID("$NetBSD: $")
+-
+-	.section .rodata
+-	.p2align 2
+-zero:	.float 0.0
+-
+-	.text
+-/* e^x = 2^(x * log2(e)) */
+-ENTRY(__ieee754_expf)
+-	LOAD_REG_K1
+-	STORE_FLOAT_REG (0, -4(%rsp))
+-	flds	-4(%rsp)
+-/* I added the following ugly construct because exp(+-Inf) resulted
+-   in NaN.  The ugliness results from the bright minds at Intel.
+-   For the i686 the code can be written better.
+-   -- drepper@cygnus.com.  */
+-	fxam				/* Is NaN or +-Inf?  */
+-	fstsw	%ax
+-	movb	$0x45, %dh
+-	andb	%ah, %dh
+-	cmpb	$0x05, %dh
+-	je	1f			/* Is +-Inf, jump.  */
+-	fldl2e
+-	fmulp				/* x * log2(e) */
+-	fld	%st
+-	frndint				/* int(x * log2(e)) */
+-	fsubr	%st,%st(1)		/* fract(x * log2(e)) */
+-	fxch
+-	f2xm1				/* 2^(fract(x * log2(e))) - 1 */
+-	fld1
+-	faddp				/* 2^(fract(x * log2(e))) */
+-	fscale				/* e^x */
+-	fstp	%st(1)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-1:	testl	$0x200, %eax		/* Test sign.  */
+-	jz	2f			/* If positive, jump.  */
+-	fstp	%st
+-	LOAD_FLOAT_REG (zero(%rip), 0)	/* Set result to 0.  */
+-	ret
+-2:
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-END (__ieee754_expf)
+diff --git a/sysdeps/x86_64/fpu/587/e_log2f.S b/sysdeps/x86_64/fpu/587/e_log2f.S
+deleted file mode 100644
+index cdec27e01d..0000000000
+--- a/sysdeps/x86_64/fpu/587/e_log2f.S
++++ /dev/null
+@@ -1,66 +0,0 @@
+-/*
+- * Written by J.T. Conklin <jtc@netbsd.org>.
+- * Adapted for use as log2 by Ulrich Drepper <drepper@cygnus.com>.
+- * Public domain.
+- *
+- * Changed to use fyl2xp1 for values near 1, <drepper@cygnus.com>.
+- */
+-
+-#include <machine/asm.h>
+-
+-#ifdef __ELF__
+-	.section .rodata
+-#else
+-	.text
+-#endif
+-	.align ALIGNARG(4)
+-	ASM_TYPE_DIRECTIVE(one,@object)
+-one:	.double 1.0
+-	ASM_SIZE_DIRECTIVE(one)
+-	/* It is not important that this constant is precise.  It is only
+-	   a value which is known to be on the safe side for using the
+-	   fyl2xp1 instruction.  */
+-	ASM_TYPE_DIRECTIVE(limit,@object)
+-limit:	.double 0.29
+-	ASM_SIZE_DIRECTIVE(limit)
+-
+-
+-#define MO(op) op(%rip)
+-
+-	.text
+-ENTRY(__ieee754_log2f)
+-	LOAD_REG_K1
+-	STORE_FLOAT_REG (0, -4(%rsp))
+-	fldl	MO(one)
+-	flds	-4(%rsp)	// x : 1
+-	fxam
+-	fnstsw
+-	fld	%st		// x : x : 1
+-	sahf
+-	jc	3f		// in case x is NaN or ±Inf
+-4:	fsub	%st(2), %st	// x-1 : x : 1
+-	fld	%st		// x-1 : x-1 : x : 1
+-	fabs			// |x-1| : x-1 : x : 1
+-	fcompl	MO(limit)	// x-1 : x : 1
+-	fnstsw			// x-1 : x : 1
+-	andb	$0x45, %ah
+-	jz	2f
+-	fstp	%st(1)		// x-1 : 1
+-	fyl2xp1			// log(x)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-2:	fstp	%st(0)		// x : 1
+-	fyl2x			// log(x)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-3:	jp	4b		// in case x is ±Inf
+-	fstp	%st(1)
+-	fstp	%st(1)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-END (__ieee754_log2f)
+diff --git a/sysdeps/x86_64/fpu/587/e_logf.S b/sysdeps/x86_64/fpu/587/e_logf.S
+deleted file mode 100644
+index fff8a82054..0000000000
+--- a/sysdeps/x86_64/fpu/587/e_logf.S
++++ /dev/null
+@@ -1,68 +0,0 @@
+-/*
+- * Written by J.T. Conklin <jtc@netbsd.org>.
+- * Public domain.
+- * Adapted for float by Ulrich Drepper <drepper@cygnus.com>.
+- *
+- * Changed to use fyl2xp1 for values near 1, <drepper@cygnus.com>.
+- */
+-
+-#include <machine/asm.h>
+-
+-RCSID("$NetBSD: e_log.S,v 1.4 1995/05/08 23:48:39 jtc Exp $")
+-
+-#ifdef __ELF__
+-	.section .rodata
+-#else
+-	.text
+-#endif
+-	.align ALIGNARG(4)
+-	ASM_TYPE_DIRECTIVE(one,@object)
+-one:	.double 1.0
+-	ASM_SIZE_DIRECTIVE(one)
+-	/* It is not important that this constant is precise.  It is only
+-	   a value which is known to be on the safe side for using the
+-	   fyl2xp1 instruction.  */
+-	ASM_TYPE_DIRECTIVE(limit,@object)
+-limit:	.double 0.29
+-	ASM_SIZE_DIRECTIVE(limit)
+-
+-
+-#define MO(op) op(%rip)
+-
+-	.text
+-ENTRY(__ieee754_logf)
+-	LOAD_REG_K1
+-	STORE_FLOAT_REG (0, -4(%rsp))
+-	fldln2			// log(2)
+-	flds	-4(%rsp)	// x : log(2)
+-	fxam
+-	fnstsw
+-	fld	%st		// x : x : log(2)
+-	sahf
+-	jc	3f		// in case x is NaN or +-Inf
+-4:	fsubl	MO(one)		// x-1 : x : log(2)
+-	fld	%st		// x-1 : x-1 : x : log(2)
+-	fabs			// |x-1| : x-1 : x : log(2)
+-	fcompl	MO(limit)	// x-1 : x : log(2)
+-	fnstsw			// x-1 : x : log(2)
+-	andb	$0x45, %ah
+-	jz	2f
+-	fstp	%st(1)		// x-1 : log(2)
+-	fyl2xp1			// log(x)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-2:	fstp	%st(0)		// x : log(2)
+-	fyl2x			// log(x)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-3:	jp	4b		// in case x is +-Inf
+-	fstp	%st(1)
+-	fstp	%st(1)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-END (__ieee754_logf)
+diff --git a/sysdeps/x86_64/fpu/587/e_powf.S b/sysdeps/x86_64/fpu/587/e_powf.S
+deleted file mode 100644
+index 3d73ac41a8..0000000000
+--- a/sysdeps/x86_64/fpu/587/e_powf.S
++++ /dev/null
+@@ -1,365 +0,0 @@
+-/* ix87 specific implementation of pow function.
+-   Copyright (C) 2011
+-   Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-#include <machine/asm.h>
+-
+-#ifdef __ELF__
+-	.section .rodata
+-#else
+-	.text
+-#endif
+-
+-	.align ALIGNARG(4)
+-	ASM_TYPE_DIRECTIVE(infinity,@object)
+-inf_zero:
+-infinity:
+-	.byte 0, 0, 0, 0, 0, 0, 0xf0, 0x7f
+-	ASM_SIZE_DIRECTIVE(infinity)
+-	ASM_TYPE_DIRECTIVE(zero,@object)
+-zero:	.double 0.0
+-	ASM_SIZE_DIRECTIVE(zero)
+-	ASM_TYPE_DIRECTIVE(minf_mzero,@object)
+-minf_mzero:
+-minfinity:
+-	.byte 0, 0, 0, 0, 0, 0, 0xf0, 0xff
+-mzero:
+-	.byte 0, 0, 0, 0, 0, 0, 0, 0x80
+-	ASM_SIZE_DIRECTIVE(minf_mzero)
+-	ASM_TYPE_DIRECTIVE(one,@object)
+-one:	.double 1.0
+-	ASM_SIZE_DIRECTIVE(one)
+-	ASM_TYPE_DIRECTIVE(limit,@object)
+-limit:	.double 0.29
+-	ASM_SIZE_DIRECTIVE(limit)
+-	ASM_TYPE_DIRECTIVE(p31,@object)
+-p31:	.byte 0, 0, 0, 0, 0, 0, 0xe0, 0x41
+-	ASM_SIZE_DIRECTIVE(p31)
+-
+-#define MO(op) op(%rip)
+-
+-	.text
+-ENTRY(__ieee754_powf)
+-	LOAD_REG_K1
+-	STORE_FLOAT_REG (1, -8(%rsp))
+-	STORE_FLOAT_REG (0, -4(%rsp))
+-	flds	-8(%rsp)	// y
+-	fxam
+-
+-	fnstsw
+-	movb	%ah, %dl
+-	andb	$0x45, %ah
+-	cmpb	$0x40, %ah	// is y == 0 ?
+-	je	11f
+-
+-	cmpb	$0x05, %ah	// is y == ±inf ?
+-	je	12f
+-
+-	cmpb	$0x01, %ah	// is y == NaN ?
+-	je	30f
+-
+-	flds	-4(%rsp)	// x : y
+-
+-	fxam
+-	fnstsw
+-	movb	%ah, %dh
+-	andb	$0x45, %ah
+-	cmpb	$0x40, %ah
+-	je	20f		// x is ±0
+-
+-	cmpb	$0x05, %ah
+-	je	15f		// x is ±inf
+-
+-	fxch			// y : x
+-
+-	/* fistpl raises invalid exception for |y| >= 1L<<31.  */
+-	fld	%st		// y : y : x
+-	fabs			// |y| : y : x
+-	fcompl	MO(p31)		// y : x
+-	fnstsw
+-	sahf
+-	jnc	2f
+-
+-	/* First see whether `y' is a natural number.  In this case we
+-	   can use a more precise algorithm.  */
+-	fld	%st		// y : y : x
+-	fistpl	-12(%rsp)	// y : x
+-	fildl	-12(%rsp)	// int(y) : y : x
+-	fucomp	%st(1)		// y : x
+-	fnstsw
+-	sahf
+-	jne	2f
+-
+-	/* OK, we have an integer value for y.  */
+-	mov	-12(%rsp), %edx
+-	orl	$0, %edx
+-	fstp	%st(0)		// x
+-	jns	4f		// y >= 0, jump
+-	fdivrl	MO(one)		// 1/x		(now referred to as x)
+-	negl	%edx
+-4:	fldl	MO(one)		// 1 : x
+-	fxch
+-
+-6:	shrl	$1, %edx
+-	jnc	5f
+-	fxch
+-	fmul	%st(1)		// x : ST*x
+-	fxch
+-5:	fmul	%st(0), %st	// x*x : ST*x
+-	testl	%edx, %edx
+-	jnz	6b
+-	fstp	%st(0)		// ST*x
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-	/* y is ±NAN */
+-30:	flds	-4(%rsp)	// x : y
+-	fldl	MO(one)		// 1.0 : x : y
+-	fucomp	%st(1)		// x : y
+-	fnstsw
+-	sahf
+-	je	31f
+-	fxch			// y : x
+-31:	fstp	%st(1)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-	.align ALIGNARG(4)
+-2:	/* y is a real number.  */
+-	fxch			// x : y
+-	fldl	MO(one)		// 1.0 : x : y
+-	fldl	MO(limit)	// 0.29 : 1.0 : x : y
+-	fld	%st(2)		// x : 0.29 : 1.0 : x : y
+-	fsub	%st(2)		// x-1 : 0.29 : 1.0 : x : y
+-	fabs			// |x-1| : 0.29 : 1.0 : x : y
+-	fucompp			// 1.0 : x : y
+-	fnstsw
+-	fxch			// x : 1.0 : y
+-	sahf
+-	ja	7f
+-	fsub	%st(1)		// x-1 : 1.0 : y
+-	fyl2xp1			// log2(x) : y
+-	jmp	8f
+-
+-7:	fyl2x			// log2(x) : y
+-8:	fmul	%st(1)		// y*log2(x) : y
+-	fst	%st(1)		// y*log2(x) : y*log2(x)
+-	frndint			// int(y*log2(x)) : y*log2(x)
+-	fsubr	%st, %st(1)	// int(y*log2(x)) : fract(y*log2(x))
+-	fxch			// fract(y*log2(x)) : int(y*log2(x))
+-	f2xm1			// 2^fract(y*log2(x))-1 : int(y*log2(x))
+-	faddl	MO(one)		// 2^fract(y*log2(x)) : int(y*log2(x))
+-	fscale			// 2^fract(y*log2(x))*2^int(y*log2(x)) : int(y*log2(x))
+-	fstp	%st(1)		// 2^fract(y*log2(x))*2^int(y*log2(x))
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-
+-	// pow(x,±0) = 1
+-	.align ALIGNARG(4)
+-11:	fstp	%st(0)		// pop y
+-	fldl	MO(one)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-	// y == ±inf
+-	.align ALIGNARG(4)
+-12:	fstp	%st(0)		// pop y
+-	fldl	MO(one)		// 1
+-	flds	-4(%rsp)	// x : 1
+-	fabs			// abs(x) : 1
+-	fucompp			// < 1, == 1, or > 1
+-	fnstsw
+-	andb	$0x45, %ah
+-	cmpb	$0x45, %ah
+-	je	13f		// jump if x is NaN
+-
+-	cmpb	$0x40, %ah
+-	je	14f		// jump if |x| == 1
+-
+-	shlb	$1, %ah
+-	xorb	%ah, %dl
+-	andl	$2, %edx
+-#ifdef PIC
+-	lea	inf_zero(%rip), %rcx
+-	fldl	(%rcx, %rdx, 4)
+-#else
+-	fldl	inf_zero(, %rdx, 4)
+-#endif
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-	.align ALIGNARG(4)
+-14:	fldl	MO(one)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-	.align ALIGNARG(4)
+-13:				// load x == NaN
+-	ret
+-
+-	.align ALIGNARG(4)
+-	// x is ±inf
+-15:	fstp	%st(0)		// y
+-	testb	$2, %dh
+-	jz	16f		// jump if x == +inf
+-
+-	// We must find out whether y is an odd integer.
+-	fld	%st		// y : y
+-	fistpl	-12(%rsp)	// y
+-	fildl	-12(%rsp)	// int(y) : y
+-	fucompp			// <empty>
+-	fnstsw
+-	sahf
+-	jne	17f
+-
+-	// OK, the value is an integer, but is the number of bits small
+-	// enough so that all are coming from the mantissa?
+-	mov	-12(%rsp), %edx
+-	testb	$1, %dl
+-	jz	18f		// jump if not odd
+-	movl	%edx, %eax
+-	orl	%edx, %edx
+-	jns	155f
+-	negl	%eax
+-155:	cmpl	$0x01000000, %eax
+-	ja	18f		// does not fit in mantissa bits
+-	// It's an odd integer.
+-	shrl	$31, %edx
+-#ifdef PIC
+-	lea	minf_mzero(%rip), %rcx
+-	fldl	(%rcx, %rdx, 8)
+-#else
+-	fldl	minf_mzero(, %rdx, 8)
+-#endif
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-	.align ALIGNARG(4)
+-16:	fcompl	MO(zero)
+-	fnstsw
+-	shrl	$5, %eax
+-	andl	$8, %eax
+-#ifdef PIC
+-	lea	inf_zero(%rip), %rcx
+-	fldl	(%rcx, %rax, 1)
+-#else
+-	fldl	inf_zero(, %rax, 1)
+-#endif
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-	.align ALIGNARG(4)
+-17:	shll	$30, %edx	// sign bit for y in right position
+-18:	shrl	$31, %edx
+-#ifdef PIC
+-	lea	inf_zero(%rip), %rcx
+-	fldl	(%rcx, %rdx, 8)
+-#else
+-	fldl	inf_zero(, %rdx, 8)
+-#endif
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-	.align ALIGNARG(4)
+-	// x is ±0
+-20:	fstp	%st(0)		// y
+-	testb	$2, %dl
+-	jz	21f		// y > 0
+-
+-	// x is ±0 and y is < 0.  We must find out whether y is an odd integer.
+-	testb	$2, %dh
+-	jz	25f
+-
+-	fld	%st		// y : y
+-	fistpl	-12(%rsp)	// y
+-	fildl	-12(%rsp)	// int(y) : y
+-	fucompp			// <empty>
+-	fnstsw
+-	sahf
+-	jne	26f
+-
+-	// OK, the value is an integer, but is the number of bits small
+-	// enough so that all are coming from the mantissa?
+-	mov	-12(%rsp), %edx
+-	testb	$1, %dl
+-	jz	27f		// jump if not odd
+-	cmpl	$0xff000000, %edx
+-	jbe	27f		// does not fit in mantissa bits
+-	// It's an odd integer.
+-	// Raise divide-by-zero exception and get minus infinity value.
+-	fldl	MO(one)
+-	fdivl	MO(zero)
+-	fchs
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-25:	fstp	%st(0)
+-26:
+-27:	// Raise divide-by-zero exception and get infinity value.
+-	fldl	MO(one)
+-	fdivl	MO(zero)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-	.align ALIGNARG(4)
+-	// x is ±0 and y is > 0.  We must find out whether y is an odd integer.
+-21:	testb	$2, %dh
+-	jz	22f
+-
+-	fld	%st		// y : y
+-	fistpl	-12(%rsp)	// y
+-	fildl	-12(%rsp)	// int(y) : y
+-	fucompp			// <empty>
+-	fnstsw
+-	sahf
+-	jne	23f
+-
+-	// OK, the value is an integer, but is the number of bits small
+-	// enough so that all are coming from the mantissa?
+-	mov	-12(%rsp), %edx
+-	testb	$1, %dl
+-	jz	24f		// jump if not odd
+-	cmpl	$0xff000000, %edx
+-	jae	24f		// does not fit in mantissa bits
+-	// It's an odd integer.
+-	fldl	MO(mzero)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-22:	fstp	%st(0)
+-23:
+-24:	fldl	MO(zero)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-END(__ieee754_powf)

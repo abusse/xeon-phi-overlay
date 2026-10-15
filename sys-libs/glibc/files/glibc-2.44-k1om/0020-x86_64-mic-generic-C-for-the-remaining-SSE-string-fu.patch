@@ -1,0 +1,165 @@
+From d75ef01b72ebdcd79b6905ace73ba22ae9b8c1d4 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 23:09:43 +0200
+Subject: [PATCH 20/49] x86_64/mic: generic C for the remaining SSE string
+ functions
+
+memrchr, wcschr, wcscmp, wcslen, wcsrchr, and wmemset/__wmemset_chk
+(implemented in the SSE2 memset.S since 2.26), and since 2.35 __memcmpeq
+(an alias of the generic memcmp) and wmemcmp, since 2.39 the
+stpcpy/strcpy/strcat/strncat/strncpy/stpncpy and wide-character families
+(multiarch SSE2 code included from sysdeps/x86_64).  micgen.py lists
+them.  Intel moved the SSE2 versions out of sysdeps/x86_64 so that K1OM
+fell back to the generic C code; since sysdeps/x86_64/mic precedes
+sysdeps/x86_64, overriding them there does the same without touching the
+x86_64 files (which no longer apply after the 2.26 multiarch rework).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/mic/memcmpeq.c    | 1 +
+ sysdeps/x86_64/mic/memrchr.c     | 1 +
+ sysdeps/x86_64/mic/stpcpy.c      | 1 +
+ sysdeps/x86_64/mic/stpncpy.c     | 1 +
+ sysdeps/x86_64/mic/strcat.c      | 1 +
+ sysdeps/x86_64/mic/strcpy.c      | 1 +
+ sysdeps/x86_64/mic/strncat.c     | 1 +
+ sysdeps/x86_64/mic/strncpy.c     | 1 +
+ sysdeps/x86_64/mic/wcschr.c      | 1 +
+ sysdeps/x86_64/mic/wcscmp.c      | 1 +
+ sysdeps/x86_64/mic/wcslen.c      | 1 +
+ sysdeps/x86_64/mic/wcsrchr.c     | 1 +
+ sysdeps/x86_64/mic/wmemchr.c     | 1 +
+ sysdeps/x86_64/mic/wmemcmp.c     | 1 +
+ sysdeps/x86_64/mic/wmemset.c     | 1 +
+ sysdeps/x86_64/mic/wmemset_chk.c | 1 +
+ 16 files changed, 16 insertions(+)
+ create mode 100644 sysdeps/x86_64/mic/memcmpeq.c
+ create mode 100644 sysdeps/x86_64/mic/memrchr.c
+ create mode 100644 sysdeps/x86_64/mic/stpcpy.c
+ create mode 100644 sysdeps/x86_64/mic/stpncpy.c
+ create mode 100644 sysdeps/x86_64/mic/strcat.c
+ create mode 100644 sysdeps/x86_64/mic/strcpy.c
+ create mode 100644 sysdeps/x86_64/mic/strncat.c
+ create mode 100644 sysdeps/x86_64/mic/strncpy.c
+ create mode 100644 sysdeps/x86_64/mic/wcschr.c
+ create mode 100644 sysdeps/x86_64/mic/wcscmp.c
+ create mode 100644 sysdeps/x86_64/mic/wcslen.c
+ create mode 100644 sysdeps/x86_64/mic/wcsrchr.c
+ create mode 100644 sysdeps/x86_64/mic/wmemchr.c
+ create mode 100644 sysdeps/x86_64/mic/wmemcmp.c
+ create mode 100644 sysdeps/x86_64/mic/wmemset.c
+ create mode 100644 sysdeps/x86_64/mic/wmemset_chk.c
+
+diff --git a/sysdeps/x86_64/mic/memcmpeq.c b/sysdeps/x86_64/mic/memcmpeq.c
+new file mode 100644
+index 0000000000..e0d963d7e1
+--- /dev/null
++++ b/sysdeps/x86_64/mic/memcmpeq.c
+@@ -0,0 +1 @@
++#include <string/memcmpeq.c>
+diff --git a/sysdeps/x86_64/mic/memrchr.c b/sysdeps/x86_64/mic/memrchr.c
+new file mode 100644
+index 0000000000..52ccb5c70f
+--- /dev/null
++++ b/sysdeps/x86_64/mic/memrchr.c
+@@ -0,0 +1 @@
++#include <string/memrchr.c>
+diff --git a/sysdeps/x86_64/mic/stpcpy.c b/sysdeps/x86_64/mic/stpcpy.c
+new file mode 100644
+index 0000000000..c3400ecc2f
+--- /dev/null
++++ b/sysdeps/x86_64/mic/stpcpy.c
+@@ -0,0 +1 @@
++#include <string/stpcpy.c>
+diff --git a/sysdeps/x86_64/mic/stpncpy.c b/sysdeps/x86_64/mic/stpncpy.c
+new file mode 100644
+index 0000000000..69e7a56086
+--- /dev/null
++++ b/sysdeps/x86_64/mic/stpncpy.c
+@@ -0,0 +1 @@
++#include <string/stpncpy.c>
+diff --git a/sysdeps/x86_64/mic/strcat.c b/sysdeps/x86_64/mic/strcat.c
+new file mode 100644
+index 0000000000..3628a80d91
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strcat.c
+@@ -0,0 +1 @@
++#include <string/strcat.c>
+diff --git a/sysdeps/x86_64/mic/strcpy.c b/sysdeps/x86_64/mic/strcpy.c
+new file mode 100644
+index 0000000000..571af95afb
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strcpy.c
+@@ -0,0 +1 @@
++#include <string/strcpy.c>
+diff --git a/sysdeps/x86_64/mic/strncat.c b/sysdeps/x86_64/mic/strncat.c
+new file mode 100644
+index 0000000000..01f3345fb2
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strncat.c
+@@ -0,0 +1 @@
++#include <string/strncat.c>
+diff --git a/sysdeps/x86_64/mic/strncpy.c b/sysdeps/x86_64/mic/strncpy.c
+new file mode 100644
+index 0000000000..b759c999eb
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strncpy.c
+@@ -0,0 +1 @@
++#include <string/strncpy.c>
+diff --git a/sysdeps/x86_64/mic/wcschr.c b/sysdeps/x86_64/mic/wcschr.c
+new file mode 100644
+index 0000000000..37aa8fb492
+--- /dev/null
++++ b/sysdeps/x86_64/mic/wcschr.c
+@@ -0,0 +1 @@
++#include <wcsmbs/wcschr.c>
+diff --git a/sysdeps/x86_64/mic/wcscmp.c b/sysdeps/x86_64/mic/wcscmp.c
+new file mode 100644
+index 0000000000..422037c543
+--- /dev/null
++++ b/sysdeps/x86_64/mic/wcscmp.c
+@@ -0,0 +1 @@
++#include <wcsmbs/wcscmp.c>
+diff --git a/sysdeps/x86_64/mic/wcslen.c b/sysdeps/x86_64/mic/wcslen.c
+new file mode 100644
+index 0000000000..a0fd399320
+--- /dev/null
++++ b/sysdeps/x86_64/mic/wcslen.c
+@@ -0,0 +1 @@
++#include <wcsmbs/wcslen.c>
+diff --git a/sysdeps/x86_64/mic/wcsrchr.c b/sysdeps/x86_64/mic/wcsrchr.c
+new file mode 100644
+index 0000000000..ba535c7b8f
+--- /dev/null
++++ b/sysdeps/x86_64/mic/wcsrchr.c
+@@ -0,0 +1 @@
++#include <wcsmbs/wcsrchr.c>
+diff --git a/sysdeps/x86_64/mic/wmemchr.c b/sysdeps/x86_64/mic/wmemchr.c
+new file mode 100644
+index 0000000000..30d481d1a9
+--- /dev/null
++++ b/sysdeps/x86_64/mic/wmemchr.c
+@@ -0,0 +1 @@
++#include <wcsmbs/wmemchr.c>
+diff --git a/sysdeps/x86_64/mic/wmemcmp.c b/sysdeps/x86_64/mic/wmemcmp.c
+new file mode 100644
+index 0000000000..e464c1fcd8
+--- /dev/null
++++ b/sysdeps/x86_64/mic/wmemcmp.c
+@@ -0,0 +1 @@
++#include <wcsmbs/wmemcmp.c>
+diff --git a/sysdeps/x86_64/mic/wmemset.c b/sysdeps/x86_64/mic/wmemset.c
+new file mode 100644
+index 0000000000..61cefc1636
+--- /dev/null
++++ b/sysdeps/x86_64/mic/wmemset.c
+@@ -0,0 +1 @@
++#include <wcsmbs/wmemset.c>
+diff --git a/sysdeps/x86_64/mic/wmemset_chk.c b/sysdeps/x86_64/mic/wmemset_chk.c
+new file mode 100644
+index 0000000000..648a7fc235
+--- /dev/null
++++ b/sysdeps/x86_64/mic/wmemset_chk.c
+@@ -0,0 +1 @@
++#include <debug/wmemset_chk.c>

@@ -1,0 +1,188 @@
+From 02b6a2303d66b0c895344c4e8baf360e4cf9d769 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 1 Jul 2019 22:45:00 +0200
+Subject: [PATCH 04/49] x86_64: access MXCSR and raise FP exceptions through
+ sysdep.h hooks
+
+[2.39: only the FP exception raising and the sysdep.h includes remain;
+ldmxcsr/stmxcsr are valid on K1OM.]
+
+[2.31: setcontext/swapcontext keep ldmxcsr (valid on K1OM; only L1OM
+overrode LOAD_MXCSR).]
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/fclrexcpt.c    | 1 +
+ sysdeps/x86_64/fpu/fedisblxcpt.c  | 1 +
+ sysdeps/x86_64/fpu/feenablxcpt.c  | 1 +
+ sysdeps/x86_64/fpu/fegetenv.c     | 1 +
+ sysdeps/x86_64/fpu/feholdexcpt.c  | 1 +
+ sysdeps/x86_64/fpu/fesetenv.c     | 1 +
+ sysdeps/x86_64/fpu/fesetround.c   | 1 +
+ sysdeps/x86_64/fpu/feupdateenv.c  | 1 +
+ sysdeps/x86_64/fpu/fgetexcptflg.c | 1 +
+ sysdeps/x86_64/fpu/fraiseexcpt.c  | 6 +++---
+ sysdeps/x86_64/fpu/fsetexcptflg.c | 1 +
+ sysdeps/x86_64/fpu/ftestexcept.c  | 1 +
+ 12 files changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/sysdeps/x86_64/fpu/fclrexcpt.c b/sysdeps/x86_64/fpu/fclrexcpt.c
+index 55da126bf5..a4da185ba5 100644
+--- a/sysdeps/x86_64/fpu/fclrexcpt.c
++++ b/sysdeps/x86_64/fpu/fclrexcpt.c
+@@ -17,6 +17,7 @@
+    <https://www.gnu.org/licenses/>.  */
+ 
+ #include <fenv.h>
++#include <sysdep.h>
+ #include <math-inline-asm.h>
+ 
+ int
+diff --git a/sysdeps/x86_64/fpu/fedisblxcpt.c b/sysdeps/x86_64/fpu/fedisblxcpt.c
+index 251b27d20d..bb6e7815b2 100644
+--- a/sysdeps/x86_64/fpu/fedisblxcpt.c
++++ b/sysdeps/x86_64/fpu/fedisblxcpt.c
+@@ -17,6 +17,7 @@
+    <https://www.gnu.org/licenses/>.  */
+ 
+ #include <fenv.h>
++#include <sysdep.h>
+ #include <math-inline-asm.h>
+ 
+ int
+diff --git a/sysdeps/x86_64/fpu/feenablxcpt.c b/sysdeps/x86_64/fpu/feenablxcpt.c
+index 060967754a..2686c98ecb 100644
+--- a/sysdeps/x86_64/fpu/feenablxcpt.c
++++ b/sysdeps/x86_64/fpu/feenablxcpt.c
+@@ -17,6 +17,7 @@
+    <https://www.gnu.org/licenses/>.  */
+ 
+ #include <fenv.h>
++#include <sysdep.h>
+ #include <math-inline-asm.h>
+ 
+ int
+diff --git a/sysdeps/x86_64/fpu/fegetenv.c b/sysdeps/x86_64/fpu/fegetenv.c
+index 6fd66dc5b3..755cace6d7 100644
+--- a/sysdeps/x86_64/fpu/fegetenv.c
++++ b/sysdeps/x86_64/fpu/fegetenv.c
+@@ -17,6 +17,7 @@
+    <https://www.gnu.org/licenses/>.  */
+ 
+ #include <fenv.h>
++#include <sysdep.h>
+ #include <math-inline-asm.h>
+ 
+ int
+diff --git a/sysdeps/x86_64/fpu/feholdexcpt.c b/sysdeps/x86_64/fpu/feholdexcpt.c
+index f4fad611b2..4d86c8e7c6 100644
+--- a/sysdeps/x86_64/fpu/feholdexcpt.c
++++ b/sysdeps/x86_64/fpu/feholdexcpt.c
+@@ -17,6 +17,7 @@
+    <https://www.gnu.org/licenses/>.  */
+ 
+ #include <fenv.h>
++#include <sysdep.h>
+ #include <math-inline-asm.h>
+ 
+ int
+diff --git a/sysdeps/x86_64/fpu/fesetenv.c b/sysdeps/x86_64/fpu/fesetenv.c
+index 3991e86e45..a7f8ea00a7 100644
+--- a/sysdeps/x86_64/fpu/fesetenv.c
++++ b/sysdeps/x86_64/fpu/fesetenv.c
+@@ -17,6 +17,7 @@
+    <https://www.gnu.org/licenses/>.  */
+ 
+ #include <fenv.h>
++#include <sysdep.h>
+ #include <math-inline-asm.h>
+ #include <fpu_control.h>
+ #include <assert.h>
+diff --git a/sysdeps/x86_64/fpu/fesetround.c b/sysdeps/x86_64/fpu/fesetround.c
+index 32ac36ab2d..35c53c6498 100644
+--- a/sysdeps/x86_64/fpu/fesetround.c
++++ b/sysdeps/x86_64/fpu/fesetround.c
+@@ -17,6 +17,7 @@
+    <https://www.gnu.org/licenses/>.  */
+ 
+ #include <fenv.h>
++#include <sysdep.h>
+ #include <math-inline-asm.h>
+ 
+ int
+diff --git a/sysdeps/x86_64/fpu/feupdateenv.c b/sysdeps/x86_64/fpu/feupdateenv.c
+index 23a381dabb..00ad3f1522 100644
+--- a/sysdeps/x86_64/fpu/feupdateenv.c
++++ b/sysdeps/x86_64/fpu/feupdateenv.c
+@@ -17,6 +17,7 @@
+    <https://www.gnu.org/licenses/>.  */
+ 
+ #include <fenv.h>
++#include <sysdep.h>
+ #include <math-inline-asm.h>
+ 
+ int
+diff --git a/sysdeps/x86_64/fpu/fgetexcptflg.c b/sysdeps/x86_64/fpu/fgetexcptflg.c
+index 413e0632fb..376b1957c0 100644
+--- a/sysdeps/x86_64/fpu/fgetexcptflg.c
++++ b/sysdeps/x86_64/fpu/fgetexcptflg.c
+@@ -17,6 +17,7 @@
+    <https://www.gnu.org/licenses/>.  */
+ 
+ #include <fenv.h>
++#include <sysdep.h>
+ #include <math-inline-asm.h>
+ 
+ int
+diff --git a/sysdeps/x86_64/fpu/fraiseexcpt.c b/sysdeps/x86_64/fpu/fraiseexcpt.c
+index 41a23f7b03..d9770fbe23 100644
+--- a/sysdeps/x86_64/fpu/fraiseexcpt.c
++++ b/sysdeps/x86_64/fpu/fraiseexcpt.c
+@@ -17,6 +17,7 @@
+    <https://www.gnu.org/licenses/>.  */
+ 
+ #include <fenv.h>
++#include <sysdep.h>
+ #include <math-inline-asm.h>
+ #include <math.h>
+ 
+@@ -30,12 +31,11 @@ __feraiseexcept (int excepts)
+ 
+   /* First: invalid exception.  */
+   if ((FE_INVALID & excepts) != 0)
+-    /* One example of an invalid operation is 0.0 / 0.0.  */
+-    divss_inline_asm (0.0f, 0.0f);
++    FP_INVALID_EXCEPTION
+ 
+   /* Next: division by zero.  */
+   if ((FE_DIVBYZERO & excepts) != 0)
+-    divss_inline_asm (1.0f, 0.0f);
++    FP_DIVBYZERO_EXCEPTION
+ 
+   /* Next: overflow.  */
+   if ((FE_OVERFLOW & excepts) != 0)
+diff --git a/sysdeps/x86_64/fpu/fsetexcptflg.c b/sysdeps/x86_64/fpu/fsetexcptflg.c
+index 9835edd95b..bc2c12eb23 100644
+--- a/sysdeps/x86_64/fpu/fsetexcptflg.c
++++ b/sysdeps/x86_64/fpu/fsetexcptflg.c
+@@ -17,6 +17,7 @@
+    <https://www.gnu.org/licenses/>.  */
+ 
+ #include <fenv.h>
++#include <sysdep.h>
+ #include <math-inline-asm.h>
+ #include <math.h>
+ 
+diff --git a/sysdeps/x86_64/fpu/ftestexcept.c b/sysdeps/x86_64/fpu/ftestexcept.c
+index 0571e6ad76..0076b9a40a 100644
+--- a/sysdeps/x86_64/fpu/ftestexcept.c
++++ b/sysdeps/x86_64/fpu/ftestexcept.c
+@@ -17,6 +17,7 @@
+    <https://www.gnu.org/licenses/>.  */
+ 
+ #include <fenv.h>
++#include <sysdep.h>
+ #include <math-inline-asm.h>
+ 
+ int

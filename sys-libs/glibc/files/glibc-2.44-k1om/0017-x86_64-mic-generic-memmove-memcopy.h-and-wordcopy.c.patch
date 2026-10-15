@@ -1,0 +1,51 @@
+From 265416e7c4f6e06243916ab1c32cef5c5780e0a9 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 22:57:47 +0200
+Subject: [PATCH 17/49] x86_64/mic: generic memmove, memcopy.h and wordcopy.c
+
+Since 2.25 sysdeps/x86_64/memmove.S is the SSE2
+memmove-vec-unaligned-erms implementation (also providing memcpy and
+mempcpy), and memcopy.h and wordcopy.c are empty stubs that the generic
+C string functions cannot use.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/mic/memcopy.h     | 1 +
+ sysdeps/x86_64/mic/memmove.c     | 1 +
+ sysdeps/x86_64/mic/memmove_chk.c | 1 +
+ sysdeps/x86_64/mic/wordcopy.c    | 1 +
+ 4 files changed, 4 insertions(+)
+ create mode 100644 sysdeps/x86_64/mic/memcopy.h
+ create mode 100644 sysdeps/x86_64/mic/memmove.c
+ create mode 100644 sysdeps/x86_64/mic/memmove_chk.c
+ create mode 100644 sysdeps/x86_64/mic/wordcopy.c
+
+diff --git a/sysdeps/x86_64/mic/memcopy.h b/sysdeps/x86_64/mic/memcopy.h
+new file mode 100644
+index 0000000000..aa3300279e
+--- /dev/null
++++ b/sysdeps/x86_64/mic/memcopy.h
+@@ -0,0 +1 @@
++#include <sysdeps/generic/memcopy.h>
+diff --git a/sysdeps/x86_64/mic/memmove.c b/sysdeps/x86_64/mic/memmove.c
+new file mode 100644
+index 0000000000..664558126d
+--- /dev/null
++++ b/sysdeps/x86_64/mic/memmove.c
+@@ -0,0 +1 @@
++#include <string/memmove.c>
+diff --git a/sysdeps/x86_64/mic/memmove_chk.c b/sysdeps/x86_64/mic/memmove_chk.c
+new file mode 100644
+index 0000000000..bbf53d00d3
+--- /dev/null
++++ b/sysdeps/x86_64/mic/memmove_chk.c
+@@ -0,0 +1 @@
++#include <debug/memmove_chk.c>
+diff --git a/sysdeps/x86_64/mic/wordcopy.c b/sysdeps/x86_64/mic/wordcopy.c
+new file mode 100644
+index 0000000000..b2b6ca5b28
+--- /dev/null
++++ b/sysdeps/x86_64/mic/wordcopy.c
+@@ -0,0 +1 @@
++#include <string/wordcopy.c>

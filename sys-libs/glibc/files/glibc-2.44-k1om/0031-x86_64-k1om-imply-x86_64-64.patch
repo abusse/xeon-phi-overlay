@@ -1,0 +1,24 @@
+From 8948753044fdf6157b36204d03432b9fba59e2b8 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Thu, 1 Oct 2026 00:18:33 +0200
+Subject: [PATCH 31/49] x86_64/k1om: imply x86_64/64
+
+sysdeps/x86_64/64 holds LP64-only pieces (dl-tunables.list with
+prefer_map_32bit_exec since 2.39, which cpu-features.c reads) and no
+shlib-versions.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/k1om/Implies | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/sysdeps/x86_64/k1om/Implies b/sysdeps/x86_64/k1om/Implies
+index 72a1b50d79..cb341390d8 100644
+--- a/sysdeps/x86_64/k1om/Implies
++++ b/sysdeps/x86_64/k1om/Implies
+@@ -1,3 +1,4 @@
+ x86_64/mic
+ x86_64/fpu/587
+ wordsize-64
++x86_64/64

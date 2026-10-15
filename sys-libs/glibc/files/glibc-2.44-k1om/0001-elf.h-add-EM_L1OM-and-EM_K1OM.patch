@@ -1,0 +1,27 @@
+From c4b6be460aa782bfee7c5153ae510c7f7b20ea1d Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 1 Jul 2019 22:45:00 +0200
+Subject: [PATCH 01/49] elf.h: add EM_L1OM and EM_K1OM
+
+[2.25: upstream has them as EM_L10M/EM_K10M; add the 1OM spellings as
+aliases.]
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ elf/elf.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/elf/elf.h b/elf/elf.h
+index b482fcfb64..1a5300e20c 100644
+--- a/elf/elf.h
++++ b/elf/elf.h
+@@ -313,6 +313,8 @@ typedef struct
+ #define EM_SLE9X	179	/* Infineon Tech. SLE9X */
+ #define EM_L10M		180	/* Intel L10M */
+ #define EM_K10M		181	/* Intel K10M */
++#define EM_L1OM	EM_L10M	/* Intel L1OM */
++#define EM_K1OM	EM_K10M	/* Intel K1OM */
+ 				/* reserved 182 */
+ #define EM_AARCH64	183	/* ARM AARCH64 */
+ 				/* reserved 184 */

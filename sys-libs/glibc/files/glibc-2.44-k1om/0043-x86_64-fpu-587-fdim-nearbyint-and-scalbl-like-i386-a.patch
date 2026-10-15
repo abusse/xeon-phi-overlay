@@ -1,0 +1,178 @@
+From a464b058a215d347865e6c1c22f823879836ab6f Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Thu, 1 Oct 2026 06:25:16 +0200
+Subject: [PATCH 43/49] x86_64/fpu/587: fdim, nearbyint and scalbl like i386
+ and x86_64
+
+fdim: i386 s_fdim.c (double precision control around the subtraction, no
+double rounding).  nearbyint, nearbyintf: keep the exception flags with
+fnstenv/fldenv as i386 does; Intel's fclex also cleared flags raised
+before the call.  scalbl: the current x86_64 version (sNaN gives qNaN),
+fcomip replaced by fcomp/fnstsw/sahf.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/587/e_scalbl.S     | 42 ++++++++++-----------------
+ sysdeps/x86_64/fpu/587/s_fdim.c       |  1 +
+ sysdeps/x86_64/fpu/587/s_nearbyint.S  | 10 ++-----
+ sysdeps/x86_64/fpu/587/s_nearbyintf.S | 18 +++++-------
+ 4 files changed, 26 insertions(+), 45 deletions(-)
+ create mode 100644 sysdeps/x86_64/fpu/587/s_fdim.c
+
+diff --git a/sysdeps/x86_64/fpu/587/e_scalbl.S b/sysdeps/x86_64/fpu/587/e_scalbl.S
+index 9de6e52e96..ded13d32cf 100644
+--- a/sysdeps/x86_64/fpu/587/e_scalbl.S
++++ b/sysdeps/x86_64/fpu/587/e_scalbl.S
+@@ -1,35 +1,27 @@
+ /*
+- * Written by J.T. Conklin <jtc@netbsd.org>.
+  * Public domain.
+- *
+- * Adapted for `long double' by Ulrich Drepper <drepper@cygnus.com>.
+- * Adapted for i587 by Intel Corporation.
+- *
+- * Correct handling of y==-inf <drepper@gnu>
+  */
+ 
+ #include <machine/asm.h>
++#include <libm-alias-finite.h>
+ 
+-RCSID("$NetBSD: $")
+-
+-#ifdef __ELF__
+ 	.section .rodata
+-#else
+-	.text
+-#endif
+ 
+ 	.align ALIGNARG(4)
+-	ASM_TYPE_DIRECTIVE(zero_nan,@object)
++	.type zero_nan,@object
+ zero_nan:
+ 	.double 0.0
+ nan:	.byte 0, 0, 0, 0, 0, 0, 0xff, 0x7f
+-minus_zero:
+ 	.byte 0, 0, 0, 0, 0, 0, 0, 0x80
+ 	.byte 0, 0, 0, 0, 0, 0, 0xff, 0x7f
+ 	ASM_SIZE_DIRECTIVE(zero_nan)
+ 
+ 
+-#define MO(op) op(%rip)
++#ifdef PIC
++# define MO(op) op##(%rip)
++#else
++# define MO(op) op
++#endif
+ 
+ 	.text
+ ENTRY(__ieee754_scalbl)
+@@ -47,12 +39,12 @@ ENTRY(__ieee754_scalbl)
+ 	fnstsw
+ 	andl	$0x4500, %eax
+ 	cmpl	$0x0100, %eax
+-	je	3f
++	je	2f
+ 	fld	%st(1)
+ 	frndint
+ 	fcomp	%st(2)
+ 	fnstsw
+-	sahf
++	sahf	
+ 	jne	4f
+ 	fscale
+ 	fstp	%st(1)
+@@ -66,8 +58,10 @@ ENTRY(__ieee754_scalbl)
+ 	fstp	%st
+ 	fstp	%st
+ 	andl	$0x8000, %edx
++	andl	$0x0228, %eax
++	cmpl	$0x0028, %eax
++	je	4f
+ 	andl	$8, %eax
+-	jnz	4f
+ 	shrl	$11, %edx
+ 	addl	%edx, %eax
+ #ifdef PIC
+@@ -78,15 +72,8 @@ ENTRY(__ieee754_scalbl)
+ #endif
+ 	ret
+ 
+-	/* The result is NaN, but we must not raise an exception.
+-	   So use a variable.  */
+-2:	fstp	%st
+-	fstp	%st
+-	fldl	MO(nan)
+-	ret
+-
+-	/* The first parameter is a NaN.  Return it.  */
+-3:	fstp	%st(1)
++	/* The result is NaN; raise an exception for sNaN arguments.  */
++2:	faddp
+ 	ret
+ 
+ 	/* Return NaN and raise the invalid exception.  */
+@@ -96,3 +83,4 @@ ENTRY(__ieee754_scalbl)
+ 	fdiv	%st
+ 	ret
+ END(__ieee754_scalbl)
++libm_alias_finite (__ieee754_scalbl, __scalbl)
+diff --git a/sysdeps/x86_64/fpu/587/s_fdim.c b/sysdeps/x86_64/fpu/587/s_fdim.c
+new file mode 100644
+index 0000000000..67120915f5
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/s_fdim.c
+@@ -0,0 +1 @@
++#include <sysdeps/i386/fpu/s_fdim.c>
+diff --git a/sysdeps/x86_64/fpu/587/s_nearbyint.S b/sysdeps/x86_64/fpu/587/s_nearbyint.S
+index f8d5bf0cc1..a47fd57f7b 100644
+--- a/sysdeps/x86_64/fpu/587/s_nearbyint.S
++++ b/sysdeps/x86_64/fpu/587/s_nearbyint.S
+@@ -10,14 +10,10 @@ ENTRY(__nearbyint)
+ 	LOAD_REG_K1
+ 	STORE_DOUBLE_REG (0, -8(%rsp))
+ 	fldl	-8(%rsp)
+-	fnstcw	-12(%rsp)
+-	movl	-12(%rsp), %eax
+-	orl	$0x20, %eax
+-	movl	%eax, -16(%rsp)
+-	fldcw	-16(%rsp)
++	/* Keep the exception flags as they were: frndint may raise inexact.  */
++	fnstenv	-40(%rsp)
+ 	frndint
+-	fclex
+-	fldcw	-12(%rsp)
++	fldenv	-40(%rsp)
+ 	fstpl	-8(%rsp)
+ 	LOAD_DOUBLE_REG (-8(%rsp), 0)
+ 	ret
+diff --git a/sysdeps/x86_64/fpu/587/s_nearbyintf.S b/sysdeps/x86_64/fpu/587/s_nearbyintf.S
+index b15a694f03..e3f6f64b5e 100644
+--- a/sysdeps/x86_64/fpu/587/s_nearbyintf.S
++++ b/sysdeps/x86_64/fpu/587/s_nearbyintf.S
+@@ -8,18 +8,14 @@
+ 
+ ENTRY(__nearbyintf)
+ 	LOAD_REG_K1
+-	STORE_FLOAT_REG (0, -4(%rsp))
+-	flds	-4(%rsp)
+-	fnstcw	-8(%rsp)
+-	movl	-8(%rsp), %eax
+-	orl	$0x20, %eax
+-	movl	%eax, -12(%rsp)
+-	fldcw	-12(%rsp)
++	STORE_FLOAT_REG (0, -8(%rsp))
++	flds	-8(%rsp)
++	/* Keep the exception flags as they were: frndint may raise inexact.  */
++	fnstenv	-40(%rsp)
+ 	frndint
+-	fclex
+-	fldcw	-8(%rsp)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
++	fldenv	-40(%rsp)
++	fstps	-8(%rsp)
++	LOAD_FLOAT_REG (-8(%rsp), 0)
+ 	ret
+ END (__nearbyintf)
+ weak_alias (__nearbyintf, nearbyintf)

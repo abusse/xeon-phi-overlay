@@ -1,0 +1,218 @@
+From 1e04f40b2794727a91251a0d57daa510ba970a73 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 1 Jul 2019 22:45:00 +0200
+Subject: [PATCH 08/49] x86_64/mic: generic C string functions for CPUs without
+ SSE
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/mic/bzero.c        | 1 +
+ sysdeps/x86_64/mic/ffs.c          | 1 +
+ sysdeps/x86_64/mic/ffsll.c        | 1 +
+ sysdeps/x86_64/mic/memchr.c       | 1 +
+ sysdeps/x86_64/mic/memcmp.c       | 1 +
+ sysdeps/x86_64/mic/memcpy.c       | 1 +
+ sysdeps/x86_64/mic/memcpy_chk.c   | 1 +
+ sysdeps/x86_64/mic/mempcpy.c      | 1 +
+ sysdeps/x86_64/mic/mempcpy_chk.c  | 1 +
+ sysdeps/x86_64/mic/memset.c       | 1 +
+ sysdeps/x86_64/mic/memset_chk.c   | 1 +
+ sysdeps/x86_64/mic/rawmemchr.c    | 1 +
+ sysdeps/x86_64/mic/strcasecmp.c   | 1 +
+ sysdeps/x86_64/mic/strcasecmp_l.c | 1 +
+ sysdeps/x86_64/mic/strchr.c       | 1 +
+ sysdeps/x86_64/mic/strchrnul.c    | 1 +
+ sysdeps/x86_64/mic/strcmp.c       | 1 +
+ sysdeps/x86_64/mic/strlen.c       | 1 +
+ sysdeps/x86_64/mic/strncase.c     | 1 +
+ sysdeps/x86_64/mic/strncase_l.c   | 1 +
+ sysdeps/x86_64/mic/strncmp.c      | 1 +
+ sysdeps/x86_64/mic/strnlen.c      | 1 +
+ sysdeps/x86_64/mic/strrchr.c      | 1 +
+ 23 files changed, 23 insertions(+)
+ create mode 100644 sysdeps/x86_64/mic/bzero.c
+ create mode 100644 sysdeps/x86_64/mic/ffs.c
+ create mode 100644 sysdeps/x86_64/mic/ffsll.c
+ create mode 100644 sysdeps/x86_64/mic/memchr.c
+ create mode 100644 sysdeps/x86_64/mic/memcmp.c
+ create mode 100644 sysdeps/x86_64/mic/memcpy.c
+ create mode 100644 sysdeps/x86_64/mic/memcpy_chk.c
+ create mode 100644 sysdeps/x86_64/mic/mempcpy.c
+ create mode 100644 sysdeps/x86_64/mic/mempcpy_chk.c
+ create mode 100644 sysdeps/x86_64/mic/memset.c
+ create mode 100644 sysdeps/x86_64/mic/memset_chk.c
+ create mode 100644 sysdeps/x86_64/mic/rawmemchr.c
+ create mode 100644 sysdeps/x86_64/mic/strcasecmp.c
+ create mode 100644 sysdeps/x86_64/mic/strcasecmp_l.c
+ create mode 100644 sysdeps/x86_64/mic/strchr.c
+ create mode 100644 sysdeps/x86_64/mic/strchrnul.c
+ create mode 100644 sysdeps/x86_64/mic/strcmp.c
+ create mode 100644 sysdeps/x86_64/mic/strlen.c
+ create mode 100644 sysdeps/x86_64/mic/strncase.c
+ create mode 100644 sysdeps/x86_64/mic/strncase_l.c
+ create mode 100644 sysdeps/x86_64/mic/strncmp.c
+ create mode 100644 sysdeps/x86_64/mic/strnlen.c
+ create mode 100644 sysdeps/x86_64/mic/strrchr.c
+
+diff --git a/sysdeps/x86_64/mic/bzero.c b/sysdeps/x86_64/mic/bzero.c
+new file mode 100644
+index 0000000000..642c7d0415
+--- /dev/null
++++ b/sysdeps/x86_64/mic/bzero.c
+@@ -0,0 +1 @@
++#include <string/bzero.c>
+diff --git a/sysdeps/x86_64/mic/ffs.c b/sysdeps/x86_64/mic/ffs.c
+new file mode 100644
+index 0000000000..13aad830d0
+--- /dev/null
++++ b/sysdeps/x86_64/mic/ffs.c
+@@ -0,0 +1 @@
++#include <string/ffs.c>
+diff --git a/sysdeps/x86_64/mic/ffsll.c b/sysdeps/x86_64/mic/ffsll.c
+new file mode 100644
+index 0000000000..e548905d17
+--- /dev/null
++++ b/sysdeps/x86_64/mic/ffsll.c
+@@ -0,0 +1 @@
++#include <string/ffsll.c>
+diff --git a/sysdeps/x86_64/mic/memchr.c b/sysdeps/x86_64/mic/memchr.c
+new file mode 100644
+index 0000000000..f63fefbcec
+--- /dev/null
++++ b/sysdeps/x86_64/mic/memchr.c
+@@ -0,0 +1 @@
++#include <string/memchr.c>
+diff --git a/sysdeps/x86_64/mic/memcmp.c b/sysdeps/x86_64/mic/memcmp.c
+new file mode 100644
+index 0000000000..2ee40328b8
+--- /dev/null
++++ b/sysdeps/x86_64/mic/memcmp.c
+@@ -0,0 +1 @@
++#include <string/memcmp.c>
+diff --git a/sysdeps/x86_64/mic/memcpy.c b/sysdeps/x86_64/mic/memcpy.c
+new file mode 100644
+index 0000000000..5e50e6effe
+--- /dev/null
++++ b/sysdeps/x86_64/mic/memcpy.c
+@@ -0,0 +1 @@
++#include <string/memcpy.c>
+diff --git a/sysdeps/x86_64/mic/memcpy_chk.c b/sysdeps/x86_64/mic/memcpy_chk.c
+new file mode 100644
+index 0000000000..1eee86c639
+--- /dev/null
++++ b/sysdeps/x86_64/mic/memcpy_chk.c
+@@ -0,0 +1 @@
++#include <debug/memcpy_chk.c>
+diff --git a/sysdeps/x86_64/mic/mempcpy.c b/sysdeps/x86_64/mic/mempcpy.c
+new file mode 100644
+index 0000000000..df4d2b69cb
+--- /dev/null
++++ b/sysdeps/x86_64/mic/mempcpy.c
+@@ -0,0 +1 @@
++#include <string/mempcpy.c>
+diff --git a/sysdeps/x86_64/mic/mempcpy_chk.c b/sysdeps/x86_64/mic/mempcpy_chk.c
+new file mode 100644
+index 0000000000..ba170784c3
+--- /dev/null
++++ b/sysdeps/x86_64/mic/mempcpy_chk.c
+@@ -0,0 +1 @@
++#include <debug/mempcpy_chk.c>
+diff --git a/sysdeps/x86_64/mic/memset.c b/sysdeps/x86_64/mic/memset.c
+new file mode 100644
+index 0000000000..55f3835790
+--- /dev/null
++++ b/sysdeps/x86_64/mic/memset.c
+@@ -0,0 +1 @@
++#include <string/memset.c>
+diff --git a/sysdeps/x86_64/mic/memset_chk.c b/sysdeps/x86_64/mic/memset_chk.c
+new file mode 100644
+index 0000000000..ac4aa9630f
+--- /dev/null
++++ b/sysdeps/x86_64/mic/memset_chk.c
+@@ -0,0 +1 @@
++#include <debug/memset_chk.c>
+diff --git a/sysdeps/x86_64/mic/rawmemchr.c b/sysdeps/x86_64/mic/rawmemchr.c
+new file mode 100644
+index 0000000000..2b9189393c
+--- /dev/null
++++ b/sysdeps/x86_64/mic/rawmemchr.c
+@@ -0,0 +1 @@
++#include <string/rawmemchr.c>
+diff --git a/sysdeps/x86_64/mic/strcasecmp.c b/sysdeps/x86_64/mic/strcasecmp.c
+new file mode 100644
+index 0000000000..57e96378de
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strcasecmp.c
+@@ -0,0 +1 @@
++#include <string/strcasecmp.c>
+diff --git a/sysdeps/x86_64/mic/strcasecmp_l.c b/sysdeps/x86_64/mic/strcasecmp_l.c
+new file mode 100644
+index 0000000000..6c50d8e2f6
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strcasecmp_l.c
+@@ -0,0 +1 @@
++#include <string/strcasecmp_l.c>
+diff --git a/sysdeps/x86_64/mic/strchr.c b/sysdeps/x86_64/mic/strchr.c
+new file mode 100644
+index 0000000000..295fe12620
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strchr.c
+@@ -0,0 +1 @@
++#include <string/strchr.c>
+diff --git a/sysdeps/x86_64/mic/strchrnul.c b/sysdeps/x86_64/mic/strchrnul.c
+new file mode 100644
+index 0000000000..22431593a1
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strchrnul.c
+@@ -0,0 +1 @@
++#include <string/strchrnul.c>
+diff --git a/sysdeps/x86_64/mic/strcmp.c b/sysdeps/x86_64/mic/strcmp.c
+new file mode 100644
+index 0000000000..f618788e28
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strcmp.c
+@@ -0,0 +1 @@
++#include <string/strcmp.c>
+diff --git a/sysdeps/x86_64/mic/strlen.c b/sysdeps/x86_64/mic/strlen.c
+new file mode 100644
+index 0000000000..7fd4b71b7c
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strlen.c
+@@ -0,0 +1 @@
++#include <string/strlen.c>
+diff --git a/sysdeps/x86_64/mic/strncase.c b/sysdeps/x86_64/mic/strncase.c
+new file mode 100644
+index 0000000000..6a69a8f07b
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strncase.c
+@@ -0,0 +1 @@
++#include <string/strncase.c>
+diff --git a/sysdeps/x86_64/mic/strncase_l.c b/sysdeps/x86_64/mic/strncase_l.c
+new file mode 100644
+index 0000000000..011e5f0d0a
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strncase_l.c
+@@ -0,0 +1 @@
++#include <string/strncase_l.c>
+diff --git a/sysdeps/x86_64/mic/strncmp.c b/sysdeps/x86_64/mic/strncmp.c
+new file mode 100644
+index 0000000000..5bb3cfb974
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strncmp.c
+@@ -0,0 +1 @@
++#include <string/strncmp.c>
+diff --git a/sysdeps/x86_64/mic/strnlen.c b/sysdeps/x86_64/mic/strnlen.c
+new file mode 100644
+index 0000000000..1aa5440644
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strnlen.c
+@@ -0,0 +1 @@
++#include <string/strnlen.c>
+diff --git a/sysdeps/x86_64/mic/strrchr.c b/sysdeps/x86_64/mic/strrchr.c
+new file mode 100644
+index 0000000000..989e80e4d0
+--- /dev/null
++++ b/sysdeps/x86_64/mic/strrchr.c
+@@ -0,0 +1 @@
++#include <string/strrchr.c>

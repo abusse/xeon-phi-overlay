@@ -1,0 +1,42 @@
+From b2ff0e8df9c120c3db0e05b7fb6c20f2516c2ad9 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Thu, 1 Oct 2026 00:30:27 +0200
+Subject: [PATCH 32/49] x86_64/k1om: no x86 ISA level marker
+
+Since 2.39 libc.so carries a GNU property note with the x86-64 baseline
+ISA level, and ld.so refuses it on KNC ("CPU ISA level is lower than
+required"), which has neither MMX, SSE, SSE2 nor CMOV.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/preconfigure    | 2 ++
+ sysdeps/x86_64/preconfigure.ac | 2 ++
+ 2 files changed, 4 insertions(+)
+
+diff --git a/sysdeps/x86_64/preconfigure b/sysdeps/x86_64/preconfigure
+index 5fd28ad699..6becdaa107 100644
+--- a/sysdeps/x86_64/preconfigure
++++ b/sysdeps/x86_64/preconfigure
+@@ -64,6 +64,8 @@ x86_64/k1om)
+   fi
+   multi_arch=no
+   build_mathvec=no
++  # KNC is below the x86-64 baseline ISA level (no MMX/SSE/SSE2/CMOV)
++  libc_cv_include_x86_isa_level=no
+   libc_cv_cc_sse4=no
+   libc_cv_cc_avx=no
+   libc_cv_cc_avx512=no
+diff --git a/sysdeps/x86_64/preconfigure.ac b/sysdeps/x86_64/preconfigure.ac
+index d1b10eae2a..3067986705 100644
+--- a/sysdeps/x86_64/preconfigure.ac
++++ b/sysdeps/x86_64/preconfigure.ac
+@@ -37,6 +37,8 @@ x86_64/k1om)
+   fi
+   multi_arch=no
+   build_mathvec=no
++  # KNC is below the x86-64 baseline ISA level (no MMX/SSE/SSE2/CMOV)
++  libc_cv_include_x86_isa_level=no
+   libc_cv_cc_sse4=no
+   libc_cv_cc_avx=no
+   libc_cv_cc_avx512=no

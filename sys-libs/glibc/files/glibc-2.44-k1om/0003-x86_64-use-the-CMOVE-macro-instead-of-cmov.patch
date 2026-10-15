@@ -1,0 +1,52 @@
+From d8b819d6c82381022d855f858d1f82704a6de80a Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 1 Jul 2019 22:45:00 +0200
+Subject: [PATCH 03/49] x86_64: use the CMOVE macro instead of cmov
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/unix/sysv/linux/x86_64/setcontext.S  | 2 +-
+ sysdeps/unix/sysv/linux/x86_64/swapcontext.S | 2 +-
+ sysdeps/x86_64/__longjmp.S                   | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/sysdeps/unix/sysv/linux/x86_64/setcontext.S b/sysdeps/unix/sysv/linux/x86_64/setcontext.S
+index 24ff509f6c..ebbb30d5d8 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/setcontext.S
++++ b/sysdeps/unix/sysv/linux/x86_64/setcontext.S
+@@ -134,7 +134,7 @@ L(unwind_shadow_stack):
+ 	movl	$255, %esi
+ L(loop):
+ 	cmpq	%rsi, %rcx
+-	cmovb	%rcx, %rsi
++	CMOVE (b, ae, %rcx, %rsi, 100)
+ 	incsspq	%rsi
+ 	subq	%rsi, %rcx
+ 	ja	L(loop)
+diff --git a/sysdeps/unix/sysv/linux/x86_64/swapcontext.S b/sysdeps/unix/sysv/linux/x86_64/swapcontext.S
+index 4c9c08a828..df138b23c0 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/swapcontext.S
++++ b/sysdeps/unix/sysv/linux/x86_64/swapcontext.S
+@@ -176,7 +176,7 @@ L(unwind_shadow_stack):
+ 	movl	$255, %esi
+ L(loop):
+ 	cmpq	%rsi, %rcx
+-	cmovb	%rcx, %rsi
++	CMOVE (b, ae, %rcx, %rsi, 100)
+ 	incsspq	%rsi
+ 	subq	%rsi, %rcx
+ 	ja	L(loop)
+diff --git a/sysdeps/x86_64/__longjmp.S b/sysdeps/x86_64/__longjmp.S
+index aa17fe5e71..85de4d59dd 100644
+--- a/sysdeps/x86_64/__longjmp.S
++++ b/sysdeps/x86_64/__longjmp.S
+@@ -115,7 +115,7 @@ L(no_shadow_stack_token):
+ 	movl $255, %ebx
+ L(loop):
+ 	cmpq %rbx, %rax
+-	cmovb %rax, %rbx
++	CMOVE (b, ae, %rax, %rbx, 100)
+ 	incsspq %rbx
+ 	subq %rbx, %rax
+ 	ja L(loop)

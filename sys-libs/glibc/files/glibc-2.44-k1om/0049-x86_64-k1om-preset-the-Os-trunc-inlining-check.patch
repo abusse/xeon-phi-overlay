@@ -1,0 +1,44 @@
+From d1c652e819284720aa548c4e71bdf2e56b77f954 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Sun, 4 Oct 2026 09:59:46 +0200
+Subject: [PATCH 49/49] x86_64/k1om: preset the -Os trunc inlining check
+
+sysdeps/x86/configure probes whether the compiler inlines trunc at -Os
+by compiling with -msse4.1 and treats a failed compile as fatal.  The
+K1OM gcc refuses SSE options ("SSE, AVX and MMX instructions are not
+supported for KNC"), and KNC has no roundss: set the result to no, as
+for the other SSE/AVX compiler checks.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/preconfigure    | 2 ++
+ sysdeps/x86_64/preconfigure.ac | 2 ++
+ 2 files changed, 4 insertions(+)
+
+diff --git a/sysdeps/x86_64/preconfigure b/sysdeps/x86_64/preconfigure
+index 6becdaa107..8e4b545829 100644
+--- a/sysdeps/x86_64/preconfigure
++++ b/sysdeps/x86_64/preconfigure
+@@ -71,6 +71,8 @@ x86_64/k1om)
+   libc_cv_cc_avx512=no
+   libc_cv_cc_sse2avx=no
+   libc_cv_cc_avx2=no
++  # The -Os trunc inlining probe compiles with -msse4.1, which KNC gcc refuses
++  libc_cv_cc_x86_inline_trunc=no
+   ;;
+ *)
+   ;;
+diff --git a/sysdeps/x86_64/preconfigure.ac b/sysdeps/x86_64/preconfigure.ac
+index 3067986705..20ff08d28d 100644
+--- a/sysdeps/x86_64/preconfigure.ac
++++ b/sysdeps/x86_64/preconfigure.ac
+@@ -44,6 +44,8 @@ x86_64/k1om)
+   libc_cv_cc_avx512=no
+   libc_cv_cc_sse2avx=no
+   libc_cv_cc_avx2=no
++  # The -Os trunc inlining probe compiles with -msse4.1, which KNC gcc refuses
++  libc_cv_cc_x86_inline_trunc=no
+   ;;
+ *)
+   ;;

@@ -1,0 +1,132 @@
+From 481467293a23cc652598678b6c19ecb242529487 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 1 Jul 2019 22:45:00 +0200
+Subject: [PATCH 05/49] x86_64: ld.so: save argument vector registers through
+ sysdep.h hooks
+
+K1OM passes FP and vector arguments in zmm0-7: the lazy-binding and
+profiling trampolines must save full 512-bit registers, the TCB save
+area grows to 8 x 512 bits and La_x86_64_vector is one zmm.  MPX bound
+registers do not exist on K1OM.
+
+[2.23: the TCB save area and _dl_x86_64_save_sse are gone upstream; the
+lazy-binding resolver is handled by the following commit.]
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86/bits/link.h         | 19 ++++++++++++++-----
+ sysdeps/x86_64/dl-trampoline.h  | 24 ++++++++++++------------
+ sysdeps/x86_64/link-defines.sym |  5 +++++
+ 3 files changed, 31 insertions(+), 17 deletions(-)
+
+diff --git a/sysdeps/x86/bits/link.h b/sysdeps/x86/bits/link.h
+index 326d6e383e..31b1cd19ad 100644
+--- a/sysdeps/x86/bits/link.h
++++ b/sysdeps/x86/bits/link.h
+@@ -64,24 +64,33 @@ __END_DECLS
+ #else
+ 
+ /* Registers for entry into PLT on x86-64.  */
+-# if __GNUC_PREREQ (4,0)
++# if defined __KNF__ || defined __KNC__ 
++typedef float La_x86_64_xmm __attribute__ ((__vector_size__ (64)));
++
++typedef union
++{
++  La_x86_64_xmm xmm[1];
++} La_x86_64_vector __attribute__ ((aligned(64)));
++# else
++#  if __GNUC_PREREQ (4,0)
+ typedef float La_x86_64_xmm __attribute__ ((__vector_size__ (16)));
+ typedef float La_x86_64_ymm
+     __attribute__ ((__vector_size__ (32), __aligned__ (16)));
+ typedef double La_x86_64_zmm
+     __attribute__ ((__vector_size__ (64), __aligned__ (16)));
+-# else
++#  else
+ typedef float La_x86_64_xmm __attribute__ ((__mode__ (__V4SF__)));
+-# endif
++#  endif
+ 
+ typedef union
+ {
+-# if __GNUC_PREREQ (4,0)
++#  if __GNUC_PREREQ (4,0)
+   La_x86_64_ymm ymm[2];
+   La_x86_64_zmm zmm[1];
+-# endif
++#  endif
+   La_x86_64_xmm xmm[4];
+ } La_x86_64_vector __attribute__ ((__aligned__ (16)));
++#endif
+ 
+ typedef struct La_x86_64_regs
+ {
+diff --git a/sysdeps/x86_64/dl-trampoline.h b/sysdeps/x86_64/dl-trampoline.h
+index b07f29c55a..f405e86434 100644
+--- a/sysdeps/x86_64/dl-trampoline.h
++++ b/sysdeps/x86_64/dl-trampoline.h
+@@ -237,14 +237,14 @@ _dl_runtime_profile:
+ 	movq  LR_R8_OFFSET(%rsp), %r8
+ 	movq  LR_R9_OFFSET(%rsp), %r9
+ 
+-	VMOVA (LR_XMM_OFFSET + XMM_SIZE*0)(%rsp), %xmm0
+-	VMOVA (LR_XMM_OFFSET + XMM_SIZE*1)(%rsp), %xmm1
+-	VMOVA (LR_XMM_OFFSET + XMM_SIZE*2)(%rsp), %xmm2
+-	VMOVA (LR_XMM_OFFSET + XMM_SIZE*3)(%rsp), %xmm3
+-	VMOVA (LR_XMM_OFFSET + XMM_SIZE*4)(%rsp), %xmm4
+-	VMOVA (LR_XMM_OFFSET + XMM_SIZE*5)(%rsp), %xmm5
+-	VMOVA (LR_XMM_OFFSET + XMM_SIZE*6)(%rsp), %xmm6
+-	VMOVA (LR_XMM_OFFSET + XMM_SIZE*7)(%rsp), %xmm7
++	LOAD_VEC_REG ((LR_XMM_OFFSET)(%rsp), 0)
++	LOAD_VEC_REG ((LR_XMM_OFFSET + XMM_SIZE*1)(%rsp), 1)
++	LOAD_VEC_REG ((LR_XMM_OFFSET + XMM_SIZE*2)(%rsp), 2)
++	LOAD_VEC_REG ((LR_XMM_OFFSET + XMM_SIZE*3)(%rsp), 3)
++	LOAD_VEC_REG ((LR_XMM_OFFSET + XMM_SIZE*4)(%rsp), 4)
++	LOAD_VEC_REG ((LR_XMM_OFFSET + XMM_SIZE*5)(%rsp), 5)
++	LOAD_VEC_REG ((LR_XMM_OFFSET + XMM_SIZE*6)(%rsp), 6)
++	LOAD_VEC_REG ((LR_XMM_OFFSET + XMM_SIZE*7)(%rsp), 7)
+ 
+ # ifdef RESTORE_AVX
+ 	/* Check if any xmm0-xmm7 registers are changed by audit
+@@ -397,8 +397,8 @@ _dl_runtime_profile:
+ 	movq %rax, LRV_RAX_OFFSET(%rcx)
+ 	movq %rdx, LRV_RDX_OFFSET(%rcx)
+ 
+-	VMOVA %xmm0, LRV_XMM0_OFFSET(%rcx)
+-	VMOVA %xmm1, LRV_XMM1_OFFSET(%rcx)
++	STORE_VEC_REG (0, LRV_XMM0_OFFSET(%rcx))
++	STORE_VEC_REG (1, LRV_XMM1_OFFSET(%rcx))
+ 
+ # ifdef RESTORE_AVX
+ 	/* This is to support AVX audit modules.  */
+@@ -423,8 +423,8 @@ _dl_runtime_profile:
+ 	movq LRV_RAX_OFFSET(%rsp), %rax
+ 	movq LRV_RDX_OFFSET(%rsp), %rdx
+ 
+-	VMOVA LRV_XMM0_OFFSET(%rsp), %xmm0
+-	VMOVA LRV_XMM1_OFFSET(%rsp), %xmm1
++	LOAD_VEC_REG (LRV_XMM0_OFFSET(%rsp), 0)
++	LOAD_VEC_REG (LRV_XMM1_OFFSET(%rsp), 1)
+ 
+ # ifdef RESTORE_AVX
+ 	/* Check if xmm0/xmm1 registers are changed by audit module.  */
+diff --git a/sysdeps/x86_64/link-defines.sym b/sysdeps/x86_64/link-defines.sym
+index 85d35ad034..5b79f37cf8 100644
+--- a/sysdeps/x86_64/link-defines.sym
++++ b/sysdeps/x86_64/link-defines.sym
+@@ -4,8 +4,13 @@
+ --
+ VECTOR_SIZE		sizeof (La_x86_64_vector)
+ XMM_SIZE		sizeof (La_x86_64_xmm)
++#ifdef __KNC__
++YMM_SIZE		256/8/*sizeof (La_x86_64_ymm)*/
++ZMM_SIZE		512/8/*sizeof (La_x86_64_zmm)*/
++#else
+ YMM_SIZE		sizeof (La_x86_64_ymm)
+ ZMM_SIZE		sizeof (La_x86_64_zmm)
++#endif
+ 
+ LR_SIZE			sizeof (struct La_x86_64_regs)
+ LR_RDX_OFFSET		offsetof (struct La_x86_64_regs, lr_rdx)

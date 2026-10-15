@@ -1,0 +1,44 @@
+From 31421fd975d1b3c133e5d2af732340918bab5710 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Thu, 1 Oct 2026 06:43:15 +0200
+Subject: [PATCH 45/49] x86_64/fpu/587: build CORE-MATH, fma and pow without
+ excess precision
+
+The CORE-MATH erf, erfc, lgamma, tgamma, cosh, sinh, tanh and the
+generic fma, fmaf and pow rely on double arithmetic being rounded to
+double.  With x87 scalar math (FLT_EVAL_METHOD 2) they lost up to 317
+ulp (lgamma), fma was off by one ulp in the subnormal range and pow
+overflowed at DBL_MAX in FE_UPWARD.  Use -fexcess-precision=standard as
+sysdeps/i386/Makefile does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/587/Makefile | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+ create mode 100644 sysdeps/x86_64/fpu/587/Makefile
+
+diff --git a/sysdeps/x86_64/fpu/587/Makefile b/sysdeps/x86_64/fpu/587/Makefile
+new file mode 100644
+index 0000000000..c3e5a17cd9
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/Makefile
+@@ -0,0 +1,18 @@
++ifeq ($(subdir),math)
++# The CORE-MATH and generic fma/pow implementations assume
++# FLT_EVAL_METHOD == 0 (see sysdeps/i386/Makefile; i386 keeps the x87
++# acosh and atanh).
++CFLAGS-e_acosh.c += -fexcess-precision=standard
++CFLAGS-e_atanh.c += -fexcess-precision=standard
++CFLAGS-e_cosh.c += -fexcess-precision=standard
++CFLAGS-e_lgamma_r.c += -fexcess-precision=standard
++CFLAGS-e_gamma_r.c += -fexcess-precision=standard
++CFLAGS-e_sinh.c += -fexcess-precision=standard
++CFLAGS-s_erf.c += -fexcess-precision=standard
++CFLAGS-s_erfc.c += -fexcess-precision=standard
++CFLAGS-s_erf_common.c += -fexcess-precision=standard
++CFLAGS-s_fma.c += -fexcess-precision=standard
++CFLAGS-s_fmaf.c += -fexcess-precision=standard
++CFLAGS-s_tanh.c += -fexcess-precision=standard
++CFLAGS-e_pow.c += -fexcess-precision=standard
++endif

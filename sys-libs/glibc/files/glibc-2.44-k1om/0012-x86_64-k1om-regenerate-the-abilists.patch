@@ -1,0 +1,2002 @@
+From cc6bacd7c764f3fe97800bf59dd8f7d539323c7f Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 22:27:45 +0200
+Subject: [PATCH 12/49] x86_64/k1om: regenerate the abilists
+
+Intel's k1om abilists are copies of the x86_64 ones and list symbol
+versions older than GLIBC_2.14, the k1om baseline in shlib-versions, so
+check-abi failed for every library.  Regenerated with make update-abi;
+the exported symbol sets are identical to those of the MPSS 3.8.6
+libraries.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ .../unix/sysv/linux/x86_64/k1om/ld.abilist    |  10 +-
+ .../linux/x86_64/k1om/libBrokenLocale.abilist |   4 +-
+ .../sysv/linux/x86_64/k1om/libanl.abilist     |   4 +-
+ .../unix/sysv/linux/x86_64/k1om/libc.abilist  | 802 ++++++++----------
+ .../sysv/linux/x86_64/k1om/libcrypt.abilist   |   4 +-
+ .../unix/sysv/linux/x86_64/k1om/libdl.abilist |  14 +-
+ .../unix/sysv/linux/x86_64/k1om/libm.abilist  | 145 ++--
+ .../sysv/linux/x86_64/k1om/libnsl.abilist     |   4 +-
+ .../sysv/linux/x86_64/k1om/libresolv.abilist  |  20 +-
+ .../unix/sysv/linux/x86_64/k1om/librt.abilist |  35 +-
+ .../linux/x86_64/k1om/libthread_db.abilist    |  12 +-
+ .../sysv/linux/x86_64/k1om/libutil.abilist    |   4 +-
+ 12 files changed, 460 insertions(+), 598 deletions(-)
+
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/ld.abilist b/sysdeps/unix/sysv/linux/x86_64/k1om/ld.abilist
+index fb1e8d481f..3f7eeaf6a9 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/ld.abilist
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/ld.abilist
+@@ -1,15 +1,11 @@
+-GLIBC_2.2.5
+- GLIBC_2.2.5 A
++GLIBC_2.14
++ GLIBC_2.14 A
+  __libc_memalign F
+  __libc_stack_end D 0x8
++ __tls_get_addr F
+  _dl_mcount F
+  _r_debug D 0x28
+  calloc F
+  free F
+  malloc F
+  realloc F
+-GLIBC_2.3
+- GLIBC_2.3 A
+- __tls_get_addr F
+-GLIBC_2.4
+- GLIBC_2.4 A
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/libBrokenLocale.abilist b/sysdeps/unix/sysv/linux/x86_64/k1om/libBrokenLocale.abilist
+index be74b4bf0c..601f926410 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/libBrokenLocale.abilist
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/libBrokenLocale.abilist
+@@ -1,3 +1,3 @@
+-GLIBC_2.2.5
+- GLIBC_2.2.5 A
++GLIBC_2.14
++ GLIBC_2.14 A
+  __ctype_get_mb_cur_max F
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/libanl.abilist b/sysdeps/unix/sysv/linux/x86_64/k1om/libanl.abilist
+index a525e60f6a..4c9d435fc4 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/libanl.abilist
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/libanl.abilist
+@@ -1,5 +1,5 @@
+-GLIBC_2.2.5
+- GLIBC_2.2.5 A
++GLIBC_2.14
++ GLIBC_2.14 A
+  gai_cancel F
+  gai_error F
+  gai_suspend F
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/libc.abilist b/sysdeps/unix/sysv/linux/x86_64/k1om/libc.abilist
+index 914b5908f0..01e370aee6 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/libc.abilist
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/libc.abilist
+@@ -1,98 +1,5 @@
+-GLIBC_2.10
+- GLIBC_2.10 A
+- __cxa_at_quick_exit F
+- __posix_getopt F
+- accept4 F
+- endsgent F
+- fallocate F
+- fallocate64 F
+- fgetsgent F
+- fgetsgent_r F
+- getsgent F
+- getsgent_r F
+- getsgnam F
+- getsgnam_r F
+- malloc_info F
+- preadv F
+- preadv64 F
+- psiginfo F
+- putsgent F
+- pwritev F
+- pwritev64 F
+- quick_exit F
+- register_printf_modifier F
+- register_printf_specifier F
+- register_printf_type F
+- setsgent F
+- sgetsgent F
+- sgetsgent_r F
+-GLIBC_2.11
+- GLIBC_2.11 A
+- __longjmp_chk F
+- execvpe F
+- mkostemps F
+- mkostemps64 F
+- mkstemps F
+- mkstemps64 F
+-GLIBC_2.12
+- GLIBC_2.12 A
+- _sys_errlist D 0x438
+- _sys_nerr D 0x4
+- ntp_gettimex F
+- recvmmsg F
+- sys_errlist D 0x438
+- sys_nerr D 0x4
+-GLIBC_2.13
+- GLIBC_2.13 A
+- __fentry__ F
+- fanotify_init F
+- fanotify_mark F
+- prlimit F
+- prlimit64 F
+ GLIBC_2.14
+  GLIBC_2.14 A
+- clock_adjtime F
+- memcpy F
+- name_to_handle_at F
+- open_by_handle_at F
+- sendmmsg F
+- setns F
+- syncfs F
+-GLIBC_2.15
+- GLIBC_2.15 A
+- __fdelt_chk F
+- __fdelt_warn F
+- posix_spawn F
+- posix_spawnp F
+- process_vm_readv F
+- process_vm_writev F
+- scandirat F
+- scandirat64 F
+-GLIBC_2.16
+- GLIBC_2.16 A
+- __getauxval F
+- __poll_chk F
+- __ppoll_chk F
+- aligned_alloc F
+- c16rtomb F
+- c32rtomb F
+- getauxval F
+- mbrtoc16 F
+- mbrtoc32 F
+- timespec_get F
+-GLIBC_2.17
+- GLIBC_2.17 A
+- clock_getcpuclockid F
+- clock_getres F
+- clock_gettime F
+- clock_nanosleep F
+- clock_settime F
+- secure_getenv F
+-GLIBC_2.18
+- GLIBC_2.18 A
+- __cxa_thread_atexit_impl F
+-GLIBC_2.2.5
+- GLIBC_2.2.5 A
+  _Exit F
+  _IO_2_1_stderr_ D 0xe0
+  _IO_2_1_stdin_ D 0xe0
+@@ -231,6 +138,7 @@ GLIBC_2.2.5
+  __argz_next F
+  __argz_stringify F
+  __asprintf F
++ __asprintf_chk F
+  __assert F
+  __assert_fail F
+  __assert_perror_fail F
+@@ -240,18 +148,18 @@ GLIBC_2.2.5
+  __bsd_getpgrp F
+  __bzero F
+  __check_rhosts_file D 0x4
++ __chk_fail F
+  __clone F
+  __close F
+  __cmsg_nxthdr F
++ __confstr_chk F
+  __connect F
+- __ctype32_b D 0x8
+- __ctype32_tolower D 0x8
+- __ctype32_toupper D 0x8
+- __ctype_b D 0x8
++ __ctype_b_loc F
+  __ctype_get_mb_cur_max F
+- __ctype_tolower D 0x8
+- __ctype_toupper D 0x8
++ __ctype_tolower_loc F
++ __ctype_toupper_loc F
+  __curbrk D 0x8
++ __cxa_at_quick_exit F
+  __cxa_atexit F
+  __cxa_finalize F
+  __cyg_profile_func_enter F
+@@ -260,6 +168,7 @@ GLIBC_2.2.5
+  __dcgettext F
+  __default_morecore F
+  __dgettext F
++ __dprintf_chk F
+  __dup2 F
+  __duplocale F
+  __endmntent F
+@@ -267,30 +176,48 @@ GLIBC_2.2.5
+  __errno_location F
+  __fbufsize F
+  __fcntl F
++ __fentry__ F
+  __ffs F
++ __fgets_chk F
++ __fgets_unlocked_chk F
++ __fgetws_chk F
++ __fgetws_unlocked_chk F
+  __finite F
+  __finitef F
+  __finitel F
+  __flbf F
+  __fork F
+  __fpending F
++ __fprintf_chk F
+  __fpu_control D 0x2
+  __fpurge F
++ __fread_chk F
++ __fread_unlocked_chk F
+  __freadable F
+  __freading F
+  __free_hook D 0x8
+  __freelocale F
+  __fsetlocking F
++ __fwprintf_chk F
+  __fwritable F
+  __fwriting F
+  __fxstat F
+  __fxstat64 F
++ __fxstatat F
++ __fxstatat64 F
++ __getcwd_chk F
+  __getdelim F
++ __getdomainname_chk F
++ __getgroups_chk F
++ __gethostname_chk F
++ __getlogin_r_chk F
+  __getmntent_r F
+  __getpagesize F
+  __getpgid F
+  __getpid F
++ __gets_chk F
+  __gettimeofday F
++ __getwd_chk F
+  __gmtime_r F
+  __h_errno_location F
+  __isalnum_l F
+@@ -298,6 +225,7 @@ GLIBC_2.2.5
+  __isascii_l F
+  __isblank_l F
+  __iscntrl_l F
++ __isctype F
+  __isdigit_l F
+  __isgraph_l F
+  __isinf F
+@@ -307,6 +235,18 @@ GLIBC_2.2.5
+  __isnan F
+  __isnanf F
+  __isnanl F
++ __isoc99_fscanf F
++ __isoc99_fwscanf F
++ __isoc99_scanf F
++ __isoc99_sscanf F
++ __isoc99_swscanf F
++ __isoc99_vfscanf F
++ __isoc99_vfwscanf F
++ __isoc99_vscanf F
++ __isoc99_vsscanf F
++ __isoc99_vswscanf F
++ __isoc99_vwscanf F
++ __isoc99_wscanf F
+  __isprint_l F
+  __ispunct_l F
+  __isspace_l F
+@@ -346,6 +286,7 @@ GLIBC_2.2.5
+  __libc_sa_len F
+  __libc_start_main F
+  __libc_valloc F
++ __longjmp_chk F
+  __lseek F
+  __lxstat F
+  __lxstat64 F
+@@ -353,11 +294,19 @@ GLIBC_2.2.5
+  __malloc_initialize_hook D 0x8
+  __mbrlen F
+  __mbrtowc F
++ __mbsnrtowcs_chk F
++ __mbsrtowcs_chk F
++ __mbstowcs_chk F
+  __memalign_hook D 0x8
++ __memcpy_chk F
++ __memmove_chk F
+  __mempcpy F
++ __mempcpy_chk F
+  __mempcpy_small F
++ __memset_chk F
+  __monstartup F
+  __morecore D 0x8
++ __nanosleep F
+  __newlocale F
+  __nl_langinfo_l F
+  __nss_configure_lookup F
+@@ -367,21 +316,39 @@ GLIBC_2.2.5
+  __nss_hosts_lookup F
+  __nss_next F
+  __nss_passwd_lookup F
++ __obstack_printf_chk F
++ __obstack_vprintf_chk F
+  __open F
+  __open64 F
++ __open64_2 F
++ __open_2 F
++ __openat64_2 F
++ __openat_2 F
+  __overflow F
+  __pipe F
+  __poll F
++ __posix_getopt F
+  __pread64 F
++ __pread64_chk F
++ __pread_chk F
++ __printf_chk F
+  __printf_fp F
+  __profile_frequency F
+  __progname D 0x8
+  __progname_full D 0x8
++ __ptsname_r_chk F
+  __pwrite64 F
+  __rawmemchr F
+  __rcmd_errstr D 0x8
+  __read F
++ __read_chk F
++ __readlink_chk F
++ __readlinkat_chk F
+  __realloc_hook D 0x8
++ __realpath_chk F
++ __recv_chk F
++ __recvfrom_chk F
++ __register_atfork F
+  __res_init F
+  __res_nclose F
+  __res_ninit F
+@@ -392,6 +359,9 @@ GLIBC_2.2.5
+  __rpc_thread_svc_max_pollfd F
+  __rpc_thread_svc_pollfd F
+  __sbrk F
++ __sched_cpualloc F
++ __sched_cpucount F
++ __sched_cpufree F
+  __sched_get_priority_max F
+  __sched_get_priority_min F
+  __sched_getparam F
+@@ -413,14 +383,21 @@ GLIBC_2.2.5
+  __sigpause F
+  __sigsetjmp F
+  __sigsuspend F
++ __snprintf_chk F
++ __sprintf_chk F
++ __stack_chk_fail F
+  __statfs F
+  __stpcpy F
++ __stpcpy_chk F
+  __stpcpy_small F
+  __stpncpy F
++ __stpncpy_chk F
+  __strcasecmp F
+  __strcasecmp_l F
+  __strcasestr F
++ __strcat_chk F
+  __strcoll_l F
++ __strcpy_chk F
+  __strcpy_small F
+  __strcspn_c1 F
+  __strcspn_c2 F
+@@ -428,7 +405,10 @@ GLIBC_2.2.5
+  __strdup F
+  __strerror_r F
+  __strfmon_l F
++ __strftime_l F
+  __strncasecmp_l F
++ __strncat_chk F
++ __strncpy_chk F
+  __strndup F
+  __strpbrk_c2 F
+  __strpbrk_c3 F
+@@ -457,8 +437,10 @@ GLIBC_2.2.5
+  __strtoull_l F
+  __strverscmp F
+  __strxfrm_l F
++ __swprintf_chk F
+  __sysconf F
+  __sysctl F
++ __syslog_chk F
+  __sysv_signal F
+  __timezone D 0x8
+  __toascii_l F
+@@ -468,18 +450,40 @@ GLIBC_2.2.5
+  __towctrans_l F
+  __towlower_l F
+  __towupper_l F
++ __ttyname_r_chk F
+  __tzname D 0x10
+  __uflow F
+  __underflow F
++ __uselocale F
++ __vasprintf_chk F
++ __vdprintf_chk F
+  __vfork F
++ __vfprintf_chk F
+  __vfscanf F
++ __vfwprintf_chk F
++ __vprintf_chk F
+  __vsnprintf F
++ __vsnprintf_chk F
++ __vsprintf_chk F
+  __vsscanf F
++ __vswprintf_chk F
++ __vsyslog_chk F
++ __vwprintf_chk F
+  __wait F
+  __waitpid F
++ __wcpcpy_chk F
++ __wcpncpy_chk F
++ __wcrtomb_chk F
+  __wcscasecmp_l F
++ __wcscat_chk F
+  __wcscoll_l F
++ __wcscpy_chk F
++ __wcsftime_l F
+  __wcsncasecmp_l F
++ __wcsncat_chk F
++ __wcsncpy_chk F
++ __wcsnrtombs_chk F
++ __wcsrtombs_chk F
+  __wcstod_internal F
+  __wcstod_l F
+  __wcstof_internal F
+@@ -490,20 +494,29 @@ GLIBC_2.2.5
+  __wcstold_l F
+  __wcstoll_internal F
+  __wcstoll_l F
++ __wcstombs_chk F
+  __wcstoul_internal F
+  __wcstoul_l F
+  __wcstoull_internal F
+  __wcstoull_l F
+  __wcsxfrm_l F
++ __wctomb_chk F
+  __wctrans_l F
+  __wctype_l F
++ __wmemcpy_chk F
++ __wmemmove_chk F
++ __wmempcpy_chk F
++ __wmemset_chk F
+  __woverflow F
++ __wprintf_chk F
+  __write F
+  __wuflow F
+  __wunderflow F
+  __xmknod F
++ __xmknodat F
+  __xpg_basename F
+  __xpg_sigpause F
++ __xpg_strerror_r F
+  __xstat F
+  __xstat64 F
+  _authenticate F
+@@ -520,7 +533,6 @@ GLIBC_2.2.5
+  _nl_domain_bindings D 0x8
+  _nl_msg_cat_cntr D 0x4
+  _null_auth D 0x18
+- _obstack D 0x8
+  _obstack_allocated_p F
+  _obstack_begin F
+  _obstack_begin_1 F
+@@ -532,15 +544,16 @@ GLIBC_2.2.5
+  _rpc_dtablesize F
+  _seterr_reply F
+  _setjmp F
+- _sys_errlist D 0x3e8
++ _sys_errlist D 0x438
+  _sys_nerr D 0x4
+- _sys_siglist D 0x200
++ _sys_siglist D 0x208
+  _tolower F
+  _toupper F
+  a64l F
+  abort F
+  abs F
+  accept F
++ accept4 F
+  access F
+  acct F
+  addmntent F
+@@ -641,6 +654,7 @@ GLIBC_2.2.5
+  clntudp_create F
+  clntunix_create F
+  clock F
++ clock_adjtime F
+  clone F
+  close F
+  closedir F
+@@ -675,7 +689,10 @@ GLIBC_2.2.5
+  drand48_r F
+  dup F
+  dup2 F
++ dup3 F
++ duplocale F
+  dysize F
++ eaccess F
+  ecb_crypt F
+  ecvt F
+  ecvt_r F
+@@ -690,6 +707,7 @@ GLIBC_2.2.5
+  endpwent F
+  endrpcent F
+  endservent F
++ endsgent F
+  endspent F
+  endttyent F
+  endusershell F
+@@ -702,6 +720,11 @@ GLIBC_2.2.5
+  envz_merge F
+  envz_remove F
+  envz_strip F
++ epoll_create F
++ epoll_create1 F
++ epoll_ctl F
++ epoll_pwait F
++ epoll_wait F
+  erand48 F
+  erand48_r F
+  err F
+@@ -719,18 +742,29 @@ GLIBC_2.2.5
+  ether_ntoa_r F
+  ether_ntohost F
+  euidaccess F
++ eventfd F
++ eventfd_read F
++ eventfd_write F
+  execl F
+  execle F
+  execlp F
+  execv F
+  execve F
+  execvp F
++ execvpe F
+  exit F
++ faccessat F
++ fallocate F
++ fallocate64 F
++ fanotify_init F
++ fanotify_mark F
+  fattach F
+  fchdir F
+  fchflags F
+  fchmod F
++ fchmodat F
+  fchown F
++ fchownat F
+  fclose F
+  fcloseall F
+  fcntl F
+@@ -739,6 +773,7 @@ GLIBC_2.2.5
+  fdatasync F
+  fdetach F
+  fdopen F
++ fdopendir F
+  feof F
+  feof_unlocked F
+  ferror F
+@@ -759,17 +794,21 @@ GLIBC_2.2.5
+  fgetpwent_r F
+  fgets F
+  fgets_unlocked F
++ fgetsgent F
++ fgetsgent_r F
+  fgetspent F
+  fgetspent_r F
+  fgetwc F
+  fgetwc_unlocked F
+  fgetws F
+  fgetws_unlocked F
++ fgetxattr F
+  fileno F
+  fileno_unlocked F
+  finite F
+  finitef F
+  finitel F
++ flistxattr F
+  flock F
+  flockfile F
+  fmemopen F
+@@ -793,6 +832,9 @@ GLIBC_2.2.5
+  fread_unlocked F
+  free F
+  freeaddrinfo F
++ freeifaddrs F
++ freelocale F
++ fremovexattr F
+  freopen F
+  freopen64 F
+  frexp F
+@@ -804,6 +846,7 @@ GLIBC_2.2.5
+  fseeko64 F
+  fsetpos F
+  fsetpos64 F
++ fsetxattr F
+  fstatfs F
+  fstatfs64 F
+  fstatvfs F
+@@ -825,6 +868,9 @@ GLIBC_2.2.5
+  ftw F
+  ftw64 F
+  funlockfile F
++ futimens F
++ futimes F
++ futimesat F
+  fwide F
+  fwprintf F
+  fwrite F
+@@ -883,6 +929,8 @@ GLIBC_2.2.5
+  gethostent_r F
+  gethostid F
+  gethostname F
++ getifaddrs F
++ getipv4sourcefilter F
+  getitimer F
+  getline F
+  getloadavg F
+@@ -948,9 +996,14 @@ GLIBC_2.2.5
+  getservbyport_r F
+  getservent F
+  getservent_r F
++ getsgent F
++ getsgent_r F
++ getsgnam F
++ getsgnam_r F
+  getsid F
+  getsockname F
+  getsockopt F
++ getsourcefilter F
+  getspent F
+  getspent_r F
+  getspnam F
+@@ -979,6 +1032,7 @@ GLIBC_2.2.5
+  getwchar F
+  getwchar_unlocked F
+  getwd F
++ getxattr F
+  glob F
+  glob64 F
+  glob_pattern_p F
+@@ -986,6 +1040,9 @@ GLIBC_2.2.5
+  globfree64 F
+  gmtime F
+  gmtime_r F
++ gnu_dev_major F
++ gnu_dev_makedev F
++ gnu_dev_minor F
+  gnu_get_libc_release F
+  gnu_get_libc_version F
+  grantpt F
+@@ -1018,22 +1075,45 @@ GLIBC_2.2.5
+  in6addr_any D 0x10
+  in6addr_loopback D 0x10
+  index F
+- inet_addr F
+- inet_aton F
+- inet_lnaof F
+- inet_makeaddr F
+- inet_netof F
+- inet_network F
+- inet_nsap_addr F
+- inet_nsap_ntoa F
+- inet_ntoa F
+- inet_ntop F
+- inet_pton F
+- init_module F
+- initgroups F
+- initstate F
++ inet6_opt_append F
++ inet6_opt_find F
++ inet6_opt_finish F
++ inet6_opt_get_val F
++ inet6_opt_init F
++ inet6_opt_next F
++ inet6_opt_set_val F
++ inet6_option_alloc F
++ inet6_option_append F
++ inet6_option_find F
++ inet6_option_init F
++ inet6_option_next F
++ inet6_option_space F
++ inet6_rth_add F
++ inet6_rth_getaddr F
++ inet6_rth_init F
++ inet6_rth_reverse F
++ inet6_rth_segments F
++ inet6_rth_space F
++ inet_addr F
++ inet_aton F
++ inet_lnaof F
++ inet_makeaddr F
++ inet_netof F
++ inet_network F
++ inet_nsap_addr F
++ inet_nsap_ntoa F
++ inet_ntoa F
++ inet_ntop F
++ inet_pton F
++ init_module F
++ initgroups F
++ initstate F
+  initstate_r F
+  innetgr F
++ inotify_add_watch F
++ inotify_init F
++ inotify_init1 F
++ inotify_rm_watch F
+  insque F
+  ioctl F
+  ioperm F
+@@ -1041,40 +1121,66 @@ GLIBC_2.2.5
+  iruserok F
+  iruserok_af F
+  isalnum F
++ isalnum_l F
+  isalpha F
++ isalpha_l F
+  isascii F
+  isastream F
+  isatty F
+  isblank F
++ isblank_l F
+  iscntrl F
++ iscntrl_l F
++ isctype F
+  isdigit F
++ isdigit_l F
+  isfdtype F
+  isgraph F
++ isgraph_l F
+  isinf F
+  isinff F
+  isinfl F
+  islower F
++ islower_l F
+  isnan F
+  isnanf F
+  isnanl F
+  isprint F
++ isprint_l F
+  ispunct F
++ ispunct_l F
+  isspace F
++ isspace_l F
+  isupper F
++ isupper_l F
+  iswalnum F
++ iswalnum_l F
+  iswalpha F
++ iswalpha_l F
+  iswblank F
++ iswblank_l F
+  iswcntrl F
++ iswcntrl_l F
+  iswctype F
++ iswctype_l F
+  iswdigit F
++ iswdigit_l F
+  iswgraph F
++ iswgraph_l F
+  iswlower F
++ iswlower_l F
+  iswprint F
++ iswprint_l F
+  iswpunct F
++ iswpunct_l F
+  iswspace F
++ iswspace_l F
+  iswupper F
++ iswupper_l F
+  iswxdigit F
++ iswxdigit_l F
+  isxdigit F
++ isxdigit_l F
+  jrand48 F
+  jrand48_r F
+  key_decryptsession F
+@@ -1091,6 +1197,7 @@ GLIBC_2.2.5
+  klogctl F
+  l64a F
+  labs F
++ lchmod F
+  lchown F
+  lckpwdf F
+  lcong48 F
+@@ -1100,10 +1207,14 @@ GLIBC_2.2.5
+  ldexpl F
+  ldiv F
+  lfind F
++ lgetxattr F
+  link F
++ linkat F
+  listen F
++ listxattr F
+  llabs F
+  lldiv F
++ llistxattr F
+  llseek F
+  loc1 D 0x8
+  loc2 D 0x8
+@@ -1116,14 +1227,18 @@ GLIBC_2.2.5
+  longjmp F
+  lrand48 F
+  lrand48_r F
++ lremovexattr F
+  lsearch F
+  lseek F
+  lseek64 F
++ lsetxattr F
++ lutimes F
+  madvise F
+  makecontext F
+  mallinfo F
+  malloc F
+  malloc_get_state F
++ malloc_info F
+  malloc_set_state F
+  malloc_stats F
+  malloc_trim F
+@@ -1155,10 +1270,18 @@ GLIBC_2.2.5
+  memset F
+  mincore F
+  mkdir F
++ mkdirat F
+  mkdtemp F
+  mkfifo F
++ mkfifoat F
++ mkostemp F
++ mkostemp64 F
++ mkostemps F
++ mkostemps64 F
+  mkstemp F
+  mkstemp64 F
++ mkstemps F
++ mkstemps64 F
+  mktemp F
+  mktime F
+  mlock F
+@@ -1187,21 +1310,25 @@ GLIBC_2.2.5
+  munlockall F
+  munmap F
+  muntrace F
++ name_to_handle_at F
+  nanosleep F
+  netname2host F
+  netname2user F
++ newlocale F
+  nfsservctl F
+  nftw F
+  nftw64 F
+  ngettext F
+  nice F
+  nl_langinfo F
++ nl_langinfo_l F
+  nrand48 F
+  nrand48_r F
+  ntohl F
+  ntohs F
+  ntp_adjtime F
+  ntp_gettime F
++ ntp_gettimex F
+  obstack_alloc_failed_handler D 0x8
+  obstack_exit_failure D 0x4
+  obstack_free F
+@@ -1210,7 +1337,11 @@ GLIBC_2.2.5
+  on_exit F
+  open F
+  open64 F
++ open_by_handle_at F
+  open_memstream F
++ open_wmemstream F
++ openat F
++ openat64 F
+  opendir F
+  openlog F
+  optarg D 0x8
+@@ -1225,6 +1356,7 @@ GLIBC_2.2.5
+  perror F
+  personality F
+  pipe F
++ pipe2 F
+  pivot_root F
+  pmap_getmaps F
+  pmap_getport F
+@@ -1261,16 +1393,22 @@ GLIBC_2.2.5
+  posix_spawnattr_setsigdefault F
+  posix_spawnattr_setsigmask F
+  posix_spawnp F
++ ppoll F
+  prctl F
+  pread F
+  pread64 F
++ preadv F
++ preadv64 F
+  printf F
+  printf_size F
+  printf_size_info F
++ prlimit F
++ prlimit64 F
+  profil F
+  program_invocation_name D 0x8
+  program_invocation_short_name D 0x8
+  pselect F
++ psiginfo F
+  psignal F
+  pthread_attr_destroy F
+  pthread_attr_getdetachstate F
+@@ -1316,6 +1454,7 @@ GLIBC_2.2.5
+  putpmsg F
+  putpwent F
+  puts F
++ putsgent F
+  putspent F
+  pututline F
+  pututxline F
+@@ -1327,13 +1466,17 @@ GLIBC_2.2.5
+  pvalloc F
+  pwrite F
+  pwrite64 F
++ pwritev F
++ pwritev64 F
+  qecvt F
+  qecvt_r F
+  qfcvt F
+  qfcvt_r F
+  qgcvt F
+  qsort F
++ qsort_r F
+  query_module F
++ quick_exit F
+  quotactl F
+  raise F
+  rand F
+@@ -1349,34 +1492,42 @@ GLIBC_2.2.5
+  re_exec F
+  re_match F
+  re_match_2 F
+- re_max_failures D 0x4
+  re_search F
+  re_search_2 F
+  re_set_registers F
+  re_set_syntax F
+  re_syntax_options D 0x8
+  read F
++ readahead F
+  readdir F
+  readdir64 F
+  readdir64_r F
+  readdir_r F
+  readlink F
++ readlinkat F
+  readv F
+  realloc F
+  realpath F
+  reboot F
+  recv F
+  recvfrom F
++ recvmmsg F
+  recvmsg F
+  regcomp F
+  regerror F
+  regexec F
+  regfree F
+  register_printf_function F
++ register_printf_modifier F
++ register_printf_specifier F
++ register_printf_type F
+  registerrpc F
++ remap_file_pages F
+  remove F
++ removexattr F
+  remque F
+  rename F
++ renameat F
+  revoke F
+  rewind F
+  rewinddir F
+@@ -1402,9 +1553,12 @@ GLIBC_2.2.5
+  scanf F
+  sched_get_priority_max F
+  sched_get_priority_min F
++ sched_getaffinity F
++ sched_getcpu F
+  sched_getparam F
+  sched_getscheduler F
+  sched_rr_get_interval F
++ sched_setaffinity F
+  sched_setparam F
+  sched_setscheduler F
+  sched_yield F
+@@ -1415,8 +1569,11 @@ GLIBC_2.2.5
+  semctl F
+  semget F
+  semop F
++ semtimedop F
+  send F
+  sendfile F
++ sendfile64 F
++ sendmmsg F
+  sendmsg F
+  sendto F
+  setaliasent F
+@@ -1436,6 +1593,7 @@ GLIBC_2.2.5
+  sethostent F
+  sethostid F
+  sethostname F
++ setipv4sourcefilter F
+  setitimer F
+  setjmp F
+  setlinebuf F
+@@ -1445,6 +1603,7 @@ GLIBC_2.2.5
+  setmntent F
+  setnetent F
+  setnetgrent F
++ setns F
+  setpgid F
+  setpgrp F
+  setpriority F
+@@ -1458,8 +1617,10 @@ GLIBC_2.2.5
+  setrlimit64 F
+  setrpcent F
+  setservent F
++ setsgent F
+  setsid F
+  setsockopt F
++ setsourcefilter F
+  setspent F
+  setstate F
+  setstate_r F
+@@ -1470,6 +1631,9 @@ GLIBC_2.2.5
+  setutent F
+  setutxent F
+  setvbuf F
++ setxattr F
++ sgetsgent F
++ sgetsgent_r F
+  sgetspent F
+  sgetspent_r F
+  shmat F
+@@ -1493,6 +1657,7 @@ GLIBC_2.2.5
+  sigismember F
+  siglongjmp F
+  signal F
++ signalfd F
+  sigorset F
+  sigpause F
+  sigpending F
+@@ -1513,6 +1678,7 @@ GLIBC_2.2.5
+  sockatmark F
+  socket F
+  socketpair F
++ splice F
+  sprintf F
+  sprofil F
+  srand F
+@@ -1535,22 +1701,28 @@ GLIBC_2.2.5
+  stpcpy F
+  stpncpy F
+  strcasecmp F
++ strcasecmp_l F
+  strcasestr F
+  strcat F
+  strchr F
+  strchrnul F
+  strcmp F
+  strcoll F
++ strcoll_l F
+  strcpy F
+  strcspn F
+  strdup F
+  strerror F
++ strerror_l F
+  strerror_r F
+  strfmon F
++ strfmon_l F
+  strfry F
+  strftime F
++ strftime_l F
+  strlen F
+  strncasecmp F
++ strncasecmp_l F
+  strncat F
+  strncmp F
+  strncpy F
+@@ -1558,26 +1730,35 @@ GLIBC_2.2.5
+  strnlen F
+  strpbrk F
+  strptime F
++ strptime_l F
+  strrchr F
+  strsep F
+  strsignal F
+  strspn F
+  strstr F
+  strtod F
++ strtod_l F
+  strtof F
++ strtof_l F
+  strtoimax F
+  strtok F
+  strtok_r F
+  strtol F
++ strtol_l F
+  strtold F
++ strtold_l F
+  strtoll F
++ strtoll_l F
+  strtoq F
+  strtoul F
++ strtoul_l F
+  strtoull F
++ strtoull_l F
+  strtoumax F
+  strtouq F
+  strverscmp F
+  strxfrm F
++ strxfrm_l F
+  stty F
+  svc_exit F
+  svc_fdset D 0x80
+@@ -1614,11 +1795,14 @@ GLIBC_2.2.5
+  swprintf F
+  swscanf F
+  symlink F
++ symlinkat F
+  sync F
+- sys_errlist D 0x3e8
++ sync_file_range F
++ syncfs F
++ sys_errlist D 0x438
+  sys_nerr D 0x4
+- sys_sigabbrev D 0x200
+- sys_siglist D 0x200
++ sys_sigabbrev D 0x208
++ sys_siglist D 0x208
+  syscall F
+  sysconf F
+  sysctl F
+@@ -1637,6 +1821,7 @@ GLIBC_2.2.5
+  tcsetpgrp F
+  tdelete F
+  tdestroy F
++ tee F
+  telldir F
+  tempnam F
+  textdomain F
+@@ -1644,6 +1829,9 @@ GLIBC_2.2.5
+  time F
+  timegm F
+  timelocal F
++ timerfd_create F
++ timerfd_gettime F
++ timerfd_settime F
+  times F
+  timezone D 0x8
+  tmpfile F
+@@ -1652,10 +1840,15 @@ GLIBC_2.2.5
+  tmpnam_r F
+  toascii F
+  tolower F
++ tolower_l F
+  toupper F
++ toupper_l F
+  towctrans F
++ towctrans_l F
+  towlower F
++ towlower_l F
+  towupper F
++ towupper_l F
+  tr_break F
+  truncate F
+  truncate64 F
+@@ -1676,15 +1869,19 @@ GLIBC_2.2.5
+  ungetc F
+  ungetwc F
+  unlink F
++ unlinkat F
+  unlockpt F
+  unsetenv F
++ unshare F
+  updwtmp F
+  updwtmpx F
+  uselib F
++ uselocale F
+  user2netname F
+  usleep F
+  ustat F
+  utime F
++ utimensat F
+  utimes F
+  utmpname F
+  utmpxname F
+@@ -1702,6 +1899,7 @@ GLIBC_2.2.5
+  vfwscanf F
+  vhangup F
+  vlimit F
++ vmsplice F
+  vprintf F
+  vscanf F
+  vsnprintf F
+@@ -1726,17 +1924,21 @@ GLIBC_2.2.5
+  wcpncpy F
+  wcrtomb F
+  wcscasecmp F
++ wcscasecmp_l F
+  wcscat F
+  wcschr F
+  wcschrnul F
+  wcscmp F
+  wcscoll F
++ wcscoll_l F
+  wcscpy F
+  wcscspn F
+  wcsdup F
+  wcsftime F
++ wcsftime_l F
+  wcslen F
+  wcsncasecmp F
++ wcsncasecmp_l F
+  wcsncat F
+  wcsncmp F
+  wcsncpy F
+@@ -1748,25 +1950,35 @@ GLIBC_2.2.5
+  wcsspn F
+  wcsstr F
+  wcstod F
++ wcstod_l F
+  wcstof F
++ wcstof_l F
+  wcstoimax F
+  wcstok F
+  wcstol F
++ wcstol_l F
+  wcstold F
++ wcstold_l F
+  wcstoll F
++ wcstoll_l F
+  wcstombs F
+  wcstoq F
+  wcstoul F
++ wcstoul_l F
+  wcstoull F
++ wcstoull_l F
+  wcstoumax F
+  wcstouq F
+  wcswcs F
+  wcswidth F
+  wcsxfrm F
++ wcsxfrm_l F
+  wctob F
+  wctomb F
+  wctrans F
++ wctrans_l F
+  wctype F
++ wctype_l F
+  wcwidth F
+  wmemchr F
+  wmemcmp F
+@@ -1819,6 +2031,7 @@ GLIBC_2.2.5
+  xdr_pmap F
+  xdr_pmaplist F
+  xdr_pointer F
++ xdr_quad_t F
+  xdr_reference F
+  xdr_rejected_reply F
+  xdr_replymsg F
+@@ -1832,6 +2045,7 @@ GLIBC_2.2.5
+  xdr_u_int F
+  xdr_u_long F
+  xdr_u_longlong_t F
++ xdr_u_quad_t F
+  xdr_u_short F
+  xdr_uint16_t F
+  xdr_uint32_t F
+@@ -1851,318 +2065,36 @@ GLIBC_2.2.5
+  xencrypt F
+  xprt_register F
+  xprt_unregister F
+-GLIBC_2.2.6
+- GLIBC_2.2.6 A
+- __nanosleep F
+-GLIBC_2.3
+- GLIBC_2.3 A
+- __ctype_b_loc F
+- __ctype_tolower_loc F
+- __ctype_toupper_loc F
+- __isctype F
+- __strftime_l F
+- __uselocale F
+- __wcsftime_l F
+- _sys_errlist D 0x3f0
+- _sys_nerr D 0x4
+- duplocale F
+- fgetxattr F
+- flistxattr F
+- freeifaddrs F
+- freelocale F
+- fremovexattr F
+- fsetxattr F
+- futimes F
+- getifaddrs F
+- getxattr F
+- isalnum_l F
+- isalpha_l F
+- isblank_l F
+- iscntrl_l F
+- isctype F
+- isdigit_l F
+- isgraph_l F
+- islower_l F
+- isprint_l F
+- ispunct_l F
+- isspace_l F
+- isupper_l F
+- iswalnum_l F
+- iswalpha_l F
+- iswblank_l F
+- iswcntrl_l F
+- iswctype_l F
+- iswdigit_l F
+- iswgraph_l F
+- iswlower_l F
+- iswprint_l F
+- iswpunct_l F
+- iswspace_l F
+- iswupper_l F
+- iswxdigit_l F
+- isxdigit_l F
+- lgetxattr F
+- listxattr F
+- llistxattr F
+- lremovexattr F
+- lsetxattr F
+- lutimes F
+- newlocale F
+- nl_langinfo_l F
+- readahead F
+- realpath F
+- removexattr F
+- sendfile64 F
+- setxattr F
+- strcasecmp_l F
+- strcoll_l F
+- strfmon_l F
+- strftime_l F
+- strncasecmp_l F
+- strtod_l F
+- strtof_l F
+- strtol_l F
+- strtold_l F
+- strtoul_l F
+- strxfrm_l F
+- sys_errlist D 0x3f0
+- sys_nerr D 0x4
+- tolower_l F
+- toupper_l F
+- towctrans_l F
+- towlower_l F
+- towupper_l F
+- uselocale F
+- wcscasecmp_l F
+- wcscoll_l F
+- wcsftime_l F
+- wcsncasecmp_l F
+- wcstod_l F
+- wcstof_l F
+- wcstol_l F
+- wcstold_l F
+- wcstoll_l F
+- wcstoul_l F
+- wcstoull_l F
+- wcsxfrm_l F
+- wctrans_l F
+- wctype_l F
+-GLIBC_2.3.2
+- GLIBC_2.3.2 A
+- __register_atfork F
+- epoll_create F
+- epoll_ctl F
+- epoll_wait F
+- lchmod F
+- pthread_cond_broadcast F
+- pthread_cond_destroy F
+- pthread_cond_init F
+- pthread_cond_signal F
+- pthread_cond_timedwait F
+- pthread_cond_wait F
+- strptime_l F
+-GLIBC_2.3.3
+- GLIBC_2.3.3 A
+- _sys_siglist D 0x208
+- gnu_dev_major F
+- gnu_dev_makedev F
+- gnu_dev_minor F
+- inet6_option_alloc F
+- inet6_option_append F
+- inet6_option_find F
+- inet6_option_init F
+- inet6_option_next F
+- inet6_option_space F
+- nftw F
+- nftw64 F
+- remap_file_pages F
+- sched_getaffinity F
+- sched_setaffinity F
+- semtimedop F
+- strtoll_l F
+- strtoull_l F
+- sys_sigabbrev D 0x208
+- sys_siglist D 0x208
+-GLIBC_2.3.4
+- GLIBC_2.3.4 A
+- __chk_fail F
+- __fprintf_chk F
+- __gets_chk F
+- __memcpy_chk F
+- __memmove_chk F
+- __mempcpy_chk F
+- __memset_chk F
+- __printf_chk F
+- __snprintf_chk F
+- __sprintf_chk F
+- __stpcpy_chk F
+- __strcat_chk F
+- __strcpy_chk F
+- __strncat_chk F
+- __strncpy_chk F
+- __vfprintf_chk F
+- __vprintf_chk F
+- __vsnprintf_chk F
+- __vsprintf_chk F
+- __xpg_strerror_r F
+- getipv4sourcefilter F
+- getsourcefilter F
+- regexec F
+- sched_getaffinity F
+- sched_setaffinity F
+- setipv4sourcefilter F
+- setsourcefilter F
+- xdr_quad_t F
+- xdr_u_quad_t F
+-GLIBC_2.4
+- GLIBC_2.4 A
+- __confstr_chk F
+- __fgets_chk F
+- __fgets_unlocked_chk F
+- __fgetws_chk F
+- __fgetws_unlocked_chk F
+- __fwprintf_chk F
+- __fxstatat F
+- __fxstatat64 F
+- __getcwd_chk F
+- __getdomainname_chk F
+- __getgroups_chk F
+- __gethostname_chk F
+- __getlogin_r_chk F
+- __getwd_chk F
+- __mbsnrtowcs_chk F
+- __mbsrtowcs_chk F
+- __mbstowcs_chk F
+- __pread64_chk F
+- __pread_chk F
+- __ptsname_r_chk F
+- __read_chk F
+- __readlink_chk F
+- __realpath_chk F
+- __recv_chk F
+- __recvfrom_chk F
+- __stack_chk_fail F
+- __stpncpy_chk F
+- __swprintf_chk F
+- __syslog_chk F
+- __ttyname_r_chk F
+- __vfwprintf_chk F
+- __vswprintf_chk F
+- __vsyslog_chk F
+- __vwprintf_chk F
+- __wcpcpy_chk F
+- __wcpncpy_chk F
+- __wcrtomb_chk F
+- __wcscat_chk F
+- __wcscpy_chk F
+- __wcsncat_chk F
+- __wcsncpy_chk F
+- __wcsnrtombs_chk F
+- __wcsrtombs_chk F
+- __wcstombs_chk F
+- __wctomb_chk F
+- __wmemcpy_chk F
+- __wmemmove_chk F
+- __wmempcpy_chk F
+- __wmemset_chk F
+- __wprintf_chk F
+- __xmknodat F
+- _sys_errlist D 0x420
+- _sys_nerr D 0x4
+- eaccess F
+- faccessat F
+- fchmodat F
+- fchownat F
+- fdopendir F
+- futimesat F
+- inotify_add_watch F
+- inotify_init F
+- inotify_rm_watch F
+- linkat F
+- mkdirat F
+- mkfifoat F
+- open_wmemstream F
+- openat F
+- openat64 F
+- ppoll F
+- readlinkat F
+- renameat F
+- symlinkat F
+- sys_errlist D 0x420
+- sys_nerr D 0x4
+- unlinkat F
+- unshare F
+-GLIBC_2.5
+- GLIBC_2.5 A
+- __readlinkat_chk F
+- inet6_opt_append F
+- inet6_opt_find F
+- inet6_opt_finish F
+- inet6_opt_get_val F
+- inet6_opt_init F
+- inet6_opt_next F
+- inet6_opt_set_val F
+- inet6_rth_add F
+- inet6_rth_getaddr F
+- inet6_rth_init F
+- inet6_rth_reverse F
+- inet6_rth_segments F
+- inet6_rth_space F
+- splice F
+- tee F
+- vmsplice F
+-GLIBC_2.6
+- GLIBC_2.6 A
+- __sched_cpucount F
+- epoll_pwait F
+- futimens F
+- sched_getcpu F
+- strerror_l F
+- sync_file_range F
+- utimensat F
+-GLIBC_2.7
+- GLIBC_2.7 A
+- __fread_chk F
+- __fread_unlocked_chk F
+- __isoc99_fscanf F
+- __isoc99_fwscanf F
+- __isoc99_scanf F
+- __isoc99_sscanf F
+- __isoc99_swscanf F
+- __isoc99_vfscanf F
+- __isoc99_vfwscanf F
+- __isoc99_vscanf F
+- __isoc99_vsscanf F
+- __isoc99_vswscanf F
+- __isoc99_vwscanf F
+- __isoc99_wscanf F
+- __open64_2 F
+- __open_2 F
+- __openat64_2 F
+- __openat_2 F
+- __sched_cpualloc F
+- __sched_cpufree F
+- eventfd F
+- eventfd_read F
+- eventfd_write F
+- mkostemp F
+- mkostemp64 F
+- signalfd F
+-GLIBC_2.8
+- GLIBC_2.8 A
+- __asprintf_chk F
+- __dprintf_chk F
+- __obstack_printf_chk F
+- __obstack_vprintf_chk F
+- __vasprintf_chk F
+- __vdprintf_chk F
+- qsort_r F
+- timerfd_create F
+- timerfd_gettime F
+- timerfd_settime F
+-GLIBC_2.9
+- GLIBC_2.9 A
+- dup3 F
+- epoll_create1 F
+- inotify_init1 F
+- pipe2 F
++GLIBC_2.15
++ GLIBC_2.15 A
++ __fdelt_chk F
++ __fdelt_warn F
++ posix_spawn F
++ posix_spawnp F
++ process_vm_readv F
++ process_vm_writev F
++ scandirat F
++ scandirat64 F
++GLIBC_2.16
++ GLIBC_2.16 A
++ __getauxval F
++ __poll_chk F
++ __ppoll_chk F
++ aligned_alloc F
++ c16rtomb F
++ c32rtomb F
++ getauxval F
++ mbrtoc16 F
++ mbrtoc32 F
++ timespec_get F
++GLIBC_2.17
++ GLIBC_2.17 A
++ clock_getcpuclockid F
++ clock_getres F
++ clock_gettime F
++ clock_nanosleep F
++ clock_settime F
++ secure_getenv F
++GLIBC_2.18
++ GLIBC_2.18 A
++ __cxa_thread_atexit_impl F
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/libcrypt.abilist b/sysdeps/unix/sysv/linux/x86_64/k1om/libcrypt.abilist
+index 23d4ce0067..9c39243f75 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/libcrypt.abilist
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/libcrypt.abilist
+@@ -1,5 +1,5 @@
+-GLIBC_2.2.5
+- GLIBC_2.2.5 A
++GLIBC_2.14
++ GLIBC_2.14 A
+  crypt F
+  crypt_r F
+  encrypt F
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/libdl.abilist b/sysdeps/unix/sysv/linux/x86_64/k1om/libdl.abilist
+index 61c587b0bc..8305ec9a11 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/libdl.abilist
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/libdl.abilist
+@@ -1,15 +1,11 @@
+-GLIBC_2.2.5
+- GLIBC_2.2.5 A
++GLIBC_2.14
++ GLIBC_2.14 A
+  dladdr F
++ dladdr1 F
+  dlclose F
+  dlerror F
++ dlinfo F
++ dlmopen F
+  dlopen F
+  dlsym F
+  dlvsym F
+-GLIBC_2.3.3
+- GLIBC_2.3.3 A
+- dladdr1 F
+- dlinfo F
+-GLIBC_2.3.4
+- GLIBC_2.3.4 A
+- dlmopen F
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/libm.abilist b/sysdeps/unix/sysv/linux/x86_64/k1om/libm.abilist
+index 2390934678..a0f150367e 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/libm.abilist
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/libm.abilist
+@@ -1,93 +1,5 @@
+-GLIBC_2.15
+- GLIBC_2.15 A
+- __acos_finite F
+- __acosf_finite F
+- __acosh_finite F
+- __acoshf_finite F
+- __acoshl_finite F
+- __acosl_finite F
+- __asin_finite F
+- __asinf_finite F
+- __asinl_finite F
+- __atan2_finite F
+- __atan2f_finite F
+- __atan2l_finite F
+- __atanh_finite F
+- __atanhf_finite F
+- __atanhl_finite F
+- __cosh_finite F
+- __coshf_finite F
+- __coshl_finite F
+- __exp10_finite F
+- __exp10f_finite F
+- __exp10l_finite F
+- __exp2_finite F
+- __exp2f_finite F
+- __exp2l_finite F
+- __exp_finite F
+- __expf_finite F
+- __expl_finite F
+- __fmod_finite F
+- __fmodf_finite F
+- __fmodl_finite F
+- __gamma_r_finite F
+- __gammaf_r_finite F
+- __gammal_r_finite F
+- __hypot_finite F
+- __hypotf_finite F
+- __hypotl_finite F
+- __j0_finite F
+- __j0f_finite F
+- __j0l_finite F
+- __j1_finite F
+- __j1f_finite F
+- __j1l_finite F
+- __jn_finite F
+- __jnf_finite F
+- __jnl_finite F
+- __lgamma_r_finite F
+- __lgammaf_r_finite F
+- __lgammal_r_finite F
+- __log10_finite F
+- __log10f_finite F
+- __log10l_finite F
+- __log2_finite F
+- __log2f_finite F
+- __log2l_finite F
+- __log_finite F
+- __logf_finite F
+- __logl_finite F
+- __pow_finite F
+- __powf_finite F
+- __powl_finite F
+- __remainder_finite F
+- __remainderf_finite F
+- __remainderl_finite F
+- __scalb_finite F
+- __scalbf_finite F
+- __scalbl_finite F
+- __sinh_finite F
+- __sinhf_finite F
+- __sinhl_finite F
+- __sqrt_finite F
+- __sqrtf_finite F
+- __sqrtl_finite F
+- __y0_finite F
+- __y0f_finite F
+- __y0l_finite F
+- __y1_finite F
+- __y1f_finite F
+- __y1l_finite F
+- __yn_finite F
+- __ynf_finite F
+- __ynl_finite F
+-GLIBC_2.18
+- GLIBC_2.18 A
+- __issignaling F
+- __issignalingf F
+- __issignalingl F
+-GLIBC_2.2.5
+- GLIBC_2.2.5 A
++GLIBC_2.14
++ GLIBC_2.14 A
+  _LIB_VERSION D 0x4
+  __clog10 F
+  __clog10f F
+@@ -402,5 +314,54 @@ GLIBC_2.2.5
+  yn F
+  ynf F
+  ynl F
+-GLIBC_2.4
+- GLIBC_2.4 A
++GLIBC_2.15
++ GLIBC_2.15 A
++ __acosl_finite F
++ __asinl_finite F
++ __atan2l_finite F
++ __cosh_finite F
++ __coshf_finite F
++ __coshl_finite F
++ __exp2l_finite F
++ __expl_finite F
++ __fmodl_finite F
++ __gamma_r_finite F
++ __gammaf_r_finite F
++ __gammal_r_finite F
++ __hypotl_finite F
++ __j0_finite F
++ __j0f_finite F
++ __j0l_finite F
++ __j1_finite F
++ __j1f_finite F
++ __j1l_finite F
++ __jn_finite F
++ __jnf_finite F
++ __jnl_finite F
++ __lgamma_r_finite F
++ __lgammaf_r_finite F
++ __lgammal_r_finite F
++ __log10l_finite F
++ __log2l_finite F
++ __logl_finite F
++ __remainderl_finite F
++ __scalb_finite F
++ __scalbf_finite F
++ __sinh_finite F
++ __sinhf_finite F
++ __sinhl_finite F
++ __sqrtl_finite F
++ __y0_finite F
++ __y0f_finite F
++ __y0l_finite F
++ __y1_finite F
++ __y1f_finite F
++ __y1l_finite F
++ __yn_finite F
++ __ynf_finite F
++ __ynl_finite F
++GLIBC_2.18
++ GLIBC_2.18 A
++ __issignaling F
++ __issignalingf F
++ __issignalingl F
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/libnsl.abilist b/sysdeps/unix/sysv/linux/x86_64/k1om/libnsl.abilist
+index a6aa9125b8..abffe54688 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/libnsl.abilist
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/libnsl.abilist
+@@ -1,5 +1,5 @@
+-GLIBC_2.2.5
+- GLIBC_2.2.5 A
++GLIBC_2.14
++ GLIBC_2.14 A
+  __free_fdresult F
+  __nis_default_access F
+  __nis_default_group F
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/libresolv.abilist b/sysdeps/unix/sysv/linux/x86_64/k1om/libresolv.abilist
+index 3303936176..1569b48927 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/libresolv.abilist
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/libresolv.abilist
+@@ -1,5 +1,5 @@
+-GLIBC_2.2.5
+- GLIBC_2.2.5 A
++GLIBC_2.14
++ GLIBC_2.14 A
+  __b64_ntop F
+  __b64_pton F
+  __dn_comp F
+@@ -20,6 +20,7 @@ GLIBC_2.2.5
+  __p_fqnname F
+  __p_option F
+  __p_query F
++ __p_rcode F
+  __p_secstodate F
+  __p_time F
+  __p_type F
+@@ -59,16 +60,6 @@ GLIBC_2.2.5
+  inet_net_ntop F
+  inet_net_pton F
+  inet_neta F
+- res_gethostbyaddr F
+- res_gethostbyname F
+- res_gethostbyname2 F
+- res_send_setqhook F
+- res_send_setrhook F
+-GLIBC_2.3.2
+- GLIBC_2.3.2 A
+- __p_rcode F
+-GLIBC_2.9
+- GLIBC_2.9 A
+  ns_datetosecs F
+  ns_format_ttl F
+  ns_get16 F
+@@ -95,3 +86,8 @@ GLIBC_2.9
+  ns_sprintrr F
+  ns_sprintrrf F
+  ns_subdomain F
++ res_gethostbyaddr F
++ res_gethostbyname F
++ res_gethostbyname2 F
++ res_send_setqhook F
++ res_send_setrhook F
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/librt.abilist b/sysdeps/unix/sysv/linux/x86_64/k1om/librt.abilist
+index 2bd7ff403a..4edf8d1426 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/librt.abilist
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/librt.abilist
+@@ -1,5 +1,6 @@
+-GLIBC_2.2.5
+- GLIBC_2.2.5 A
++GLIBC_2.14
++ GLIBC_2.14 A
++ __mq_open_2 F
+  aio_cancel F
+  aio_cancel64 F
+  aio_error F
+@@ -22,22 +23,6 @@ GLIBC_2.2.5
+  clock_settime F
+  lio_listio F
+  lio_listio64 F
+- shm_open F
+- shm_unlink F
+- timer_create F
+- timer_delete F
+- timer_getoverrun F
+- timer_gettime F
+- timer_settime F
+-GLIBC_2.3.3
+- GLIBC_2.3.3 A
+- timer_create F
+- timer_delete F
+- timer_getoverrun F
+- timer_gettime F
+- timer_settime F
+-GLIBC_2.3.4
+- GLIBC_2.3.4 A
+  mq_close F
+  mq_getattr F
+  mq_notify F
+@@ -48,10 +33,10 @@ GLIBC_2.3.4
+  mq_timedreceive F
+  mq_timedsend F
+  mq_unlink F
+-GLIBC_2.4
+- GLIBC_2.4 A
+- lio_listio F
+- lio_listio64 F
+-GLIBC_2.7
+- GLIBC_2.7 A
+- __mq_open_2 F
++ shm_open F
++ shm_unlink F
++ timer_create F
++ timer_delete F
++ timer_getoverrun F
++ timer_gettime F
++ timer_settime F
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/libthread_db.abilist b/sysdeps/unix/sysv/linux/x86_64/k1om/libthread_db.abilist
+index eed6765bcd..325986aa0b 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/libthread_db.abilist
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/libthread_db.abilist
+@@ -1,5 +1,5 @@
+-GLIBC_2.2.5
+- GLIBC_2.2.5 A
++GLIBC_2.14
++ GLIBC_2.14 A
+  td_init F
+  td_log F
+  td_symbol_list F
+@@ -36,11 +36,7 @@ GLIBC_2.2.5
+  td_thr_setsigpending F
+  td_thr_setxregs F
+  td_thr_sigsetmask F
+- td_thr_tsd F
+- td_thr_validate F
+-GLIBC_2.3
+- GLIBC_2.3 A
+  td_thr_tls_get_addr F
+-GLIBC_2.3.3
+- GLIBC_2.3.3 A
+  td_thr_tlsbase F
++ td_thr_tsd F
++ td_thr_validate F
+diff --git a/sysdeps/unix/sysv/linux/x86_64/k1om/libutil.abilist b/sysdeps/unix/sysv/linux/x86_64/k1om/libutil.abilist
+index 78e6cf5267..e5cf5e0ceb 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/k1om/libutil.abilist
++++ b/sysdeps/unix/sysv/linux/x86_64/k1om/libutil.abilist
+@@ -1,5 +1,5 @@
+-GLIBC_2.2.5
+- GLIBC_2.2.5 A
++GLIBC_2.14
++ GLIBC_2.14 A
+  forkpty F
+  login F
+  login_tty F

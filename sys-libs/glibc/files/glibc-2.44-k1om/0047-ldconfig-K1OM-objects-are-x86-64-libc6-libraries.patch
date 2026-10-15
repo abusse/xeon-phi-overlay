@@ -1,0 +1,30 @@
+From 454139bdd16f358c67ba2aa3d547ca2850ba9479 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Thu, 1 Oct 2026 15:01:10 +0200
+Subject: [PATCH 47/49] ldconfig: K1OM objects are x86-64 libc6 libraries
+
+ldconfig classified only EM_X86_64 as 64-bit libc6 objects and skipped
+K1OM ones as "unknown machine 181": no ld.so.cache could be built on the
+card (elf/tst-ldconfig-X and every ldconfig-based container test).  Same
+change as the xeon-phi-overlay glibc-2.14.1_p386 ldconfig patch.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86/readelflib.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/sysdeps/x86/readelflib.c b/sysdeps/x86/readelflib.c
+index 20fec9af1c..84b440915b 100644
+--- a/sysdeps/x86/readelflib.c
++++ b/sysdeps/x86/readelflib.c
+@@ -34,6 +34,9 @@ process_elf_file (const char *file_name, const char *lib, int *flag,
+   switch (elf_header->e_machine)
+     {
+     case EM_X86_64:
++#ifdef EM_K1OM
++    case EM_K1OM:
++#endif
+       if (elf_header->e_ident[EI_CLASS] == ELFCLASS64)
+ 	/* X86-64 64bit libraries are always libc.so.6+.  */
+ 	file_flag = FLAG_X8664_LIB64|FLAG_ELF_LIBC6;

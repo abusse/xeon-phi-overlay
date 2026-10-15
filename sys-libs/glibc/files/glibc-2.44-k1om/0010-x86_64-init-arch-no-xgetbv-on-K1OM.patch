@@ -1,0 +1,46 @@
+From 82cf3f653ff7f9339e986e869918c73cfeb47607 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Mon, 1 Jul 2019 22:45:00 +0200
+Subject: [PATCH 10/49] x86_64: init-arch: no xgetbv on K1OM
+
+[2.23: moved to sysdeps/x86/cpu-features.c, which ld.so runs as well.]
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86/cpu-features.c       | 4 ++++
+ sysdeps/x86/dl-diagnostics-cpu.c | 4 ++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/sysdeps/x86/cpu-features.c b/sysdeps/x86/cpu-features.c
+index a453136827..c6cbcb3724 100644
+--- a/sysdeps/x86/cpu-features.c
++++ b/sysdeps/x86/cpu-features.c
+@@ -162,7 +162,11 @@ update_active (struct cpu_features *cpu_features)
+     os_zmm = 4
+   } os_vector_size = os_xmm;
+   /* Can we call xgetbv?  */
++#ifdef __KNC__
++  if (0)
++#else
+   if (CPU_FEATURES_CPU_P (cpu_features, OSXSAVE))
++#endif
+     {
+       unsigned int xcrlow;
+       unsigned int xcrhigh;
+diff --git a/sysdeps/x86/dl-diagnostics-cpu.c b/sysdeps/x86/dl-diagnostics-cpu.c
+index 89f2cdb0af..f2832f0c36 100644
+--- a/sysdeps/x86/dl-diagnostics-cpu.c
++++ b/sysdeps/x86/dl-diagnostics-cpu.c
+@@ -330,7 +330,11 @@ _dl_diagnostics_cpuid_collect (struct cpuid_collected_data *ccd)
+ 
+   /* Re-use the result of the official feature probing here.  */
+   const struct cpu_features *cpu_features = __get_cpu_features ();
++#ifdef __KNC__
++  if (0)
++#else
+   if (CPU_FEATURES_CPU_P (cpu_features, OSXSAVE))
++#endif
+     {
+       unsigned int xcrlow;
+       unsigned int xcrhigh;

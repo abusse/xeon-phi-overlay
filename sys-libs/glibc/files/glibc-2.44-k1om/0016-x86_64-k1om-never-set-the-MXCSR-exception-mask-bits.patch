@@ -1,0 +1,184 @@
+From 5bedf34786f364ee48f1998fb789a566f280700d Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 22:47:22 +0200
+Subject: [PATCH 16/49] x86_64/k1om: never set the MXCSR exception mask bits
+
+On K1OM bits 7-12 of MXCSR are reserved and ldmxcsr faults when any of
+them is set (its default is 0x00200000).  feholdexcept was fixed, but
+fedisableexcept and fesetenv (FE_DFL_ENV, FE_NOMASK_ENV variants) still
+set them and crash (math/test-fenv, test-double, ...).  Add
+MXCSR_EXCEPT_MASK, 0x1f80 on x86_64 and 0 on K1OM, and use it everywhere
+mask bits are set, including feholdexcept.  Likewise bit 21 must be one
+(MXCSR_MBO): loading it clear faults, which fesetmode (FE_DFL_MODE) did.
+
+[2.39: replaces Intel's feholdexcept commit, which no longer applies.]
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86/fpu/fenv_private.h   | 15 ++++++++++++---
+ sysdeps/x86_64/fpu/fedisblxcpt.c |  2 +-
+ sysdeps/x86_64/fpu/feholdexcpt.c |  2 +-
+ sysdeps/x86_64/fpu/fesetenv.c    |  4 ++--
+ sysdeps/x86_64/fpu/fesetmode.c   |  6 ++++--
+ sysdeps/x86_64/k1om/sysdep.h     |  8 ++++++++
+ sysdeps/x86_64/sysdep.h          |  4 ++++
+ 7 files changed, 32 insertions(+), 9 deletions(-)
+
+diff --git a/sysdeps/x86/fpu/fenv_private.h b/sysdeps/x86/fpu/fenv_private.h
+index 24a1741961..e0704d5f42 100644
+--- a/sysdeps/x86/fpu/fenv_private.h
++++ b/sysdeps/x86/fpu/fenv_private.h
+@@ -1,6 +1,15 @@
+ #ifndef X86_FENV_PRIVATE_H
+ #define X86_FENV_PRIVATE_H 1
+ 
++/* SSE exception mask bits in MXCSR; K1OM has none (setting them faults).  */
++#ifndef MXCSR_EXCEPT_MASK
++# ifdef __KNC__
++#  define MXCSR_EXCEPT_MASK 0
++# else
++#  define MXCSR_EXCEPT_MASK 0x1f80
++# endif
++#endif
++
+ #include <bits/floatn.h>
+ #include <fenv.h>
+ #include <fpu_control.h>
+@@ -25,7 +34,7 @@ libc_feholdexcept_sse (fenv_t *e)
+   unsigned int mxcsr;
+   stmxcsr_inline_asm (&mxcsr);
+   e->__mxcsr = mxcsr;
+-  mxcsr = (mxcsr | 0x1f80) & ~0x3f;
++  mxcsr = (mxcsr | MXCSR_EXCEPT_MASK) & ~0x3f;
+   ldmxcsr_inline_asm (&mxcsr);
+ }
+ 
+@@ -64,7 +73,7 @@ libc_feholdexcept_setround_sse (fenv_t *e, int r)
+   unsigned int mxcsr;
+   stmxcsr_inline_asm (&mxcsr);
+   e->__mxcsr = mxcsr;
+-  mxcsr = ((mxcsr | 0x1f80) & ~0x603f) | (r << 3);
++  mxcsr = ((mxcsr | MXCSR_EXCEPT_MASK) & ~0x603f) | (r << 3);
+   ldmxcsr_inline_asm (&mxcsr);
+ }
+ 
+@@ -309,7 +318,7 @@ libc_feholdexcept_setround_sse_ctx (struct rm_ctx *ctx, int r)
+ {
+   unsigned int mxcsr, new_mxcsr;
+   stmxcsr_inline_asm (&mxcsr);
+-  new_mxcsr = ((mxcsr | 0x1f80) & ~0x603f) | (r << 3);
++  new_mxcsr = ((mxcsr | MXCSR_EXCEPT_MASK) & ~0x603f) | (r << 3);
+ 
+   ctx->env.__mxcsr = mxcsr;
+   if (__glibc_unlikely (mxcsr != new_mxcsr))
+diff --git a/sysdeps/x86_64/fpu/fedisblxcpt.c b/sysdeps/x86_64/fpu/fedisblxcpt.c
+index bb6e7815b2..1217f3d179 100644
+--- a/sysdeps/x86_64/fpu/fedisblxcpt.c
++++ b/sysdeps/x86_64/fpu/fedisblxcpt.c
+@@ -40,7 +40,7 @@ fedisableexcept (int excepts)
+   stmxcsr_inline_asm (&new);
+ 
+   /* The SSE exception masks are shifted by 7 bits.  */
+-  new |= excepts << 7;
++  new |= (excepts << 7) & MXCSR_EXCEPT_MASK;
+   ldmxcsr_inline_asm (&new);
+ 
+   return old_exc;
+diff --git a/sysdeps/x86_64/fpu/feholdexcpt.c b/sysdeps/x86_64/fpu/feholdexcpt.c
+index 4d86c8e7c6..a1e63bdb24 100644
+--- a/sysdeps/x86_64/fpu/feholdexcpt.c
++++ b/sysdeps/x86_64/fpu/feholdexcpt.c
+@@ -32,7 +32,7 @@ __feholdexcept (fenv_t *envp)
+   asm volatile ("fnclex" : "=m" (*envp));
+ 
+   /* Set the SSE MXCSR register.  */
+-  mxcsr = (envp->__mxcsr | 0x1f80) & ~0x3f;
++  mxcsr = (envp->__mxcsr | MXCSR_EXCEPT_MASK) & ~0x3f;
+   ldmxcsr_inline_asm (&mxcsr);
+ 
+   return 0;
+diff --git a/sysdeps/x86_64/fpu/fesetenv.c b/sysdeps/x86_64/fpu/fesetenv.c
+index a7f8ea00a7..63749f66d9 100644
+--- a/sysdeps/x86_64/fpu/fesetenv.c
++++ b/sysdeps/x86_64/fpu/fesetenv.c
+@@ -54,7 +54,7 @@ __fesetenv (const fenv_t *envp)
+       /* Clear SSE exceptions.  */
+       temp.__mxcsr &= ~FE_ALL_EXCEPT_X86;
+       /* Set mask for SSE MXCSR.  */
+-      temp.__mxcsr |= (FE_ALL_EXCEPT_X86 << 7);
++      temp.__mxcsr |= (FE_ALL_EXCEPT_X86 << 7) & MXCSR_EXCEPT_MASK;
+       /* Set rounding to FE_TONEAREST.  */
+       temp.__mxcsr &= ~ 0x6000;
+       temp.__mxcsr |= (FE_TONEAREST << 3);
+@@ -82,7 +82,7 @@ __fesetenv (const fenv_t *envp)
+       /* Do not mask exceptions.  */
+       temp.__mxcsr &= ~(FE_ALL_EXCEPT << 7);
+       /* Keep the "denormal operand" exception masked.  */
+-      temp.__mxcsr |= (__FE_DENORM << 7);
++      temp.__mxcsr |= (__FE_DENORM << 7) & MXCSR_EXCEPT_MASK;
+       /* Clear the FZ and DAZ bits.  */
+       temp.__mxcsr &= ~0x8040;
+     }
+diff --git a/sysdeps/x86_64/fpu/fesetmode.c b/sysdeps/x86_64/fpu/fesetmode.c
+index 0cfdde3dfd..05676c6323 100644
+--- a/sysdeps/x86_64/fpu/fesetmode.c
++++ b/sysdeps/x86_64/fpu/fesetmode.c
+@@ -17,6 +17,7 @@
+    <https://www.gnu.org/licenses/>.  */
+ 
+ #include <fenv.h>
++#include <sysdep.h>
+ #include <math-inline-asm.h>
+ #include <fpu_control.h>
+ 
+@@ -39,12 +40,13 @@ fesetmode (const femode_t *modep)
+       cw = _FPU_DEFAULT;
+       /* Default MXCSR state has all bits zero except for those
+ 	 masking exceptions.  */
+-      mxcsr |= FE_ALL_EXCEPT_X86 << 7;
++      mxcsr |= ((FE_ALL_EXCEPT_X86 << 7) & MXCSR_EXCEPT_MASK) | MXCSR_MBO;
+     }
+   else
+     {
+       cw = modep->__control_word;
+-      mxcsr |= modep->__mxcsr & ~FE_ALL_EXCEPT_X86;
++      mxcsr |= (modep->__mxcsr & ~FE_ALL_EXCEPT_X86
++		& (MXCSR_EXCEPT_MASK | ~(FE_ALL_EXCEPT_X86 << 7)));
+     }
+   _FPU_SETCW (cw);
+   ldmxcsr_inline_asm (&mxcsr);
+diff --git a/sysdeps/x86_64/k1om/sysdep.h b/sysdeps/x86_64/k1om/sysdep.h
+index 0e9ba491ab..63249d06e5 100644
+--- a/sysdeps/x86_64/k1om/sysdep.h
++++ b/sysdeps/x86_64/k1om/sysdep.h
+@@ -80,6 +80,14 @@ LABEL:
+   }
+ 
+ 
++/* The K1OM MXCSR has no exception mask bits (vector exceptions are
++   always masked); setting bits 7-12 faults.  */
++#undef MXCSR_EXCEPT_MASK
++#define MXCSR_EXCEPT_MASK 0
++/* Bit 21 of the K1OM MXCSR is set by default and loading it clear faults.  */
++#undef MXCSR_MBO
++#define MXCSR_MBO 0x00200000
++
+ /* Machine type in ELF header compatible with the running host.  */
+ #undef EM_HOST_MACHINE_TYPE
+ #define EM_HOST_MACHINE_TYPE EM_K1OM
+diff --git a/sysdeps/x86_64/sysdep.h b/sysdeps/x86_64/sysdep.h
+index 2246b96c6c..878d1afbdd 100644
+--- a/sysdeps/x86_64/sysdep.h
++++ b/sysdeps/x86_64/sysdep.h
+@@ -239,6 +239,10 @@ lose:									      \
+ #define LOAD_MXCSR "ldmxcsr"
+ /* Store MXCSR instruction.  */
+ #define STORE_MXCSR "stmxcsr"
++/* SSE exception mask bits in MXCSR.  */
++#define MXCSR_EXCEPT_MASK 0x1f80
++/* MXCSR bits that must be set.  */
++#define MXCSR_MBO 0
+ 
+ /* FP invalid exception.  */
+ #define FP_INVALID_EXCEPTION                                   \

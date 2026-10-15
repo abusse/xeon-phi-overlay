@@ -1,0 +1,97 @@
+From e4305f6d7c66402cfd51fc325dfbbb04fdc94487 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 23:12:58 +0200
+Subject: [PATCH 22/49] x86_64/fpu/587: include errno.h, not bits/errno.h
+
+Since 2.27 bits/errno.h refuses direct inclusion; errno.h works in
+assembler files.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/587/s_cos.S  | 2 +-
+ sysdeps/x86_64/fpu/587/s_cosf.S | 2 +-
+ sysdeps/x86_64/fpu/587/s_sin.S  | 2 +-
+ sysdeps/x86_64/fpu/587/s_sinf.S | 2 +-
+ sysdeps/x86_64/fpu/587/s_tan.S  | 2 +-
+ sysdeps/x86_64/fpu/587/s_tanf.S | 2 +-
+ 6 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/sysdeps/x86_64/fpu/587/s_cos.S b/sysdeps/x86_64/fpu/587/s_cos.S
+index 8ac0fb948a..d30d0ce37e 100644
+--- a/sysdeps/x86_64/fpu/587/s_cos.S
++++ b/sysdeps/x86_64/fpu/587/s_cos.S
+@@ -5,7 +5,7 @@
+  */
+ 
+ #define __need_Emath
+-#include <bits/errno.h>
++#include <errno.h>
+ #include <machine/asm.h>
+ 
+ RCSID("$NetBSD: s_cos.S,v 1.5 1995/05/08 23:54:00 jtc Exp $")
+diff --git a/sysdeps/x86_64/fpu/587/s_cosf.S b/sysdeps/x86_64/fpu/587/s_cosf.S
+index 9df2174d09..70e5760760 100644
+--- a/sysdeps/x86_64/fpu/587/s_cosf.S
++++ b/sysdeps/x86_64/fpu/587/s_cosf.S
+@@ -5,7 +5,7 @@
+  */
+ 
+ #define __need_Emath
+-#include <bits/errno.h>
++#include <errno.h>
+ #include <machine/asm.h>
+ 
+ RCSID("$NetBSD: s_cosf.S,v 1.3 1995/05/08 23:55:16 jtc Exp $")
+diff --git a/sysdeps/x86_64/fpu/587/s_sin.S b/sysdeps/x86_64/fpu/587/s_sin.S
+index f28f223b36..1cddc2325e 100644
+--- a/sysdeps/x86_64/fpu/587/s_sin.S
++++ b/sysdeps/x86_64/fpu/587/s_sin.S
+@@ -5,7 +5,7 @@
+  */
+ 
+ #define __need_Emath
+-#include <bits/errno.h>
++#include <errno.h>
+ #include <machine/asm.h>
+ 
+ RCSID("$NetBSD: s_sin.S,v 1.5 1995/05/09 00:25:54 jtc Exp $")
+diff --git a/sysdeps/x86_64/fpu/587/s_sinf.S b/sysdeps/x86_64/fpu/587/s_sinf.S
+index 7bcccec556..ac480373f9 100644
+--- a/sysdeps/x86_64/fpu/587/s_sinf.S
++++ b/sysdeps/x86_64/fpu/587/s_sinf.S
+@@ -5,7 +5,7 @@
+  */
+ 
+ #define __need_Emath
+-#include <bits/errno.h>
++#include <errno.h>
+ #include <machine/asm.h>
+ 
+ RCSID("$NetBSD: s_sinf.S,v 1.3 1995/05/09 00:27:53 jtc Exp $")
+diff --git a/sysdeps/x86_64/fpu/587/s_tan.S b/sysdeps/x86_64/fpu/587/s_tan.S
+index ba1a49b26f..273b812fd5 100644
+--- a/sysdeps/x86_64/fpu/587/s_tan.S
++++ b/sysdeps/x86_64/fpu/587/s_tan.S
+@@ -5,7 +5,7 @@
+  */
+ 
+ #define __need_Emath
+-#include <bits/errno.h>
++#include <errno.h>
+ #include <machine/asm.h>
+ 
+ RCSID("$NetBSD: s_tan.S,v 1.5 1995/05/09 00:30:00 jtc Exp $")
+diff --git a/sysdeps/x86_64/fpu/587/s_tanf.S b/sysdeps/x86_64/fpu/587/s_tanf.S
+index 0b37510e1c..72fd6aa9ae 100644
+--- a/sysdeps/x86_64/fpu/587/s_tanf.S
++++ b/sysdeps/x86_64/fpu/587/s_tanf.S
+@@ -5,7 +5,7 @@
+  */
+ 
+ #define __need_Emath
+-#include <bits/errno.h>
++#include <errno.h>
+ #include <machine/asm.h>
+ 
+ RCSID("$NetBSD: s_tanf.S,v 1.3 1995/05/09 00:31:09 jtc Exp $")

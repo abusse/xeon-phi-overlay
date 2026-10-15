@@ -1,0 +1,187 @@
+From 602a1941d74c7f336a051fa37a67a0f1b015bca4 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Thu, 1 Oct 2026 06:19:49 +0200
+Subject: [PATCH 42/49] x86_64/fpu/587: correctly rounded sqrt and x87
+ underflow checks
+
+sqrt: fsqrt with the precision control set to double, like i386; the C
+fallback assumes exact double arithmetic and was off by one ulp.  atan,
+atan2 and the tiny-argument path of asinh raise underflow for subnormal
+results, as the current i386 versions do (DBL_CHECK_FORCE_UFLOW).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/587/e_atan2.S         |  7 +++++
+ sysdeps/x86_64/fpu/587/e_sqrt.c          | 40 ++++++++++++++++++++++++
+ sysdeps/x86_64/fpu/587/s_asinh.S         |  5 +++
+ sysdeps/x86_64/fpu/587/s_atan.S          |  7 +++++
+ sysdeps/x86_64/fpu/587/x86_64-math-asm.h | 25 +++++++++++++++
+ 5 files changed, 84 insertions(+)
+ create mode 100644 sysdeps/x86_64/fpu/587/e_sqrt.c
+
+diff --git a/sysdeps/x86_64/fpu/587/e_atan2.S b/sysdeps/x86_64/fpu/587/e_atan2.S
+index 3024d4ad98..646a31db80 100644
+--- a/sysdeps/x86_64/fpu/587/e_atan2.S
++++ b/sysdeps/x86_64/fpu/587/e_atan2.S
+@@ -4,9 +4,15 @@
+  */
+ 
+ #include <machine/asm.h>
++#include <x86_64-math-asm.h>
++
++#define MO(op) op(%rip)
+ 
+ RCSID("$NetBSD: e_atan2.S,v 1.4 1995/05/08 23:46:28 jtc Exp $")
+ 
++DEFINE_DBL_MIN
++
++	.text
+ ENTRY(__ieee754_atan2)
+ 	LOAD_REG_K1
+ 	STORE_DOUBLE_REG (0, -8(%rsp))
+@@ -14,6 +20,7 @@ ENTRY(__ieee754_atan2)
+ 	fldl	-8(%rsp)
+ 	fldl	-16(%rsp)
+ 	fpatan
++	DBL_CHECK_FORCE_UFLOW
+ 	fstpl	-8(%rsp)
+ 	LOAD_DOUBLE_REG (-8(%rsp), 0)
+ 	ret
+diff --git a/sysdeps/x86_64/fpu/587/e_sqrt.c b/sysdeps/x86_64/fpu/587/e_sqrt.c
+new file mode 100644
+index 0000000000..a30f3ba664
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/e_sqrt.c
+@@ -0,0 +1,40 @@
++/* Square root of a double, x87 version for K1OM.
++   Copyright (C) 2026 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#include <math.h>
++#include <math_private.h>
++#include <fpu_control.h>
++#include <libm-alias-finite.h>
++
++/* fsqrt with the precision control set to double rounds the result
++   once, to double, like i386 e_sqrt.S; a double square root is never
++   subnormal, so there is no second rounding.  */
++double
++__ieee754_sqrt (double x)
++{
++  fpu_control_t cw, cw53;
++  double r;
++
++  _FPU_GETCW (cw);
++  cw53 = (cw & ~_FPU_EXTENDED) | _FPU_DOUBLE;
++  _FPU_SETCW (cw53);
++  __asm__ __volatile__ ("fsqrt" : "=t" (r) : "0" (x));
++  _FPU_SETCW (cw);
++  return r;
++}
++libm_alias_finite (__ieee754_sqrt, __sqrt)
+diff --git a/sysdeps/x86_64/fpu/587/s_asinh.S b/sysdeps/x86_64/fpu/587/s_asinh.S
+index f2079b8219..3301fdd0d9 100644
+--- a/sysdeps/x86_64/fpu/587/s_asinh.S
++++ b/sysdeps/x86_64/fpu/587/s_asinh.S
+@@ -18,6 +18,7 @@
+    02111-1307 USA.  */
+ 
+ #include <machine/asm.h>
++#include <x86_64-math-asm.h>
+ 
+ #ifdef __ELF__
+ 	.section .rodata
+@@ -38,6 +39,9 @@ limit:	.double 0.29
+ 
+ #define MO(op) op(%rip)
+ 
++	.text
++DEFINE_DBL_MIN
++
+ 	.text
+ ENTRY(__asinh)
+ 	LOAD_REG_K1
+@@ -102,6 +106,7 @@ ENTRY(__asinh)
+ 4:	fld	%st			// x : x
+ 	faddl	MO(huge)		// huge+x : x
+ 	fstp	%st(0)			// x
++	DBL_CHECK_FORCE_UFLOW
+ 	fstpl	-8(%rsp)
+ 	LOAD_DOUBLE_REG (-8(%rsp), 0)
+ 	ret
+diff --git a/sysdeps/x86_64/fpu/587/s_atan.S b/sysdeps/x86_64/fpu/587/s_atan.S
+index 4576a2aa71..011ef17aa8 100644
+--- a/sysdeps/x86_64/fpu/587/s_atan.S
++++ b/sysdeps/x86_64/fpu/587/s_atan.S
+@@ -4,15 +4,22 @@
+  */
+ 
+ #include <machine/asm.h>
++#include <x86_64-math-asm.h>
++
++#define MO(op) op(%rip)
+ 
+ RCSID("$NetBSD: s_atan.S,v 1.4 1995/05/08 23:50:41 jtc Exp $")
+ 
++DEFINE_DBL_MIN
++
++	.text
+ ENTRY(__atan)
+ 	LOAD_REG_K1
+ 	STORE_DOUBLE_REG (0, -8(%rsp))
+ 	fldl	-8(%rsp)
+ 	fld1
+ 	fpatan
++	DBL_CHECK_FORCE_UFLOW
+ 	fstpl	-8(%rsp)
+ 	LOAD_DOUBLE_REG (-8(%rsp), 0)
+ 	ret
+diff --git a/sysdeps/x86_64/fpu/587/x86_64-math-asm.h b/sysdeps/x86_64/fpu/587/x86_64-math-asm.h
+index 502aeb7d4f..80a855ab51 100644
+--- a/sysdeps/x86_64/fpu/587/x86_64-math-asm.h
++++ b/sysdeps/x86_64/fpu/587/x86_64-math-asm.h
+@@ -77,4 +77,29 @@ ldbl_min:						\
+ 	fstp	%st(0);				\
+ 6464:
+ 
++
++/* Define constant for the minimum value of double, as in i386.  */
++#define DEFINE_DBL_MIN					\
++	.section .rodata.cst8,"aM",@progbits,8;		\
++	.p2align 3;					\
++	.type dbl_min,@object;				\
++dbl_min:						\
++	.byte 0, 0, 0, 0, 0, 0, 0x10, 0;		\
++	.size dbl_min, .-dbl_min;
++
++/* Raise underflow when the double value on the top of the stack is
++   subnormal (its square underflows); uses the red zone, clobbers %ax.  */
++#define DBL_CHECK_FORCE_UFLOW			\
++	fldl	MO(dbl_min);			\
++	fld	%st(1);				\
++	fabs;					\
++	fucompp;				\
++	fnstsw;					\
++	sahf;					\
++	jnc 6453f;				\
++	fld	%st(0);				\
++	fmul	%st(0);				\
++	fstpl	-16(%rsp);			\
++6453:
++
+ #endif /* x86_64-math-asm.h.  */

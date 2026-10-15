@@ -1,0 +1,235 @@
+From 37049ce789f1e3cf688ada81fda6f44076dce021 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 23:50:06 +0200
+Subject: [PATCH 27/49] x86_64/fpu/587: use the new exp10f and hypot, i386
+ e_hypot.c
+
+2.32 to 2.35 replaced exp10f, hypot and hypotf by implementations with
+new symbol versions and no wrappers; the x87 versions only provide
+__ieee754_* and break the libm link.  Do what i386 does: drop them, use
+the generic exp10f and hypotf and i386 e_hypot.c, which relies on the
+x87 excess precision like K1OM.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/587/e_exp10f.S | 51 -----------------------
+ sysdeps/x86_64/fpu/587/e_hypot.S  | 67 -------------------------------
+ sysdeps/x86_64/fpu/587/e_hypot.c  |  1 +
+ sysdeps/x86_64/fpu/587/e_hypotf.S | 67 -------------------------------
+ 4 files changed, 1 insertion(+), 185 deletions(-)
+ delete mode 100644 sysdeps/x86_64/fpu/587/e_exp10f.S
+ delete mode 100644 sysdeps/x86_64/fpu/587/e_hypot.S
+ create mode 100644 sysdeps/x86_64/fpu/587/e_hypot.c
+ delete mode 100644 sysdeps/x86_64/fpu/587/e_hypotf.S
+
+diff --git a/sysdeps/x86_64/fpu/587/e_exp10f.S b/sysdeps/x86_64/fpu/587/e_exp10f.S
+deleted file mode 100644
+index 3b796331c2..0000000000
+--- a/sysdeps/x86_64/fpu/587/e_exp10f.S
++++ /dev/null
+@@ -1,51 +0,0 @@
+-/*
+- * Written by Ulrich Drepper.
+- */
+-
+-#include <machine/asm.h>
+-
+-	.section .rodata
+-	.p2align 2
+-zero:	.float 0.0
+-
+-	.text
+-/* e^x = 2^(x * log2(10)) */
+-ENTRY(__ieee754_exp10f)
+-	LOAD_REG_K1
+-	STORE_FLOAT_REG (0, -4(%rsp))
+-	flds	-4(%rsp)
+-/* I added the following ugly construct because exp(+-Inf) resulted
+-   in NaN.  The ugliness results from the bright minds at Intel.
+-   For the i686 the code can be written better.
+-   -- drepper@cygnus.com.  */
+-	fxam				/* Is NaN or +-Inf?  */
+-	fstsw	%ax
+-	movb	$0x45, %dh
+-	andb	%ah, %dh
+-	cmpb	$0x05, %dh
+-	je	1f			/* Is +-Inf, jump.  */
+-	fldl2t
+-	fmulp				/* x * log2(10) */
+-	fld	%st
+-	frndint				/* int(x * log2(10)) */
+-	fsubr	%st,%st(1)		/* fract(x * log2(10)) */
+-	fxch
+-	f2xm1				/* 2^(fract(x * log2(10))) - 1 */
+-	fld1
+-	faddp				/* 2^(fract(x * log2(10))) */
+-	fscale				/* e^x */
+-	fstp	%st(1)
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-1:	testl	$0x200, %eax		/* Test sign.  */
+-	jz	2f			/* If positive, jump.  */
+-	fstp	%st
+-	LOAD_FLOAT_REG (zero(%rip), 0)	/* Set result to 0.  */
+-	ret
+-2:
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-END (__ieee754_exp10f)
+diff --git a/sysdeps/x86_64/fpu/587/e_hypot.S b/sysdeps/x86_64/fpu/587/e_hypot.S
+deleted file mode 100644
+index 111ac1c98e..0000000000
+--- a/sysdeps/x86_64/fpu/587/e_hypot.S
++++ /dev/null
+@@ -1,67 +0,0 @@
+-/* Compute the hypothenuse of X and Y.
+-   Copyright (C) 2011 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-#include <sysdep.h>
+-
+-	.text
+-ENTRY(__ieee754_hypot)
+-	LOAD_REG_K1
+-	STORE_DOUBLE_REG (0, -8(%rsp))
+-	STORE_DOUBLE_REG (1, -16(%rsp))
+-	fldl	-8(%rsp)	// x
+-	fxam
+-	fnstsw
+-	fldl	-16(%rsp)	// y : x
+-	movb	%ah, %ch
+-	fxam
+-	fnstsw
+-	movb	%ah, %al
+-	orb	%ch, %ah
+-	sahf
+-	jc	1f
+-	fmul	%st(0)		// y * y : x
+-	fxch			// x : y * y
+-	fmul	%st(0)		// x * x : y * y
+-	faddp			// x * x + y * y
+-	fsqrt
+-2:
+-	fstpl	-8(%rsp)
+-	LOAD_DOUBLE_REG (-8(%rsp), 0)
+-	ret
+-
+-	// We have to test whether any of the parameters is Inf.
+-	// In this case the result is infinity.
+-1:	andb	$0x45, %al
+-	cmpb	$5, %al
+-	je	3f		// jump if y is Inf
+-	andb	$0x45, %ch
+-	cmpb	$5, %ch
+-	jne	4f		// jump if x is not Inf
+-	fxch
+-3:	fstp	%st(1)
+-	fabs
+-	jmp	2b
+-
+-4:	testb	$1, %al
+-	jnz	5f		// y is NaN
+-	fxch
+-5:	fstp	%st(1)
+-	jmp	2b
+-	
+-END(__ieee754_hypot)
+diff --git a/sysdeps/x86_64/fpu/587/e_hypot.c b/sysdeps/x86_64/fpu/587/e_hypot.c
+new file mode 100644
+index 0000000000..921e5809fa
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/e_hypot.c
+@@ -0,0 +1 @@
++#include <sysdeps/i386/fpu/e_hypot.c>
+diff --git a/sysdeps/x86_64/fpu/587/e_hypotf.S b/sysdeps/x86_64/fpu/587/e_hypotf.S
+deleted file mode 100644
+index d7ab9a91cc..0000000000
+--- a/sysdeps/x86_64/fpu/587/e_hypotf.S
++++ /dev/null
+@@ -1,67 +0,0 @@
+-/* Compute the hypothenuse of X and Y.
+-   Copyright (C) 2011 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-#include <sysdep.h>
+-
+-	.text
+-ENTRY(__ieee754_hypotf)
+-	LOAD_REG_K1
+-	STORE_FLOAT_REG (0, -4(%rsp))
+-	STORE_FLOAT_REG (1, -8(%rsp))
+-	flds	-4(%rsp)		// x
+-	fxam
+-	fnstsw
+-	flds	-8(%rsp)		// y : x
+-	movb	%ah, %ch
+-	fxam
+-	fnstsw
+-	movb	%ah, %al
+-	orb	%ch, %ah
+-	sahf
+-	jc	1f
+-	fmul	%st(0)		// y * y : x
+-	fxch			// x : y * y
+-	fmul	%st(0)		// x * x : y * y
+-	faddp			// x * x + y * y
+-	fsqrt
+-2:
+-	fstps	-4(%rsp)
+-	LOAD_FLOAT_REG (-4(%rsp), 0)
+-	ret
+-
+-	// We have to test whether any of the parameters is Inf.
+-	// In this case the result is infinity.
+-1:	andb	$0x45, %al
+-	cmpb	$5, %al
+-	je	3f		// jump if y is Inf
+-	andb	$0x45, %ch
+-	cmpb	$5, %ch
+-	jne	4f		// jump if x is not Inf
+-	fxch
+-3:	fstp	%st(1)
+-	fabs
+-	jmp	2b
+-
+-4:	testb	$1, %al
+-	jnz	5f		// y is NaN
+-	fxch
+-5:	fstp	%st(1)
+-	jmp	2b
+-	
+-END(__ieee754_hypotf)

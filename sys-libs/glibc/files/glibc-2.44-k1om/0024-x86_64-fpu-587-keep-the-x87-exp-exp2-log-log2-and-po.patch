@@ -1,0 +1,98 @@
+From 5fd0c14841b2536a006fd2655a111a13da4ff585 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 23:30:22 +0200
+Subject: [PATCH 24/49] x86_64/fpu/587: keep the x87 exp, exp2, log, log2 and
+ pow
+
+Since 2.28/2.29 the dbl-64 versions are new C implementations with new
+symbol versions and no wrappers, which the x87 versions (__ieee754_*) do
+not provide.  Do what i386 does: keep the x87 code with the classic
+wrappers and empty the dbl-64 data tables, so libm keeps the old symbol
+versions of these functions.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/587/e_exp_data.c     | 1 +
+ sysdeps/x86_64/fpu/587/e_log2_data.c    | 1 +
+ sysdeps/x86_64/fpu/587/e_log_data.c     | 1 +
+ sysdeps/x86_64/fpu/587/e_pow_log_data.c | 1 +
+ sysdeps/x86_64/fpu/587/w_exp.c          | 1 +
+ sysdeps/x86_64/fpu/587/w_exp2.c         | 1 +
+ sysdeps/x86_64/fpu/587/w_log.c          | 1 +
+ sysdeps/x86_64/fpu/587/w_log2.c         | 1 +
+ sysdeps/x86_64/fpu/587/w_pow.c          | 1 +
+ 9 files changed, 9 insertions(+)
+ create mode 100644 sysdeps/x86_64/fpu/587/e_exp_data.c
+ create mode 100644 sysdeps/x86_64/fpu/587/e_log2_data.c
+ create mode 100644 sysdeps/x86_64/fpu/587/e_log_data.c
+ create mode 100644 sysdeps/x86_64/fpu/587/e_pow_log_data.c
+ create mode 100644 sysdeps/x86_64/fpu/587/w_exp.c
+ create mode 100644 sysdeps/x86_64/fpu/587/w_exp2.c
+ create mode 100644 sysdeps/x86_64/fpu/587/w_log.c
+ create mode 100644 sysdeps/x86_64/fpu/587/w_log2.c
+ create mode 100644 sysdeps/x86_64/fpu/587/w_pow.c
+
+diff --git a/sysdeps/x86_64/fpu/587/e_exp_data.c b/sysdeps/x86_64/fpu/587/e_exp_data.c
+new file mode 100644
+index 0000000000..1cc8931700
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/e_exp_data.c
+@@ -0,0 +1 @@
++/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/e_log2_data.c b/sysdeps/x86_64/fpu/587/e_log2_data.c
+new file mode 100644
+index 0000000000..1cc8931700
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/e_log2_data.c
+@@ -0,0 +1 @@
++/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/e_log_data.c b/sysdeps/x86_64/fpu/587/e_log_data.c
+new file mode 100644
+index 0000000000..1cc8931700
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/e_log_data.c
+@@ -0,0 +1 @@
++/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/e_pow_log_data.c b/sysdeps/x86_64/fpu/587/e_pow_log_data.c
+new file mode 100644
+index 0000000000..1cc8931700
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/e_pow_log_data.c
+@@ -0,0 +1 @@
++/* Not needed.  */
+diff --git a/sysdeps/x86_64/fpu/587/w_exp.c b/sysdeps/x86_64/fpu/587/w_exp.c
+new file mode 100644
+index 0000000000..27eee98a0a
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/w_exp.c
+@@ -0,0 +1 @@
++#include <sysdeps/../math/w_exp.c>
+diff --git a/sysdeps/x86_64/fpu/587/w_exp2.c b/sysdeps/x86_64/fpu/587/w_exp2.c
+new file mode 100644
+index 0000000000..e0636a7ceb
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/w_exp2.c
+@@ -0,0 +1 @@
++#include <sysdeps/../math/w_exp2.c>
+diff --git a/sysdeps/x86_64/fpu/587/w_log.c b/sysdeps/x86_64/fpu/587/w_log.c
+new file mode 100644
+index 0000000000..9b2b018711
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/w_log.c
+@@ -0,0 +1 @@
++#include <sysdeps/../math/w_log.c>
+diff --git a/sysdeps/x86_64/fpu/587/w_log2.c b/sysdeps/x86_64/fpu/587/w_log2.c
+new file mode 100644
+index 0000000000..eafbe5cf3e
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/w_log2.c
+@@ -0,0 +1 @@
++#include <sysdeps/../math/w_log2.c>
+diff --git a/sysdeps/x86_64/fpu/587/w_pow.c b/sysdeps/x86_64/fpu/587/w_pow.c
+new file mode 100644
+index 0000000000..b50c1988de
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/587/w_pow.c
+@@ -0,0 +1 @@
++#include <sysdeps/../math/w_pow.c>

@@ -1,0 +1,85 @@
+From 4326de93bacb29b16437fe909153e57c7651a515 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 23:56:04 +0200
+Subject: [PATCH 29/49] nptl: keep the K1OM libc versions of the moved mutex
+ functions
+
+pthread_mutex_lock, pthread_mutex_unlock, pthread_mutex_init and
+pthread_cond_signal take their libc default version from libpthread's
+numbering since 2.34.  On K1OM that is GLIBC_2.2.5, while libc exported
+them at its GLIBC_2.14 baseline before; add that version as a compat
+symbol.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ nptl/pthread_cond_signal.c  | 5 +++++
+ nptl/pthread_mutex_init.c   | 5 +++++
+ nptl/pthread_mutex_lock.c   | 5 +++++
+ nptl/pthread_mutex_unlock.c | 5 +++++
+ 4 files changed, 20 insertions(+)
+
+diff --git a/nptl/pthread_cond_signal.c b/nptl/pthread_cond_signal.c
+index 3f6ae04a7b..f4c3749ca6 100644
+--- a/nptl/pthread_cond_signal.c
++++ b/nptl/pthread_cond_signal.c
+@@ -95,6 +95,11 @@ ___pthread_cond_signal (pthread_cond_t *cond)
+ }
+ versioned_symbol (libpthread, ___pthread_cond_signal, pthread_cond_signal,
+ 		  GLIBC_2_3_2);
++#if defined __KNC__ && SHLIB_COMPAT (libc, GLIBC_2_0, GLIBC_2_34)
++/* The K1OM libc exported pthread_cond_signal at its GLIBC_2.14 baseline, while
++   libpthread starts at GLIBC_2.2.5.  */
++compat_symbol (libc, ___pthread_cond_signal, pthread_cond_signal, GLIBC_2_0);
++#endif
+ libc_hidden_ver (___pthread_cond_signal, __pthread_cond_signal)
+ #ifndef SHARED
+ strong_alias (___pthread_cond_signal, __pthread_cond_signal)
+diff --git a/nptl/pthread_mutex_init.c b/nptl/pthread_mutex_init.c
+index 8a5450bcb0..e219130052 100644
+--- a/nptl/pthread_mutex_init.c
++++ b/nptl/pthread_mutex_init.c
+@@ -152,6 +152,11 @@ ___pthread_mutex_init (pthread_mutex_t *mutex,
+ }
+ versioned_symbol (libpthread, ___pthread_mutex_init, pthread_mutex_init,
+ 		  GLIBC_2_0);
++#if defined __KNC__ && SHLIB_COMPAT (libc, GLIBC_2_0, GLIBC_2_34)
++/* The K1OM libc exported pthread_mutex_init at its GLIBC_2.14 baseline, while
++   libpthread starts at GLIBC_2.2.5.  */
++compat_symbol (libc, ___pthread_mutex_init, pthread_mutex_init, GLIBC_2_0);
++#endif
+ libc_hidden_ver (___pthread_mutex_init, __pthread_mutex_init)
+ #ifndef SHARED
+ strong_alias (___pthread_mutex_init, __pthread_mutex_init)
+diff --git a/nptl/pthread_mutex_lock.c b/nptl/pthread_mutex_lock.c
+index a697f2b6ca..9dcf76e703 100644
+--- a/nptl/pthread_mutex_lock.c
++++ b/nptl/pthread_mutex_lock.c
+@@ -608,6 +608,11 @@ strong_alias (___pthread_mutex_lock, __pthread_mutex_lock)
+ # endif
+ versioned_symbol (libpthread, ___pthread_mutex_lock, pthread_mutex_lock,
+ 		  GLIBC_2_0);
++#if defined __KNC__ && SHLIB_COMPAT (libc, GLIBC_2_0, GLIBC_2_34)
++/* The K1OM libc exported pthread_mutex_lock at its GLIBC_2.14 baseline, while
++   libpthread starts at GLIBC_2.2.5.  */
++compat_symbol (libc, ___pthread_mutex_lock, pthread_mutex_lock, GLIBC_2_0);
++#endif
+ 
+ # if OTHER_SHLIB_COMPAT (libpthread, GLIBC_2_0, GLIBC_2_34)
+ compat_symbol (libpthread, ___pthread_mutex_lock, __pthread_mutex_lock,
+diff --git a/nptl/pthread_mutex_unlock.c b/nptl/pthread_mutex_unlock.c
+index fc1c951275..08c7be8a23 100644
+--- a/nptl/pthread_mutex_unlock.c
++++ b/nptl/pthread_mutex_unlock.c
+@@ -363,6 +363,11 @@ strong_alias (___pthread_mutex_unlock, __pthread_mutex_unlock)
+ #endif
+ versioned_symbol (libpthread, ___pthread_mutex_unlock, pthread_mutex_unlock,
+ 		  GLIBC_2_0);
++#if defined __KNC__ && SHLIB_COMPAT (libc, GLIBC_2_0, GLIBC_2_34)
++/* The K1OM libc exported pthread_mutex_unlock at its GLIBC_2.14 baseline, while
++   libpthread starts at GLIBC_2.2.5.  */
++compat_symbol (libc, ___pthread_mutex_unlock, pthread_mutex_unlock, GLIBC_2_0);
++#endif
+ 
+ #if OTHER_SHLIB_COMPAT (libpthread, GLIBC_2_0, GLIBC_2_34)
+ compat_symbol (libpthread, ___pthread_mutex_unlock, __pthread_mutex_unlock,

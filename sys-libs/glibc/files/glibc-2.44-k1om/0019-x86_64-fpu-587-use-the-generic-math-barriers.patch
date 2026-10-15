@@ -1,0 +1,43 @@
+From 488e4b5500d51c6b85ec0700c3301128c5f72fdc Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 23:09:43 +0200
+Subject: [PATCH 19/49] x86_64/fpu/587: use the generic math barriers
+
+Intel's barriers use the SSE "x" constraint for float and double, which
+GCC >= 7 rejects for K1OM ("inconsistent operand constraints"); scalar
+FP is x87 there and the barriers are also applied to integer and complex
+values.  The generic memory-operand barriers work for every type.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ sysdeps/x86_64/fpu/587/math_private.h | 17 -----------------
+ 1 file changed, 17 deletions(-)
+
+diff --git a/sysdeps/x86_64/fpu/587/math_private.h b/sysdeps/x86_64/fpu/587/math_private.h
+index d3f6c13fd6..8957300b1b 100644
+--- a/sysdeps/x86_64/fpu/587/math_private.h
++++ b/sysdeps/x86_64/fpu/587/math_private.h
+@@ -1,22 +1,5 @@
+ #ifndef _MATH_PRIVATE_H
+ 
+-#define math_opt_barrier(x) \
+-({ __typeof(x) __x;					\
+-   if (sizeof (x) <= sizeof (double))			\
+-     __asm ("" : "=x" (__x) : "0" (x));			\
+-   else							\
+-     __asm ("" : "=t" (__x) : "0" (x));			\
+-   __x; })
+-#define math_force_eval(x) \
+-do							\
+-  {							\
+-    if (sizeof (x) <= sizeof (double))			\
+-      __asm __volatile ("" : : "x" (x));		\
+-    else						\
+-      __asm __volatile ("" : : "f" (x));		\
+-  }							\
+-while (0)
+-
+ #include <../../generic/math_private.h>
+ 
+ #endif
