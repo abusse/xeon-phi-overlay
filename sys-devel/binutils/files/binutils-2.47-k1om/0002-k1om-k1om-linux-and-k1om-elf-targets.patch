@@ -1,0 +1,126 @@
+From baec2177eab1debb3840884012611a4d89e64bd3 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Wed, 30 Sep 2026 10:50:28 +0200
+Subject: [PATCH 2/7] k1om: k1om-*-linux and k1om-*-elf targets
+
+From Intel MPSS 3.8.6: config.sub/config.guess know the k1om CPU, BFD
+selects bfd_elf64_k1om_vec (and x86-64 core files for a native k1om
+build), gas treats k1om* like x86_64, and ld uses elf_k1om for
+k1om-*-linux-*, k1om-*-elf* and the card rootfs triplet
+x86_64-k1om-linux-*.
+
+Only the Linux and bare ELF targets are kept; Intel's L1OM, Solaris,
+DICOS, DragonFly, BSD and MinGW variants are dropped.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ bfd/config.bfd    | 11 +++++++++++
+ bfd/configure     |  2 +-
+ bfd/configure.ac  |  2 +-
+ gas/configure.tgt |  2 +-
+ ld/configure.tgt  | 13 +++++++++++++
+ 5 files changed, 27 insertions(+), 3 deletions(-)
+
+diff --git a/bfd/config.bfd b/bfd/config.bfd
+index bf1909076d4..b65e8b8011c 100644
+--- a/bfd/config.bfd
++++ b/bfd/config.bfd
+@@ -204,6 +204,7 @@ fido*)		 targ_archs=bfd_m68k_arch ;;
+ hppa*)		 targ_archs=bfd_hppa_arch ;;
+ i[3-7]86)	 targ_archs=bfd_i386_arch ;;
+ ia16)		 targ_archs=bfd_i386_arch ;;
++k1om)		 targ_archs=bfd_i386_arch ;;
+ loongarch*)	 targ_archs=bfd_loongarch_arch ;;
+ m6811*|m68hc11*) targ_archs="bfd_m68hc11_arch bfd_m68hc12_arch bfd_m9s12x_arch bfd_m9s12xg_arch" ;;
+ m6812*|m68hc12*) targ_archs="bfd_m68hc12_arch bfd_m68hc11_arch bfd_m9s12x_arch bfd_m9s12xg_arch" ;;
+@@ -1356,6 +1357,16 @@ case "${targ}" in
+     targ_selvecs="i386_elf32_vec i386_coff_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec k1om_elf64_vec"
+     want64=true
+     ;;
++  k1om-*-elf*)
++    targ_defvec=k1om_elf64_vec
++    targ_selvecs="x86_64_elf64_vec i386_elf32_vec i386_coff_vec"
++    want64=true
++    ;;
++  k1om-*-linux-*)
++    targ_defvec=k1om_elf64_vec
++    targ_selvecs="x86_64_elf64_vec i386_elf32_vec x86_64_elf32_vec i386_pei_vec x86_64_pei_vec"
++    want64=true
++    ;;
+   x86_64-*-linux-*)
+     targ_defvec=x86_64_elf64_vec
+     targ_selvecs="i386_elf32_vec x86_64_elf32_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec k1om_elf64_vec"
+diff --git a/bfd/configure b/bfd/configure
+index 3cac340663b..0e7ce8f18d0 100755
+--- a/bfd/configure
++++ b/bfd/configure
+@@ -16425,7 +16425,7 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+ 	COREFILE=trad-core.lo
+ 	TRAD_HEADER='"hosts/vaxbsd.h"'
+ 	;;
+-  x86_64-*-linux*)
++  x86_64-*-linux* | k1om-*-linux*)
+ 	CORE_HEADER='"hosts/x86-64linux.h"'
+ 	;;
+   x86_64-*-netbsd* | x86_64-*-openbsd*)
+diff --git a/bfd/configure.ac b/bfd/configure.ac
+index 9b4a28d8a71..48705443a55 100644
+--- a/bfd/configure.ac
++++ b/bfd/configure.ac
+@@ -951,7 +951,7 @@ changequote([,])dnl
+ 	COREFILE=trad-core.lo
+ 	TRAD_HEADER='"hosts/vaxbsd.h"'
+ 	;;
+-  x86_64-*-linux*)
++  x86_64-*-linux* | k1om-*-linux*)
+ 	CORE_HEADER='"hosts/x86-64linux.h"'
+ 	;;
+   x86_64-*-netbsd* | x86_64-*-openbsd*)
+diff --git a/gas/configure.tgt b/gas/configure.tgt
+index 7a5645fd9ae..a70eceb4688 100644
+--- a/gas/configure.tgt
++++ b/gas/configure.tgt
+@@ -115,7 +115,7 @@ case ${cpu} in
+   v850*)		cpu_type=v850 ;;
+   visium)		cpu_type=visium endian=big ;;
+   wasm32)               cpu_type=wasm32 endian=little ;;
+-  x86_64*)		cpu_type=i386 arch=x86_64;;
++  x86_64*|k1om*)		cpu_type=i386 arch=x86_64;;
+   xgate)		cpu_type=xgate ;;
+   xtensa*)		cpu_type=xtensa arch=xtensa ;;
+   *)			cpu_type=${cpu} ;;
+diff --git a/ld/configure.tgt b/ld/configure.tgt
+index be71df98354..1b71de6531e 100644
+--- a/ld/configure.tgt
++++ b/ld/configure.tgt
+@@ -449,6 +449,14 @@ iq2000-*-elf)		targ_emul=elf32iq2000
+ 			targ_extra_emuls="elf32iq10"
+ 			targ_extra_ofiles=ldelfgen.o
+ 			;;
++k1om-*-elf*)		targ_emul=elf_k1om
++			targ_extra_emuls="elf_i386 elf_x86_64"
++			;;
++k1om-*-linux-*)		targ_emul=elf_k1om
++			targ_extra_emuls="elf32_x86_64 elf_i386 elf_x86_64"
++			targ_extra_libpath="elf_i386 elf32_x86_64 elf_x86_64"
++			tdir_elf_i386=`echo ${targ_alias} | sed -e 's/x86_64/i386/'`
++			;;
+ lm32-*-*linux*)		targ_emul=elf32lm32fd
+ 			;;
+ lm32-*-*)		targ_emul=elf32lm32
+@@ -942,6 +950,11 @@ x86_64-*-rdos*)		targ_emul=elf64rdos
+ x86_64-*-haiku*)	targ_emul=elf_x86_64_haiku
+ 			targ_extra_emuls="elf_x86_64 elf_i386_haiku"
+ 			;;
++x86_64-k1om-linux-*)	targ_emul=elf_k1om
++			targ_extra_emuls="elf32_x86_64 elf_i386 elf_x86_64"
++			targ_extra_libpath="elf_i386 elf32_x86_64 elf_x86_64"
++			tdir_elf_i386=`echo ${targ_alias} | sed -e 's/x86_64/i386/'`
++			;;
+ x86_64-*-linux-gnux32)	targ_emul=elf32_x86_64
+ 			targ_extra_libpath="elf_i386 elf_x86_64 elf_k1om"
+ 			tdir_elf_i386=`echo ${targ_alias} | sed -e 's/x86_64/i386/' -e 's/-linux-gnux32/-linux-gnu/'`
+-- 
+2.54.0
+

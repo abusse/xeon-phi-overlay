@@ -1,0 +1,1148 @@
+From fba128efdcf0a909f12d247e213ebb8ae8ed0e64 Mon Sep 17 00:00:00 2001
+From: Anselm Busse <anselm.busse@outlook.com>
+Date: Wed, 30 Sep 2026 22:07:46 +0200
+Subject: [PATCH 1/7] x86: restore K1OM support removed in 2.39
+
+Binutils 2.39 dropped the L1OM/K1OM sub-architectures (801a7eab11e,
+e961c696dcb, c085ab00c7b).  Bring back the K1OM half: bfd_arch_k1om and
+cpu-k1om.c, the elf64-k1om and elf64-k1om-freebsd vectors, the elf_k1om
+and elf_k1om_fbsd emulations, -march=k1om and CpuK1OM in gas, and the
+tests, as they were in 2.38.  L1OM stays removed.  -march=k1om takes the
+CPU_UNKNOWN set (all but IAMCU), which is what "unknown" meant for K1OM
+before; i386-gen's dependency table cannot express that as a K1OM entry.
+
+As x86-64 now does, elf64-k1om sets ELF_OSABI to ELFOSABI_GNU (without
+ELF_OSABI_EXACT), so that IFUNC and the other GNU features keep working,
+and elf64-k1om-freebsd matches ELFOSABI_FREEBSD exactly.  K1OM is added
+as a secondary target where x86 targets still list secondary targets;
+the Solaris and FreeBSD lists that were reorganized upstream get none.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ bfd/Makefile.am                          |   2 +
+ bfd/Makefile.in                          |   3 +
+ bfd/archures.c                           |   5 +
+ bfd/bfd-in2.h                            |   3 +
+ bfd/config.bfd                           |  27 ++-
+ bfd/configure                            |   2 +
+ bfd/configure.ac                         |   2 +
+ bfd/cpu-k1om.c                           |  37 ++++
+ bfd/elf64-x86-64.c                       |  56 +++++
+ bfd/targets.c                            |   7 +
+ gas/config/tc-i386.c                     |  34 ++-
+ gas/config/tc-i386.h                     |   5 +
+ gas/doc/c-i386.texi                      |   3 +-
+ gas/testsuite/gas/i386/i386.exp          |   1 +
+ gas/testsuite/gas/i386/k1om-inval.l      |   2 +
+ gas/testsuite/gas/i386/k1om-inval.s      |   2 +
+ gas/testsuite/gas/i386/k1om.d            | 260 +++++++++++++++++++++++
+ gas/testsuite/gas/i386/x86-64.exp        |   1 +
+ ld/Makefile.am                           |   2 +
+ ld/Makefile.in                           |   4 +
+ ld/configure.tgt                         |  10 +-
+ ld/emulparams/elf_k1om.sh                |  39 ++++
+ ld/emulparams/elf_k1om_fbsd.sh           |   3 +
+ ld/po/BLD-POTFILES.in                    |   2 +
+ ld/testsuite/ld-x86-64/abs-k1om.d        |  12 ++
+ ld/testsuite/ld-x86-64/protected2-k1om.d |  18 ++
+ ld/testsuite/ld-x86-64/protected3-k1om.d |  17 ++
+ ld/testsuite/ld-x86-64/x86-64.exp        |   3 +
+ opcodes/configure                        |   2 +-
+ opcodes/configure.ac                     |   2 +-
+ opcodes/disassemble.c                    |   1 +
+ opcodes/i386-gen.c                       |   1 +
+ opcodes/i386-opc.h                       |   3 +
+ 33 files changed, 548 insertions(+), 23 deletions(-)
+ create mode 100644 bfd/cpu-k1om.c
+ create mode 100644 gas/testsuite/gas/i386/k1om-inval.l
+ create mode 100644 gas/testsuite/gas/i386/k1om-inval.s
+ create mode 100644 gas/testsuite/gas/i386/k1om.d
+ create mode 100644 ld/emulparams/elf_k1om.sh
+ create mode 100644 ld/emulparams/elf_k1om_fbsd.sh
+ create mode 100644 ld/testsuite/ld-x86-64/abs-k1om.d
+ create mode 100644 ld/testsuite/ld-x86-64/protected2-k1om.d
+ create mode 100644 ld/testsuite/ld-x86-64/protected3-k1om.d
+
+diff --git a/bfd/Makefile.am b/bfd/Makefile.am
+index e4df05441eb..d425ee854e0 100644
+--- a/bfd/Makefile.am
++++ b/bfd/Makefile.am
+@@ -119,6 +119,7 @@ ALL_MACHINES = \
+ 	cpu-i386.lo \
+ 	cpu-ia64.lo \
+ 	cpu-iamcu.lo \
++	cpu-k1om.lo \
+ 	cpu-ip2k.lo \
+ 	cpu-iq2000.lo \
+ 	cpu-kvx.lo \
+@@ -202,6 +203,7 @@ ALL_MACHINES_CFILES = \
+ 	cpu-i386.c \
+ 	cpu-ia64.c \
+ 	cpu-iamcu.c \
++	cpu-k1om.c \
+ 	cpu-ip2k.c \
+ 	cpu-iq2000.c \
+ 	cpu-kvx.c \
+diff --git a/bfd/Makefile.in b/bfd/Makefile.in
+index 14512cf61fb..efeb42ad26c 100644
+--- a/bfd/Makefile.in
++++ b/bfd/Makefile.in
+@@ -587,6 +587,7 @@ ALL_MACHINES = \
+ 	cpu-i386.lo \
+ 	cpu-ia64.lo \
+ 	cpu-iamcu.lo \
++	cpu-k1om.lo \
+ 	cpu-ip2k.lo \
+ 	cpu-iq2000.lo \
+ 	cpu-kvx.lo \
+@@ -670,6 +671,7 @@ ALL_MACHINES_CFILES = \
+ 	cpu-i386.c \
+ 	cpu-ia64.c \
+ 	cpu-iamcu.c \
++	cpu-k1om.c \
+ 	cpu-ip2k.c \
+ 	cpu-iq2000.c \
+ 	cpu-kvx.c \
+@@ -1501,6 +1503,7 @@ distclean-compile:
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-iamcu.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-ip2k.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-iq2000.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-k1om.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-kvx.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-lm32.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpu-loongarch.Plo@am__quote@
+diff --git a/bfd/archures.c b/bfd/archures.c
+index 0e919246673..4adb653b28b 100644
+--- a/bfd/archures.c
++++ b/bfd/archures.c
+@@ -206,6 +206,9 @@ DESCRIPTION
+ .#define bfd_mach_i386_i386_intel_syntax (bfd_mach_i386_i386 | bfd_mach_i386_intel_syntax)
+ .#define bfd_mach_x86_64_intel_syntax	(bfd_mach_x86_64 | bfd_mach_i386_intel_syntax)
+ .#define bfd_mach_x64_32_intel_syntax	(bfd_mach_x64_32 | bfd_mach_i386_intel_syntax)
++.  bfd_arch_k1om,      {* Intel K1OM.  *}
++.#define bfd_mach_k1om			(1 << 6)
++.#define bfd_mach_k1om_intel_syntax	(bfd_mach_k1om | bfd_mach_i386_intel_syntax)
+ .  bfd_arch_iamcu,     {* Intel MCU.  *}
+ .#define bfd_mach_iamcu			(1 << 8)
+ .#define bfd_mach_i386_iamcu		(bfd_mach_i386_i386 | bfd_mach_iamcu)
+@@ -668,6 +671,7 @@ extern const bfd_arch_info_type bfd_iamcu_arch;
+ extern const bfd_arch_info_type bfd_ia64_arch;
+ extern const bfd_arch_info_type bfd_ip2k_arch;
+ extern const bfd_arch_info_type bfd_iq2000_arch;
++extern const bfd_arch_info_type bfd_k1om_arch;
+ extern const bfd_arch_info_type bfd_kvx_arch;
+ extern const bfd_arch_info_type bfd_lm32_arch;
+ extern const bfd_arch_info_type bfd_loongarch_arch;
+@@ -756,6 +760,7 @@ static const bfd_arch_info_type * const bfd_archures_list[] =
+     &bfd_ia64_arch,
+     &bfd_ip2k_arch,
+     &bfd_iq2000_arch,
++    &bfd_k1om_arch,
+     &bfd_kvx_arch,
+     &bfd_lm32_arch,
+     &bfd_loongarch_arch,
+diff --git a/bfd/bfd-in2.h b/bfd/bfd-in2.h
+index e49d67316f3..028868db461 100644
+--- a/bfd/bfd-in2.h
++++ b/bfd/bfd-in2.h
+@@ -1463,6 +1463,9 @@ enum bfd_architecture
+ #define bfd_mach_i386_i386_intel_syntax (bfd_mach_i386_i386 | bfd_mach_i386_intel_syntax)
+ #define bfd_mach_x86_64_intel_syntax   (bfd_mach_x86_64 | bfd_mach_i386_intel_syntax)
+ #define bfd_mach_x64_32_intel_syntax   (bfd_mach_x64_32 | bfd_mach_i386_intel_syntax)
++  bfd_arch_k1om,      /* Intel K1OM.  */
++#define bfd_mach_k1om                  (1 << 6)
++#define bfd_mach_k1om_intel_syntax     (bfd_mach_k1om | bfd_mach_i386_intel_syntax)
+   bfd_arch_iamcu,     /* Intel MCU.  */
+ #define bfd_mach_iamcu                 (1 << 8)
+ #define bfd_mach_i386_iamcu            (bfd_mach_i386_i386 | bfd_mach_iamcu)
+diff --git a/bfd/config.bfd b/bfd/config.bfd
+index 02a1a68525e..bf1909076d4 100644
+--- a/bfd/config.bfd
++++ b/bfd/config.bfd
+@@ -570,7 +570,7 @@ case "${targ}" in
+     ;;
+   i[3-7]86-*-dicos* | i[3-7]86-*-dragonfly* |  i[3-7]86-*-netbsd* | i[3-7]86-*-knetbsd*-gnu | i[3-7]86-*-redox*)
+     targ_defvec=i386_elf32_vec
+-    targ64_selvecs="x86_64_elf64_vec"
++    targ64_selvecs="x86_64_elf64_vec k1om_elf64_vec"
+     ;;
+   *-*-msdosdjgpp* | *-*-go32* )
+     targ_defvec=i386_coff_go32_vec
+@@ -589,7 +589,7 @@ case "${targ}" in
+   i[3-7]86-*-freebsd* | i[3-7]86-*-kfreebsd*-gnu)
+     targ_defvec=i386_elf32_fbsd_vec
+     targ_selvecs="i386_elf32_vec i386_pei_vec i386_coff_vec"
+-    targ64_selvecs="x86_64_elf64_fbsd_vec x86_64_elf64_vec x86_64_pe_vec x86_64_pei_vec"
++    targ64_selvecs="x86_64_elf64_fbsd_vec x86_64_elf64_vec x86_64_pe_vec x86_64_pei_vec k1om_elf64_vec k1om_elf64_fbsd_vec"
+     # FreeBSD <= 4.0 supports only the old nonstandard way of ABI labelling.
+     case "${targ}" in
+       i[3-7]86-*-freebsd3* | i[3-7]86-*-freebsd4 | i[3-7]86-*-freebsd4.0*)
+@@ -599,7 +599,7 @@ case "${targ}" in
+   i[3-7]86-*-linux-*)
+     targ_defvec=i386_elf32_vec
+     targ_selvecs="i386_pei_vec"
+-    targ64_selvecs="x86_64_elf64_vec x86_64_elf32_vec x86_64_pe_vec x86_64_pei_vec"
++    targ64_selvecs="x86_64_elf64_vec x86_64_elf32_vec x86_64_pe_vec x86_64_pei_vec k1om_elf64_vec"
+     ;;
+   i[3-7]86-*-lynxos*)
+     targ_defvec=i386_elf32_vec
+@@ -1343,27 +1343,27 @@ case "${targ}" in
+     ;;
+   x86_64-*-dicos* | x86_64-*-dragonfly* | x86_64-*-haiku* | x86_64-*-redox*)
+     targ_defvec=x86_64_elf64_vec
+-    targ_selvecs="i386_elf32_vec"
++    targ_selvecs="i386_elf32_vec k1om_elf64_vec"
+     want64=true
+     ;;
+   x86_64-*-freebsd* | x86_64-*-kfreebsd*-gnu)
+     targ_defvec=x86_64_elf64_fbsd_vec
+-    targ_selvecs="i386_elf32_fbsd_vec i386_coff_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec i386_elf32_vec x86_64_elf64_vec"
++    targ_selvecs="i386_elf32_fbsd_vec i386_coff_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec i386_elf32_vec x86_64_elf64_vec k1om_elf64_vec k1om_elf64_fbsd_vec"
+     want64=true
+     ;;
+   x86_64-*-netbsd* | x86_64-*-openbsd*)
+     targ_defvec=x86_64_elf64_vec
+-    targ_selvecs="i386_elf32_vec i386_coff_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec"
++    targ_selvecs="i386_elf32_vec i386_coff_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec k1om_elf64_vec"
+     want64=true
+     ;;
+   x86_64-*-linux-*)
+     targ_defvec=x86_64_elf64_vec
+-    targ_selvecs="i386_elf32_vec x86_64_elf32_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec"
++    targ_selvecs="i386_elf32_vec x86_64_elf32_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec k1om_elf64_vec"
+     want64=true
+     ;;
+   x86_64-*-mingw* | x86_64-*-pe | x86_64-*-pep | x86_64-*-cygwin)
+     targ_defvec=x86_64_pe_vec
+-    targ_selvecs="x86_64_pe_vec x86_64_pei_vec x86_64_pe_big_vec x86_64_elf64_vec i386_pe_vec i386_pe_big_vec i386_pei_vec i386_elf32_vec pdb_vec"
++    targ_selvecs="x86_64_pe_vec x86_64_pei_vec x86_64_pe_big_vec x86_64_elf64_vec k1om_elf64_vec i386_pe_vec i386_pe_big_vec i386_pei_vec i386_elf32_vec pdb_vec"
+     want64=true
+     targ_underscore=no
+     ;;
+@@ -1373,7 +1373,7 @@ case "${targ}" in
+     ;;
+   x86_64-*-rtems*)
+     targ_defvec=x86_64_elf64_vec
+-    targ_selvecs="i386_elf32_vec x86_64_elf32_vec x86_64_pe_vec x86_64_pei_vec"
++    targ_selvecs="i386_elf32_vec x86_64_elf32_vec k1om_elf64_vec x86_64_pe_vec x86_64_pei_vec"
+     want64=true
+     ;;
+   x86_64-*-solaris2*)
+@@ -1383,7 +1383,7 @@ case "${targ}" in
+     ;;
+   x86_64-*-elf* | x86_64-*-fuchsia | x86_64-*-genode* | x86_64-*-gnu*)
+     targ_defvec=x86_64_elf64_vec
+-    targ_selvecs="i386_elf32_vec x86_64_elf32_vec"
++    targ_selvecs="i386_elf32_vec x86_64_elf32_vec k1om_elf64_vec"
+     want64=true
+     ;;
+ #endif
+@@ -1457,6 +1457,13 @@ case "${targ_defvec} ${targ_selvecs}" in
+     ;;
+ esac
+ 
++# If we support Intel K1OM target, then add support for bfd_k1om_arch.
++case "${targ_defvec} ${targ_selvecs}" in
++  *k1om_elf64*)
++    targ_archs="$targ_archs bfd_k1om_arch"
++    ;;
++esac
++
+ case "${targ}" in
+   mipsisa32r6* | mipsisa64r6* | mips*-img-*)
+     targ_cflags="$targ_cflags -DMIPS_DEFAULT_R6=1"
+diff --git a/bfd/configure b/bfd/configure
+index 1b829384c0c..3cac340663b 100755
+--- a/bfd/configure
++++ b/bfd/configure
+@@ -15949,6 +15949,8 @@ do
+     ia64_pei_vec)		 tb="$tb pei-ia64.lo pepigen.lo $coff"; target_size=64 ;;
+     ip2k_elf32_vec)		 tb="$tb elf32-ip2k.lo elf32.lo $elf" ;;
+     iq2000_elf32_vec)		 tb="$tb elf32-iq2000.lo elf32.lo $elf" ;;
++    k1om_elf64_vec)		 tb="$tb elf64-x86-64.lo elfxx-x86.lo elf-ifunc.lo elf64.lo $elf"; target_size=64 ;;
++    k1om_elf64_fbsd_vec)	 tb="$tb elf64-x86-64.lo elfxx-x86.lo elf-ifunc.lo elf64.lo $elf"; target_size=64 ;;
+     kvx_elf32_vec)		 tb="$tb elf32-kvx.lo elfxx-kvx.lo elf32.lo $elf $ipa" ;;
+     kvx_elf64_vec)		 tb="$tb elf64-kvx.lo elfxx-kvx.lo elf64.lo $elf $ipa"; target_size=64 ;;
+     lm32_elf32_vec)		 tb="$tb elf32-lm32.lo elf32.lo $elf" ;;
+diff --git a/bfd/configure.ac b/bfd/configure.ac
+index c30a75ba8b7..9b4a28d8a71 100644
+--- a/bfd/configure.ac
++++ b/bfd/configure.ac
+@@ -490,6 +490,8 @@ do
+     ia64_pei_vec)		 tb="$tb pei-ia64.lo pepigen.lo $coff"; target_size=64 ;;
+     ip2k_elf32_vec)		 tb="$tb elf32-ip2k.lo elf32.lo $elf" ;;
+     iq2000_elf32_vec)		 tb="$tb elf32-iq2000.lo elf32.lo $elf" ;;
++    k1om_elf64_vec)		 tb="$tb elf64-x86-64.lo elfxx-x86.lo elf-ifunc.lo elf64.lo $elf"; target_size=64 ;;
++    k1om_elf64_fbsd_vec)	 tb="$tb elf64-x86-64.lo elfxx-x86.lo elf-ifunc.lo elf64.lo $elf"; target_size=64 ;;
+     kvx_elf32_vec)		 tb="$tb elf32-kvx.lo elfxx-kvx.lo elf32.lo $elf $ipa" ;;
+     kvx_elf64_vec)		 tb="$tb elf64-kvx.lo elfxx-kvx.lo elf64.lo $elf $ipa"; target_size=64 ;;
+     lm32_elf32_vec)		 tb="$tb elf32-lm32.lo elf32.lo $elf" ;;
+diff --git a/bfd/cpu-k1om.c b/bfd/cpu-k1om.c
+new file mode 100644
+index 00000000000..3f8aed03e97
+--- /dev/null
++++ b/bfd/cpu-k1om.c
+@@ -0,0 +1,37 @@
++/* BFD support for the Intel K1OM architecture.
++   Copyright (C) 2011-2022 Free Software Foundation, Inc.
++
++   This file is part of BFD, the Binary File Descriptor library.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston,
++   MA 02110-1301, USA.  */
++
++#include "sysdep.h"
++#include "bfd.h"
++#include "libbfd.h"
++
++extern void *bfd_arch_i386_short_nop_fill (bfd_size_type, bool, bool);
++
++#define N(number, name, print, next)				\
++  { 64, 64, 8, bfd_arch_k1om, number, name, print, 3, true,	\
++    bfd_default_compatible, bfd_default_scan,			\
++    bfd_arch_i386_short_nop_fill, next, 9 }
++
++static const bfd_arch_info_type bfd_k1om_arch_intel_syntax =
++  N (bfd_mach_k1om_intel_syntax, "k1om:intel", "k1om:intel", NULL);
++
++const bfd_arch_info_type bfd_k1om_arch =
++  N (bfd_mach_k1om, "k1om", "k1om", &bfd_k1om_arch_intel_syntax);
++
+diff --git a/bfd/elf64-x86-64.c b/bfd/elf64-x86-64.c
+index 575995d4957..a34081527f9 100644
+--- a/bfd/elf64-x86-64.c
++++ b/bfd/elf64-x86-64.c
+@@ -6495,6 +6495,62 @@ elf_x86_64_solaris2_add_symbol_hook (bfd *abfd,
+ #undef	elf_backend_add_symbol_hook
+ #define elf_backend_add_symbol_hook	elf_x86_64_add_symbol_hook
+ 
++/* Intel K1OM support.  */
++
++static bool
++elf64_k1om_elf_object_p (bfd *abfd)
++{
++  /* Set the right machine number for an K1OM elf64 file.  */
++  bfd_default_set_arch_mach (abfd, bfd_arch_k1om, bfd_mach_k1om);
++  return true;
++}
++
++#undef  TARGET_LITTLE_SYM
++#define TARGET_LITTLE_SYM		    k1om_elf64_vec
++#undef  TARGET_LITTLE_NAME
++#define TARGET_LITTLE_NAME		    "elf64-k1om"
++#undef ELF_ARCH
++#define ELF_ARCH			    bfd_arch_k1om
++
++#undef	ELF_MACHINE_CODE
++#define ELF_MACHINE_CODE		    EM_K1OM
++
++#undef	ELF_OSABI
++#define	ELF_OSABI			    ELFOSABI_GNU
++#undef	ELF_OSABI_EXACT
++
++#undef  elf64_bed
++#define elf64_bed elf64_k1om_bed
++
++#undef elf_backend_object_p
++#define elf_backend_object_p		    elf64_k1om_elf_object_p
++
++/* Restore defaults.  */
++#undef ELF_TARGET_OS
++
++#include "elf64-target.h"
++
++/* FreeBSD K1OM support.  */
++
++#undef  TARGET_LITTLE_SYM
++#define TARGET_LITTLE_SYM		    k1om_elf64_fbsd_vec
++#undef  TARGET_LITTLE_NAME
++#define TARGET_LITTLE_NAME		    "elf64-k1om-freebsd"
++
++#undef	ELF_OSABI
++#define	ELF_OSABI			    ELFOSABI_FREEBSD
++#undef	ELF_OSABI_EXACT
++#define	ELF_OSABI_EXACT			    1
++
++#undef  elf64_bed
++#define elf64_bed elf64_k1om_fbsd_bed
++
++#include "elf64-target.h"
++
++/* Restore defaults.  */
++#undef	ELF_MACHINE_CODE
++#define ELF_MACHINE_CODE		    EM_X86_64
++
+ /* 32bit x86-64 support.  */
+ 
+ #undef  TARGET_LITTLE_SYM
+diff --git a/bfd/targets.c b/bfd/targets.c
+index fcf650410dc..0d64c0a756d 100644
+--- a/bfd/targets.c
++++ b/bfd/targets.c
+@@ -768,6 +768,8 @@ extern const bfd_target ia64_elf64_vms_vec;
+ extern const bfd_target ia64_pei_vec;
+ extern const bfd_target ip2k_elf32_vec;
+ extern const bfd_target iq2000_elf32_vec;
++extern const bfd_target k1om_elf64_vec;
++extern const bfd_target k1om_elf64_fbsd_vec;
+ extern const bfd_target kvx_elf32_vec;
+ extern const bfd_target kvx_elf64_vec;
+ extern const bfd_target lm32_elf32_vec;
+@@ -1126,6 +1128,11 @@ static const bfd_target * const _bfd_target_vector[] =
+ 	&ip2k_elf32_vec,
+ 	&iq2000_elf32_vec,
+ 
++#ifdef BFD64
++	&k1om_elf64_vec,
++	&k1om_elf64_fbsd_vec,
++#endif
++
+ #ifdef BFD64
+ 	&kvx_elf32_vec,
+ 	&kvx_elf64_vec,
+diff --git a/gas/config/tc-i386.c b/gas/config/tc-i386.c
+index 90971b4dbe2..f33118a96ee 100644
+--- a/gas/config/tc-i386.c
++++ b/gas/config/tc-i386.c
+@@ -1083,6 +1083,7 @@ static const arch_entry cpu_arch[] =
+   ARCH (merom, CORE2, CORE2, true),
+   ARCH (core2, CORE2, CORE2, false),
+   ARCH (corei7, COREI7, COREI7, false),
++  ARCH (k1om, K1OM, UNKNOWN, false),
+   ARCH (iamcu, IAMCU, IAMCU, false),
+   ARCH (k6, K6, K6, false),
+   ARCH (k6_2, K6, K6_2, false),
+@@ -1662,6 +1663,7 @@ i386_generate_nops (fragS *fragP, char *where, offsetT count, int limit)
+ 	    case PROCESSOR_PENTIUMPRO:
+ 	    case PROCESSOR_PENTIUM4:
+ 	    case PROCESSOR_NOCONA:
++	    case PROCESSOR_K1OM:
+ 	    case PROCESSOR_GENERIC64:
+ 	    case PROCESSOR_K6:
+ 	    case PROCESSOR_ATHLON:
+@@ -3281,9 +3283,11 @@ check_cpu_arch_compatible (const char *name ATTRIBUTE_UNUSED,
+ 	arch = default_arch;
+     }
+ 
+-  /* If we are targeting Intel MCU, we must enable it.  */
++  /* If we are targeting Intel MCU or K1OM, we must enable it.  */
+   if ((get_elf_backend_data (stdoutput)->elf_machine_code == EM_IAMCU)
+-      == new_flag.bitfield.cpuiamcu)
++      == new_flag.bitfield.cpuiamcu
++      && (get_elf_backend_data (stdoutput)->elf_machine_code != EM_K1OM
++	  || new_flag.bitfield.cpuk1om))
+     return;
+ 
+   as_bad (_("`%s' is not supported on `%s'"), name, arch);
+@@ -3591,7 +3595,14 @@ set_cpu_arch (int dummy ATTRIBUTE_UNUSED)
+ enum bfd_architecture
+ i386_arch (void)
+ {
+-  if (cpu_arch_isa == PROCESSOR_IAMCU)
++  if (cpu_arch_isa == PROCESSOR_K1OM)
++    {
++      if (OUTPUT_FLAVOR != bfd_target_elf_flavour
++	  || flag_code != CODE_64BIT)
++	as_fatal (_("Intel K1OM is 64bit ELF only"));
++      return bfd_arch_k1om;
++    }
++  else if (cpu_arch_isa == PROCESSOR_IAMCU)
+     {
+       if (!IS_ELF || flag_code == CODE_64BIT)
+ 	as_fatal (_("Intel MCU is 32bit ELF only"));
+@@ -3606,7 +3617,14 @@ i386_mach (void)
+ {
+   if (startswith (default_arch, "x86_64"))
+     {
+-      if (default_arch[6] == '\0')
++      if (cpu_arch_isa == PROCESSOR_K1OM)
++	{
++	  if (OUTPUT_FLAVOR != bfd_target_elf_flavour
++	      || default_arch[6] != '\0')
++	    as_fatal (_("Intel K1OM is 64bit ELF only"));
++	  return bfd_mach_k1om;
++	}
++      else if (default_arch[6] == '\0')
+ 	return bfd_mach_x86_64;
+       else
+ 	return bfd_mach_x64_32;
+@@ -18271,7 +18289,13 @@ i386_target_format (void)
+ 	    format = ELF_TARGET_FORMAT32;
+ 	    break;
+ 	  }
+-	if (cpu_arch_isa == PROCESSOR_IAMCU)
++	if (cpu_arch_isa == PROCESSOR_K1OM)
++	  {
++	    if (x86_elf_abi != X86_64_ABI)
++	      as_fatal (_("Intel K1OM is 64bit only"));
++	    return ELF_TARGET_K1OM_FORMAT;
++	  }
++	else if (cpu_arch_isa == PROCESSOR_IAMCU)
+ 	  {
+ 	    if (x86_elf_abi != I386_ABI)
+ 	      as_fatal (_("Intel MCU is 32bit only"));
+diff --git a/gas/config/tc-i386.h b/gas/config/tc-i386.h
+index 5eaed702ea9..6d07031a102 100644
+--- a/gas/config/tc-i386.h
++++ b/gas/config/tc-i386.h
+@@ -78,6 +78,10 @@ extern unsigned long i386_mach (void);
+ #define ELF_TARGET_FORMAT32	"elf32-x86-64"
+ #endif
+ 
++#ifndef ELF_TARGET_K1OM_FORMAT
++#define ELF_TARGET_K1OM_FORMAT	"elf64-k1om"
++#endif
++
+ #ifndef ELF_TARGET_IAMCU_FORMAT
+ #define ELF_TARGET_IAMCU_FORMAT	"elf32-iamcu"
+ #endif
+@@ -264,6 +268,7 @@ enum processor_type
+   PROCESSOR_CORE,
+   PROCESSOR_CORE2,
+   PROCESSOR_COREI7,
++  PROCESSOR_K1OM,
+   PROCESSOR_IAMCU,
+   PROCESSOR_K6,
+   PROCESSOR_ATHLON,
+diff --git a/gas/doc/c-i386.texi b/gas/doc/c-i386.texi
+index b25a4fbc70e..b090f0f5654 100644
+--- a/gas/doc/c-i386.texi
++++ b/gas/doc/c-i386.texi
+@@ -110,6 +110,7 @@ processor names are recognized:
+ @code{core},
+ @code{core2},
+ @code{corei7},
++@code{k1om},
+ @code{iamcu},
+ @code{k6},
+ @code{k6_2},
+@@ -1693,7 +1694,7 @@ supported on the CPU specified.  The choices for @var{cpu_type} are:
+ @item @samp{i486} @tab @samp{i586} @tab @samp{i686} @tab @samp{pentium}
+ @item @samp{pentiumpro} @tab @samp{pentiumii} @tab @samp{pentiumiii} @tab @samp{pentium4}
+ @item @samp{prescott} @tab @samp{nocona} @tab @samp{core} @tab @samp{core2}
+-@item @samp{corei7} @tab @samp{iamcu}
++@item @samp{corei7} @tab @samp{k1om} @tab @samp{iamcu}
+ @item @samp{k6} @tab @samp{k6_2} @tab @samp{athlon} @tab @samp{k8}
+ @item @samp{amdfam10} @tab @samp{bdver1} @tab @samp{bdver2} @tab @samp{bdver3}
+ @item @samp{bdver4} @tab @samp{znver1} @tab @samp{znver2} @tab @samp{znver3}
+diff --git a/gas/testsuite/gas/i386/i386.exp b/gas/testsuite/gas/i386/i386.exp
+index 9878d0ea198..377c643db3f 100644
+--- a/gas/testsuite/gas/i386/i386.exp
++++ b/gas/testsuite/gas/i386/i386.exp
+@@ -751,6 +751,7 @@ if [gas_32_check] then {
+ 	    run_dump_test "ifunc"
+ 	    run_list_test "ifunc-2"
+ 	    run_dump_test "ifunc-3"
++	    run_list_test "k1om-inval" "-march=k1om --32"
+ 	}
+ 
+ 	run_dump_test "dwarf2-line-1"
+diff --git a/gas/testsuite/gas/i386/k1om-inval.l b/gas/testsuite/gas/i386/k1om-inval.l
+new file mode 100644
+index 00000000000..607bc628d29
+--- /dev/null
++++ b/gas/testsuite/gas/i386/k1om-inval.l
+@@ -0,0 +1,2 @@
++Assembler messages:
++Fatal error: Intel K1OM is 64bit only
+diff --git a/gas/testsuite/gas/i386/k1om-inval.s b/gas/testsuite/gas/i386/k1om-inval.s
+new file mode 100644
+index 00000000000..1ff7c295821
+--- /dev/null
++++ b/gas/testsuite/gas/i386/k1om-inval.s
+@@ -0,0 +1,2 @@
++	.text
++	nop
+diff --git a/gas/testsuite/gas/i386/k1om.d b/gas/testsuite/gas/i386/k1om.d
+new file mode 100644
+index 00000000000..594b18f3d2d
+--- /dev/null
++++ b/gas/testsuite/gas/i386/k1om.d
+@@ -0,0 +1,260 @@
++#source: x86_64.s
++#as: -J -march=k1om
++#objdump: -dw
++#name: k1om
++#warning_output: x86_64.e
++
++.*: +file format elf64-k1om.*
++
++Disassembly of section .text:
++
++0+ <.*>:
++[ 	]*[a-f0-9]+:	01 ca                	add    %ecx,%edx
++[ 	]*[a-f0-9]+:	44 01 ca             	add    %r9d,%edx
++[ 	]*[a-f0-9]+:	41 01 ca             	add    %ecx,%r10d
++[ 	]*[a-f0-9]+:	48 01 ca             	add    %rcx,%rdx
++[ 	]*[a-f0-9]+:	4d 01 ca             	add    %r9,%r10
++[ 	]*[a-f0-9]+:	41 01 c0             	add    %eax,%r8d
++[ 	]*[a-f0-9]+:	66 41 01 c0          	add    %ax,%r8w
++[ 	]*[a-f0-9]+:	49 01 c0             	add    %rax,%r8
++[ 	]*[a-f0-9]+:	05 11 22 33 44       	add    \$0x44332211,%eax
++[ 	]*[a-f0-9]+:	48 05 11 22 33 f4    	add    \$0xfffffffff4332211,%rax
++[ 	]*[a-f0-9]+:	66 05 33 44          	add    \$0x4433,%ax
++[ 	]*[a-f0-9]+:	48 05 11 22 33 44    	add    \$0x44332211,%rax
++[ 	]*[a-f0-9]+:	00 ca                	add    %cl,%dl
++[ 	]*[a-f0-9]+:	00 f7                	add    %dh,%bh
++[ 	]*[a-f0-9]+:	40 00 f7             	add    %sil,%dil
++[ 	]*[a-f0-9]+:	41 00 f7             	add    %sil,%r15b
++[ 	]*[a-f0-9]+:	44 00 f7             	add    %r14b,%dil
++[ 	]*[a-f0-9]+:	45 00 f7             	add    %r14b,%r15b
++[ 	]*[a-f0-9]+:	50                   	push   %rax
++[ 	]*[a-f0-9]+:	41 50                	push   %r8
++[ 	]*[a-f0-9]+:	41 59                	pop    %r9
++[ 	]*[a-f0-9]+:	04 11                	add    \$0x11,%al
++[ 	]*[a-f0-9]+:	80 c4 11             	add    \$0x11,%ah
++[ 	]*[a-f0-9]+:	40 80 c4 11          	add    \$0x11,%spl
++[ 	]*[a-f0-9]+:	41 80 c0 11          	add    \$0x11,%r8b
++[ 	]*[a-f0-9]+:	41 80 c4 11          	add    \$0x11,%r12b
++[ 	]*[a-f0-9]+:	0f 20 c0             	mov    %cr0,%rax
++[ 	]*[a-f0-9]+:	41 0f 20 c0          	mov    %cr0,%r8
++[ 	]*[a-f0-9]+:	44 0f 20 c0          	mov    %cr8,%rax
++[ 	]*[a-f0-9]+:	44 0f 22 c0          	mov    %rax,%cr8
++[ 	]*[a-f0-9]+:	f3 48 a5             	rep movsq %ds:\(%rsi\),%es:\(%rdi\)
++[ 	]*[a-f0-9]+:	66 f3 a5             	rep movsw %ds:\(%rsi\),%es:\(%rdi\)
++[ 	]*[a-f0-9]+:	f3 48 a5             	rep movsq %ds:\(%rsi\),%es:\(%rdi\)
++[ 	]*[a-f0-9]+:	b0 11                	mov    \$0x11,%al
++[ 	]*[a-f0-9]+:	b4 11                	mov    \$0x11,%ah
++[ 	]*[a-f0-9]+:	40 b4 11             	mov    \$0x11,%spl
++[ 	]*[a-f0-9]+:	41 b4 11             	mov    \$0x11,%r12b
++[ 	]*[a-f0-9]+:	b8 44 33 22 11       	mov    \$0x11223344,%eax
++[ 	]*[a-f0-9]+:	41 b8 44 33 22 11    	mov    \$0x11223344,%r8d
++[ 	]*[a-f0-9]+:	48 b8 88 77 66 55 44 33 22 11 	movabs \$0x1122334455667788,%rax
++[ 	]*[a-f0-9]+:	49 b8 88 77 66 55 44 33 22 11 	movabs \$0x1122334455667788,%r8
++[ 	]*[a-f0-9]+:	03 00                	add    \(%rax\),%eax
++[ 	]*[a-f0-9]+:	41 03 00             	add    \(%r8\),%eax
++[ 	]*[a-f0-9]+:	45 03 00             	add    \(%r8\),%r8d
++[ 	]*[a-f0-9]+:	49 03 00             	add    \(%r8\),%rax
++[ 	]*[a-f0-9]+:	03 05 22 22 22 22    	add    0x22222222\(%rip\),%eax        # 2222[0-9a-f]* <foo\+0x2222[0-9a-f]*>
++[ 	]*[a-f0-9]+:	03 45 00             	add    0x0\(%rbp\),%eax
++[ 	]*[a-f0-9]+:	03 04 25 22 22 22 22 	add    0x22222222,%eax
++[ 	]*[a-f0-9]+:	41 03 45 00          	add    0x0\(%r13\),%eax
++[ 	]*[a-f0-9]+:	03 04 80             	add    \(%rax,%rax,4\),%eax
++[ 	]*[a-f0-9]+:	41 03 04 80          	add    \(%r8,%rax,4\),%eax
++[ 	]*[a-f0-9]+:	45 03 04 80          	add    \(%r8,%rax,4\),%r8d
++[ 	]*[a-f0-9]+:	43 03 04 80          	add    \(%r8,%r8,4\),%eax
++[ 	]*[a-f0-9]+:	46 01 04 81          	add    %r8d,\(%rcx,%r8,4\)
++[ 	]*[a-f0-9]+:	03 14 c0             	add    \(%rax,%rax,8\),%edx
++[ 	]*[a-f0-9]+:	03 14 c8             	add    \(%rax,%rcx,8\),%edx
++[ 	]*[a-f0-9]+:	03 14 d0             	add    \(%rax,%rdx,8\),%edx
++[ 	]*[a-f0-9]+:	03 14 d8             	add    \(%rax,%rbx,8\),%edx
++[ 	]*[a-f0-9]+:	03 10                	add    \(%rax\),%edx
++[ 	]*[a-f0-9]+:	03 14 e8             	add    \(%rax,%rbp,8\),%edx
++[ 	]*[a-f0-9]+:	03 14 f0             	add    \(%rax,%rsi,8\),%edx
++[ 	]*[a-f0-9]+:	03 14 f8             	add    \(%rax,%rdi,8\),%edx
++[ 	]*[a-f0-9]+:	42 03 14 c0          	add    \(%rax,%r8,8\),%edx
++[ 	]*[a-f0-9]+:	42 03 14 c8          	add    \(%rax,%r9,8\),%edx
++[ 	]*[a-f0-9]+:	42 03 14 d0          	add    \(%rax,%r10,8\),%edx
++[ 	]*[a-f0-9]+:	42 03 14 d8          	add    \(%rax,%r11,8\),%edx
++[ 	]*[a-f0-9]+:	42 03 14 e0          	add    \(%rax,%r12,8\),%edx
++[ 	]*[a-f0-9]+:	42 03 14 e8          	add    \(%rax,%r13,8\),%edx
++[ 	]*[a-f0-9]+:	42 03 14 f0          	add    \(%rax,%r14,8\),%edx
++[ 	]*[a-f0-9]+:	42 03 14 f8          	add    \(%rax,%r15,8\),%edx
++[ 	]*[a-f0-9]+:	83 c1 11             	add    \$0x11,%ecx
++[ 	]*[a-f0-9]+:	83 00 11             	addl   \$0x11,\(%rax\)
++[ 	]*[a-f0-9]+:	48 83 00 11          	addq   \$0x11,\(%rax\)
++[ 	]*[a-f0-9]+:	41 83 00 11          	addl   \$0x11,\(%r8\)
++[ 	]*[a-f0-9]+:	83 04 81 11          	addl   \$0x11,\(%rcx,%rax,4\)
++[ 	]*[a-f0-9]+:	41 83 04 81 11       	addl   \$0x11,\(%r9,%rax,4\)
++[ 	]*[a-f0-9]+:	42 83 04 81 11       	addl   \$0x11,\(%rcx,%r8,4\)
++[ 	]*[a-f0-9]+:	83 05 22 22 22 22 33 	addl   \$0x33,0x22222222\(%rip\)        # 2222[0-9a-f]* <foo\+0x2222[0-9a-f]*>
++[ 	]*[a-f0-9]+:	48 83 05 22 22 22 22 33 	addq   \$0x33,0x22222222\(%rip\)        # 2222[0-9a-f]* <foo\+0x2222[0-9a-f]*>
++[ 	]*[a-f0-9]+:	81 05 22 22 22 22 33 33 33 33 	addl   \$0x33333333,0x22222222\(%rip\)        # 2222[0-9a-f]* <foo\+0x2222[0-9a-f]*>
++[ 	]*[a-f0-9]+:	48 81 05 22 22 22 22 33 33 33 33 	addq   \$0x33333333,0x22222222\(%rip\)        # 2222[0-9a-f]* <foo\+0x2222[0-9a-f]*>
++[ 	]*[a-f0-9]+:	83 04 c5 22 22 22 22 33 	addl   \$0x33,0x22222222\(,%rax,8\)
++[ 	]*[a-f0-9]+:	83 80 22 22 22 22 33 	addl   \$0x33,0x22222222\(%rax\)
++[ 	]*[a-f0-9]+:	83 80 22 22 22 22 33 	addl   \$0x33,0x22222222\(%rax\)
++[ 	]*[a-f0-9]+:	41 83 04 e8 33       	addl   \$0x33,\(%r8,%rbp,8\)
++[ 	]*[a-f0-9]+:	83 04 25 22 22 22 22 33 	addl   \$0x33,0x22222222
++[ 	]*[a-f0-9]+:	a0 11 22 33 44 55 66 77 88 	movabs 0x8877665544332211,%al
++[ 	]*[a-f0-9]+:	a1 11 22 33 44 55 66 77 88 	movabs 0x8877665544332211,%eax
++[ 	]*[a-f0-9]+:	a2 11 22 33 44 55 66 77 88 	movabs %al,0x8877665544332211
++[ 	]*[a-f0-9]+:	a3 11 22 33 44 55 66 77 88 	movabs %eax,0x8877665544332211
++[ 	]*[a-f0-9]+:	48 a1 11 22 33 44 55 66 77 88 	movabs 0x8877665544332211,%rax
++[ 	]*[a-f0-9]+:	48 a3 11 22 33 44 55 66 77 88 	movabs %rax,0x8877665544332211
++[ 	]*[a-f0-9]+:	48 99                	cqto
++[ 	]*[a-f0-9]+:	48 98                	cltq
++[ 	]*[a-f0-9]+:	48 63 c0             	movslq %eax,%rax
++[ 	]*[a-f0-9]+:	48 0f bf c0          	movswq %ax,%rax
++[ 	]*[a-f0-9]+:	48 0f be c0          	movsbq %al,%rax
++[ 	]*[a-f0-9]+:	cb                   	lret *
++[ 	]*[a-f0-9]+:	ca 10 00             	lret   \$0x10
++[ 	]*[a-f0-9]+:	66 cb                	lretw *
++[ 	]*[a-f0-9]+:	66 ca 02 00          	lretw  \$0x2
++[ 	]*[a-f0-9]+:	cb                   	lret *
++[ 	]*[a-f0-9]+:	ca 04 00             	lret   \$0x4
++[ 	]*[a-f0-9]+:	48 cb                	lretq *
++[ 	]*[a-f0-9]+:	48 ca 08 00          	lretq  \$0x8
++
++[0-9a-f]+ <bar>:
++[ 	]*[a-f0-9]+:	b0 00                	mov    \$0x0,%al
++[ 	]*[a-f0-9]+:	66 b8 00 00          	mov    \$0x0,%ax
++[ 	]*[a-f0-9]+:	b8 00 00 00 00       	mov    \$0x0,%eax
++[ 	]*[a-f0-9]+:	48 c7 c0 00 00 00 00 	mov    \$0x0,%rax
++[ 	]*[a-f0-9]+:	a1 00 00 00 00 00 00 00 00 	movabs 0x0,%eax
++[ 	]*[a-f0-9]+:	8b 04 25 00 00 00 00 	mov    0x0,%eax
++[ 	]*[a-f0-9]+:	8b 80 00 00 00 00    	mov    0x0\(%rax\),%eax
++[ 	]*[a-f0-9]+:	8b 05 00 00 00 00    	mov    0x0\(%rip\),%eax        # [0-9a-f]+ <bar\+0x[0-9a-f]+>
++[ 	]*[a-f0-9]+:	b0 00                	mov    \$0x0,%al
++[ 	]*[a-f0-9]+:	66 b8 00 00          	mov    \$0x0,%ax
++[ 	]*[a-f0-9]+:	b8 00 00 00 00       	mov    \$0x0,%eax
++[ 	]*[a-f0-9]+:	48 c7 c0 00 00 00 00 	mov    \$0x0,%rax
++[ 	]*[a-f0-9]+:	a1 00 00 00 00 00 00 00 00 	movabs 0x0,%eax
++[ 	]*[a-f0-9]+:	8b 04 25 00 00 00 00 	mov    0x0,%eax
++[ 	]*[a-f0-9]+:	8b 80 00 00 00 00    	mov    0x0\(%rax\),%eax
++[ 	]*[a-f0-9]+:	8b 05 00 00 00 00    	mov    0x0\(%rip\),%eax        # [0-9a-f]+ <foo>
++
++[0-9a-f]+ <foo>:
++[ 	]*[a-f0-9]+:	a0 11 22 33 44 55 66 77 88 	movabs 0x8877665544332211,%al
++[ 	]*[a-f0-9]+:	66 a1 11 22 33 44 55 66 77 88 	movabs 0x8877665544332211,%ax
++[ 	]*[a-f0-9]+:	a1 11 22 33 44 55 66 77 88 	movabs 0x8877665544332211,%eax
++[ 	]*[a-f0-9]+:	48 a1 11 22 33 44 55 66 77 88 	movabs 0x8877665544332211,%rax
++[ 	]*[a-f0-9]+:	a2 11 22 33 44 55 66 77 88 	movabs %al,0x8877665544332211
++[ 	]*[a-f0-9]+:	66 a3 11 22 33 44 55 66 77 88 	movabs %ax,0x8877665544332211
++[ 	]*[a-f0-9]+:	a3 11 22 33 44 55 66 77 88 	movabs %eax,0x8877665544332211
++[ 	]*[a-f0-9]+:	48 a3 11 22 33 44 55 66 77 88 	movabs %rax,0x8877665544332211
++[ 	]*[a-f0-9]+:	a0 11 22 33 44 55 66 77 88 	movabs 0x8877665544332211,%al
++[ 	]*[a-f0-9]+:	66 a1 11 22 33 44 55 66 77 88 	movabs 0x8877665544332211,%ax
++[ 	]*[a-f0-9]+:	a1 11 22 33 44 55 66 77 88 	movabs 0x8877665544332211,%eax
++[ 	]*[a-f0-9]+:	48 a1 11 22 33 44 55 66 77 88 	movabs 0x8877665544332211,%rax
++[ 	]*[a-f0-9]+:	a2 11 22 33 44 55 66 77 88 	movabs %al,0x8877665544332211
++[ 	]*[a-f0-9]+:	66 a3 11 22 33 44 55 66 77 88 	movabs %ax,0x8877665544332211
++[ 	]*[a-f0-9]+:	a3 11 22 33 44 55 66 77 88 	movabs %eax,0x8877665544332211
++[ 	]*[a-f0-9]+:	48 a3 11 22 33 44 55 66 77 88 	movabs %rax,0x8877665544332211
++[ 	]*[a-f0-9]+:	8a 04 25 11 22 33 ff 	mov    0xffffffffff332211,%al
++[ 	]*[a-f0-9]+:	66 8b 04 25 11 22 33 ff 	mov    0xffffffffff332211,%ax
++[ 	]*[a-f0-9]+:	8b 04 25 11 22 33 ff 	mov    0xffffffffff332211,%eax
++[ 	]*[a-f0-9]+:	48 8b 04 25 11 22 33 ff 	mov    0xffffffffff332211,%rax
++[ 	]*[a-f0-9]+:	88 04 25 11 22 33 ff 	mov    %al,0xffffffffff332211
++[ 	]*[a-f0-9]+:	66 89 04 25 11 22 33 ff 	mov    %ax,0xffffffffff332211
++[ 	]*[a-f0-9]+:	89 04 25 11 22 33 ff 	mov    %eax,0xffffffffff332211
++[ 	]*[a-f0-9]+:	48 89 04 25 11 22 33 ff 	mov    %rax,0xffffffffff332211
++[ 	]*[a-f0-9]+:	8a 04 25 11 22 33 ff 	mov    0xffffffffff332211,%al
++[ 	]*[a-f0-9]+:	66 8b 04 25 11 22 33 ff 	mov    0xffffffffff332211,%ax
++[ 	]*[a-f0-9]+:	8b 04 25 11 22 33 ff 	mov    0xffffffffff332211,%eax
++[ 	]*[a-f0-9]+:	48 8b 04 25 11 22 33 ff 	mov    0xffffffffff332211,%rax
++[ 	]*[a-f0-9]+:	88 04 25 11 22 33 ff 	mov    %al,0xffffffffff332211
++[ 	]*[a-f0-9]+:	66 89 04 25 11 22 33 ff 	mov    %ax,0xffffffffff332211
++[ 	]*[a-f0-9]+:	89 04 25 11 22 33 ff 	mov    %eax,0xffffffffff332211
++[ 	]*[a-f0-9]+:	48 89 04 25 11 22 33 ff 	mov    %rax,0xffffffffff332211
++[ 	]*[a-f0-9]+:	48 0f c7 08          	cmpxchg16b \(%rax\)
++[ 	]*[a-f0-9]+:	48 0f c7 08          	cmpxchg16b \(%rax\)
++[ 	]*[a-f0-9]+:	66 0f be f0          	movsbw %al,%si
++[ 	]*[a-f0-9]+:	0f be f0             	movsbl %al,%esi
++[ 	]*[a-f0-9]+:	48 0f be f0          	movsbq %al,%rsi
++[ 	]*[a-f0-9]+:	0f bf f0             	movswl %ax,%esi
++[ 	]*[a-f0-9]+:	48 0f bf f0          	movswq %ax,%rsi
++[ 	]*[a-f0-9]+:	48 63 f0             	movslq %eax,%rsi
++[ 	]*[a-f0-9]+:	66 0f be 10          	movsbw \(%rax\),%dx
++[ 	]*[a-f0-9]+:	0f be 10             	movsbl \(%rax\),%edx
++[ 	]*[a-f0-9]+:	48 0f be 10          	movsbq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	66 0f be 10          	movsbw \(%rax\),%dx
++[ 	]*[a-f0-9]+:	0f bf 10             	movswl \(%rax\),%edx
++[ 	]*[a-f0-9]+:	48 0f bf 10          	movswq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	66 0f b6 f0          	movzbw %al,%si
++[ 	]*[a-f0-9]+:	0f b6 f0             	movzbl %al,%esi
++[ 	]*[a-f0-9]+:	48 0f b6 f0          	movzbq %al,%rsi
++[ 	]*[a-f0-9]+:	0f b7 f0             	movzwl %ax,%esi
++[ 	]*[a-f0-9]+:	48 0f b7 f0          	movzwq %ax,%rsi
++[ 	]*[a-f0-9]+:	66 0f b6 10          	movzbw \(%rax\),%dx
++[ 	]*[a-f0-9]+:	0f b6 10             	movzbl \(%rax\),%edx
++[ 	]*[a-f0-9]+:	48 0f b6 10          	movzbq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	66 0f b6 10          	movzbw \(%rax\),%dx
++[ 	]*[a-f0-9]+:	0f b6 10             	movzbl \(%rax\),%edx
++[ 	]*[a-f0-9]+:	48 0f b6 10          	movzbq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	66 0f b6 10          	movzbw \(%rax\),%dx
++[ 	]*[a-f0-9]+:	0f b7 10             	movzwl \(%rax\),%edx
++[ 	]*[a-f0-9]+:	48 0f b7 10          	movzwq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	66 0f be f0          	movsbw %al,%si
++[ 	]*[a-f0-9]+:	0f be f0             	movsbl %al,%esi
++[ 	]*[a-f0-9]+:	48 0f be f0          	movsbq %al,%rsi
++[ 	]*[a-f0-9]+:	0f bf f0             	movswl %ax,%esi
++[ 	]*[a-f0-9]+:	48 0f bf f0          	movswq %ax,%rsi
++[ 	]*[a-f0-9]+:	48 63 f0             	movslq %eax,%rsi
++[ 	]*[a-f0-9]+:	0f be 10             	movsbl \(%rax\),%edx
++[ 	]*[a-f0-9]+:	48 0f be 10          	movsbq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	66 0f be 10          	movsbw \(%rax\),%dx
++[ 	]*[a-f0-9]+:	0f bf 10             	movswl \(%rax\),%edx
++[ 	]*[a-f0-9]+:	48 0f bf 10          	movswq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	66 0f b6 f0          	movzbw %al,%si
++[ 	]*[a-f0-9]+:	0f b6 f0             	movzbl %al,%esi
++[ 	]*[a-f0-9]+:	48 0f b6 f0          	movzbq %al,%rsi
++[ 	]*[a-f0-9]+:	0f b7 f0             	movzwl %ax,%esi
++[ 	]*[a-f0-9]+:	48 0f b7 f0          	movzwq %ax,%rsi
++[ 	]*[a-f0-9]+:	0f b6 10             	movzbl \(%rax\),%edx
++[ 	]*[a-f0-9]+:	48 0f b6 10          	movzbq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	66 0f b6 10          	movzbw \(%rax\),%dx
++[ 	]*[a-f0-9]+:	0f b7 10             	movzwl \(%rax\),%edx
++[ 	]*[a-f0-9]+:	48 0f b7 10          	movzwq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	f3 0f 7e 0c 24       	movq   \(%rsp\),%xmm1
++[ 	]*[a-f0-9]+:	f3 0f 7e 0c 24       	movq   \(%rsp\),%xmm1
++[ 	]*[a-f0-9]+:	66 0f d6 0c 24       	movq   %xmm1,\(%rsp\)
++[ 	]*[a-f0-9]+:	66 0f d6 0c 24       	movq   %xmm1,\(%rsp\)
++[ 	]*[a-f0-9]+:	df e0                	fnstsw %ax
++[ 	]*[a-f0-9]+:	df e0                	fnstsw %ax
++[ 	]*[a-f0-9]+:	9b df e0             	fstsw  %ax
++[ 	]*[a-f0-9]+:	9b df e0             	fstsw  %ax
++[ 	]*[a-f0-9]+:	df e0                	fnstsw %ax
++[ 	]*[a-f0-9]+:	df e0                	fnstsw %ax
++[ 	]*[a-f0-9]+:	9b df e0             	fstsw  %ax
++[ 	]*[a-f0-9]+:	9b df e0             	fstsw  %ax
++[ 	]*[a-f0-9]+:	66 0f be 00          	movsbw \(%rax\),%ax
++[ 	]*[a-f0-9]+:	66 0f be 10          	movsbw \(%rax\),%dx
++[ 	]*[a-f0-9]+:	0f be 10             	movsbl \(%rax\),%edx
++[ 	]*[a-f0-9]+:	48 0f be 10          	movsbq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	0f bf 10             	movswl \(%rax\),%edx
++[ 	]*[a-f0-9]+:	48 0f bf 10          	movswq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	48 63 10             	movslq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	48 63 00             	movslq \(%rax\),%rax
++[ 	]*[a-f0-9]+:	66 0f b6 00          	movzbw \(%rax\),%ax
++[ 	]*[a-f0-9]+:	66 0f b6 10          	movzbw \(%rax\),%dx
++[ 	]*[a-f0-9]+:	0f b6 10             	movzbl \(%rax\),%edx
++[ 	]*[a-f0-9]+:	48 0f b6 10          	movzbq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	0f b7 10             	movzwl \(%rax\),%edx
++[ 	]*[a-f0-9]+:	48 0f b7 10          	movzwq \(%rax\),%rdx
++[ 	]*[a-f0-9]+:	0f c3 00             	movnti %eax,\(%rax\)
++[ 	]*[a-f0-9]+:	0f c3 00             	movnti %eax,\(%rax\)
++[ 	]*[a-f0-9]+:	48 0f c3 00          	movnti %rax,\(%rax\)
++[ 	]*[a-f0-9]+:	48 0f c3 00          	movnti %rax,\(%rax\)
++[ 	]*[a-f0-9]+:	66 0f be 00          	movsbw \(%rax\),%ax
++[ 	]*[a-f0-9]+:	0f be 00             	movsbl \(%rax\),%eax
++[ 	]*[a-f0-9]+:	0f bf 00             	movswl \(%rax\),%eax
++[ 	]*[a-f0-9]+:	48 0f bf 00          	movswq \(%rax\),%rax
++[ 	]*[a-f0-9]+:	48 63 00             	movslq \(%rax\),%rax
++[ 	]*[a-f0-9]+:	48 63 00             	movslq \(%rax\),%rax
++[ 	]*[a-f0-9]+:	66 0f b6 00          	movzbw \(%rax\),%ax
++[ 	]*[a-f0-9]+:	0f b6 00             	movzbl \(%rax\),%eax
++[ 	]*[a-f0-9]+:	0f b7 00             	movzwl \(%rax\),%eax
++[ 	]*[a-f0-9]+:	48 0f b7 00          	movzwq \(%rax\),%rax
++[ 	]*[a-f0-9]+:	0f c3 00             	movnti %eax,\(%rax\)
++[ 	]*[a-f0-9]+:	48 0f c3 00          	movnti %rax,\(%rax\)
++#pass
+diff --git a/gas/testsuite/gas/i386/x86-64.exp b/gas/testsuite/gas/i386/x86-64.exp
+index 3e5ffd8d13f..48875702d52 100644
+--- a/gas/testsuite/gas/i386/x86-64.exp
++++ b/gas/testsuite/gas/i386/x86-64.exp
+@@ -719,6 +719,7 @@ if [is_elf_format] then {
+ 	run_dump_test "x86-64-opcode-inval-intel"
+     }
+     run_dump_test "intel-got64"
++    run_dump_test "k1om"
+     run_dump_test "x86-64-localpic"
+     run_dump_test "debug1"
+     run_dump_test "x86-64-mpx-branch-1"
+diff --git a/ld/Makefile.am b/ld/Makefile.am
+index 3ae3d7f14f6..e033509ec91 100644
+--- a/ld/Makefile.am
++++ b/ld/Makefile.am
+@@ -453,6 +453,8 @@ ALL_64_EMULATION_SOURCES = \
+ 	eelf64rdos.c \
+ 	eelf64tilegx.c \
+ 	eelf64tilegx_be.c \
++	eelf_k1om.c \
++	eelf_k1om_fbsd.c \
+ 	eelf_mipsel_haiku.c \
+ 	eelf_x86_64.c \
+ 	eelf_x86_64_fbsd.c \
+diff --git a/ld/Makefile.in b/ld/Makefile.in
+index d879f04a17c..cc3198a0248 100644
+--- a/ld/Makefile.in
++++ b/ld/Makefile.in
+@@ -967,6 +967,8 @@ ALL_64_EMULATION_SOURCES = \
+ 	eelf64rdos.c \
+ 	eelf64tilegx.c \
+ 	eelf64tilegx_be.c \
++	eelf_k1om.c \
++	eelf_k1om_fbsd.c \
+ 	eelf_mipsel_haiku.c \
+ 	eelf_x86_64.c \
+ 	eelf_x86_64_fbsd.c \
+@@ -1473,6 +1475,8 @@ distclean-compile:
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_i386_sol2.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_i386_vxworks.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_iamcu.Po@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_k1om.Po@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_k1om_fbsd.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_mipsel_haiku.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_s390.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_x86_64.Po@am__quote@
+diff --git a/ld/configure.tgt b/ld/configure.tgt
+index 60b62e69c08..be71df98354 100644
+--- a/ld/configure.tgt
++++ b/ld/configure.tgt
+@@ -943,11 +943,11 @@ x86_64-*-haiku*)	targ_emul=elf_x86_64_haiku
+ 			targ_extra_emuls="elf_x86_64 elf_i386_haiku"
+ 			;;
+ x86_64-*-linux-gnux32)	targ_emul=elf32_x86_64
+-			targ_extra_libpath="elf_i386 elf_x86_64"
++			targ_extra_libpath="elf_i386 elf_x86_64 elf_k1om"
+ 			tdir_elf_i386=`echo ${targ_alias} | sed -e 's/x86_64/i386/' -e 's/-linux-gnux32/-linux-gnu/'`
+ 			;;
+ x86_64-*-linux-*)	targ_emul=elf_x86_64
+-			targ_extra_libpath="elf_i386 elf32_x86_64"
++			targ_extra_libpath="elf_i386 elf32_x86_64 elf_k1om"
+ 			tdir_elf_i386=`echo ${targ_alias} | sed -e 's/x86_64/i386/'`
+ 			;;
+ x86_64-*-redox*)	targ_emul=elf_x86_64
+@@ -960,17 +960,17 @@ x86_64-*-solaris2*)
+ 			;;
+ x86_64-*-netbsd* | x86_64-*-openbsd*)
+ 			targ_emul=elf_x86_64
+-			targ_extra_emuls="elf_i386"
++			targ_extra_emuls="elf_i386 elf_k1om"
+ 			tdir_elf_i386=`echo ${targ_alias} | \
+ 			    sed -e 's/x86_64/i386/' -e 's/aout//'`
+ 			;;
+ x86_64-*-elf* | x86_64-*-rtems* | x86_64-*-fuchsia* | x86_64-*-genode*)
+ 			targ_emul=elf_x86_64
+-			targ_extra_libpath="elf_i386 elf32_x86_64"
++			targ_extra_libpath="elf_i386 elf32_x86_64 elf_k1om"
+ 			tdir_elf_i386=`echo ${targ_alias} | sed -e 's/x86_64/i386/'`
+ 			;;
+ x86_64-*-dragonfly*)	targ_emul=elf_x86_64
+-			targ_extra_emuls="elf_i386"
++			targ_extra_emuls="elf_i386 elf_k1om"
+ 			;;
+ x86_64-*-freebsd* | x86_64-*-kfreebsd*-gnu)
+ 			targ_emul=elf_x86_64_fbsd
+diff --git a/ld/emulparams/elf_k1om.sh b/ld/emulparams/elf_k1om.sh
+new file mode 100644
+index 00000000000..b27f5ea861a
+--- /dev/null
++++ b/ld/emulparams/elf_k1om.sh
+@@ -0,0 +1,39 @@
++source_sh ${srcdir}/emulparams/plt_unwind.sh
++source_sh ${srcdir}/emulparams/extern_protected_data.sh
++source_sh ${srcdir}/emulparams/dynamic_undefined_weak.sh
++source_sh ${srcdir}/emulparams/call_nop.sh
++SCRIPT_NAME=elf
++ELFSIZE=64
++OUTPUT_FORMAT="elf64-k1om"
++NO_REL_RELOCS=yes
++TEXT_START_ADDR=0x400000
++MAXPAGESIZE="CONSTANT (MAXPAGESIZE)"
++COMMONPAGESIZE="CONSTANT (COMMONPAGESIZE)"
++ARCH="k1om"
++MACHINE=
++TEMPLATE_NAME=elf
++EXTRA_EM_FILE="elf-x86"
++GENERATE_SHLIB_SCRIPT=yes
++GENERATE_PIE_SCRIPT=yes
++NO_SMALL_DATA=yes
++LARGE_SECTIONS=yes
++LARGE_BSS_AFTER_BSS=
++SEPARATE_GOTPLT="SIZEOF (.got.plt) >= 24 ? 24 : 0"
++IREL_IN_PLT=
++
++if [ "x${host}" = "x${target}" ]; then
++  case " $EMULATION_LIBPATH " in
++    *" ${EMULATION_NAME} "*)
++      NATIVE=yes
++  esac
++fi
++
++# Linux modifies the default library search path to first include
++# a 64-bit specific directory.
++case "$target" in
++  *k1om*-linux*)
++    case "$EMULATION_NAME" in
++      *k1om*) LIBPATH_SUFFIX=64 ;;
++    esac
++    ;;
++esac
+diff --git a/ld/emulparams/elf_k1om_fbsd.sh b/ld/emulparams/elf_k1om_fbsd.sh
+new file mode 100644
+index 00000000000..1ffe059f4f2
+--- /dev/null
++++ b/ld/emulparams/elf_k1om_fbsd.sh
+@@ -0,0 +1,3 @@
++source_sh ${srcdir}/emulparams/elf_k1om.sh
++source_sh ${srcdir}/emulparams/elf_fbsd.sh
++OUTPUT_FORMAT="elf64-k1om-freebsd"
+diff --git a/ld/po/BLD-POTFILES.in b/ld/po/BLD-POTFILES.in
+index d7d0c517307..76a2cdefe9e 100644
+--- a/ld/po/BLD-POTFILES.in
++++ b/ld/po/BLD-POTFILES.in
+@@ -207,6 +207,8 @@ eelf_i386_haiku.c
+ eelf_i386_sol2.c
+ eelf_i386_vxworks.c
+ eelf_iamcu.c
++eelf_k1om.c
++eelf_k1om_fbsd.c
+ eelf_mipsel_haiku.c
+ eelf_s390.c
+ eelf_x86_64.c
+diff --git a/ld/testsuite/ld-x86-64/abs-k1om.d b/ld/testsuite/ld-x86-64/abs-k1om.d
+new file mode 100644
+index 00000000000..ec7664c49fa
+--- /dev/null
++++ b/ld/testsuite/ld-x86-64/abs-k1om.d
+@@ -0,0 +1,12 @@
++#name: Absolute non-overflowing relocs
++#source: ../ld-i386/abs.s
++#source: ../ld-i386/zero.s
++#as: --64 -march=k1om
++#ld: -m elf_k1om -z noseparate-code
++#objdump: -rs -j .text
++#target: x86_64-*-linux*
++
++.*:     file format .*
++
++Contents of section \.text:
++[ 	][0-9a-f]+ c800fff0 c8000110 c9c3.*
+diff --git a/ld/testsuite/ld-x86-64/protected2-k1om.d b/ld/testsuite/ld-x86-64/protected2-k1om.d
+new file mode 100644
+index 00000000000..cda2c95a03b
+--- /dev/null
++++ b/ld/testsuite/ld-x86-64/protected2-k1om.d
+@@ -0,0 +1,18 @@
++#source: protected2.s
++#as: --64 -march=k1om
++#ld: -shared -melf_k1om
++#objdump: -drw
++#target: x86_64-*-linux*
++
++.*: +file format .*
++
++
++Disassembly of section .text:
++
++0+[a-f0-9]+ <foo>:
++[ 	]*[a-f0-9]+:	c3                   	ret *
++
++0+[a-f0-9]+ <bar>:
++[ 	]*[a-f0-9]+:	e8 fa ff ff ff       	call   [a-f0-9]+ <foo>
++[ 	]*[a-f0-9]+:	c3                   	ret *
++#pass
+diff --git a/ld/testsuite/ld-x86-64/protected3-k1om.d b/ld/testsuite/ld-x86-64/protected3-k1om.d
+new file mode 100644
+index 00000000000..68db8c57182
+--- /dev/null
++++ b/ld/testsuite/ld-x86-64/protected3-k1om.d
+@@ -0,0 +1,17 @@
++#source: protected3.s
++#as: --64 -march=k1om
++#ld: -shared -melf_k1om
++#readelf: -h
++#target: x86_64-*-linux*
++
++ELF Header:
++  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 
++  Class:                             ELF64
++  Data:                              2's complement, little endian
++  Version:                           1 \(current\)
++  OS/ABI:                            UNIX - System V
++  ABI Version:                       0
++  Type:                              DYN \(Shared object file\)
++  Machine:                           Intel K1OM
++  Version:                           0x1
++#pass
+diff --git a/ld/testsuite/ld-x86-64/x86-64.exp b/ld/testsuite/ld-x86-64/x86-64.exp
+index 07607810d15..c883b7e3492 100644
+--- a/ld/testsuite/ld-x86-64/x86-64.exp
++++ b/ld/testsuite/ld-x86-64/x86-64.exp
+@@ -310,6 +310,7 @@ if { ![ld_link $ld tmpdir/$test "-m$emul tmpdir/${test}a.o tmpdir/${test}b.o"] }
+ }
+ 
+ run_dump_test "abs"
++run_dump_test "abs-k1om"
+ run_dump_test "apic"
+ run_dump_test "pcrel8"
+ run_dump_test "pcrel16"
+@@ -329,7 +330,9 @@ run_dump_test "hidden5"
+ run_dump_test "hidden6"
+ run_dump_test "protected1"
+ run_dump_test "protected2"
++run_dump_test "protected2-k1om"
+ run_dump_test "protected3"
++run_dump_test "protected3-k1om"
+ run_dump_test "protected4"
+ run_dump_test "protected5"
+ run_dump_test "protected6a"
+diff --git a/opcodes/configure b/opcodes/configure
+index 8299ef7e995..5de02da0d62 100755
+--- a/opcodes/configure
++++ b/opcodes/configure
+@@ -14343,7 +14343,7 @@ if test x${all_targets} = xfalse ; then
+ 	bfd_moxie_arch)		ta="$ta moxie-dis.lo moxie-opc.lo" ;;
+ 	bfd_h8300_arch)		ta="$ta h8300-dis.lo" ;;
+ 	bfd_hppa_arch)		ta="$ta hppa-dis.lo" ;;
+-	bfd_i386_arch|bfd_iamcu_arch)
++	bfd_i386_arch|bfd_iamcu_arch|bfd_k1om_arch)
+ 				ta="$ta i386-dis.lo" ;;
+ 	bfd_ia64_arch)		ta="$ta ia64-dis.lo ia64-opc.lo" ;;
+ 	bfd_ip2k_arch)		ta="$ta ip2k-asm.lo ip2k-desc.lo ip2k-dis.lo ip2k-ibld.lo ip2k-opc.lo" using_cgen=yes ;;
+diff --git a/opcodes/configure.ac b/opcodes/configure.ac
+index 2c2556598c9..d1d4796c5b3 100644
+--- a/opcodes/configure.ac
++++ b/opcodes/configure.ac
+@@ -282,7 +282,7 @@ if test x${all_targets} = xfalse ; then
+ 	bfd_moxie_arch)		ta="$ta moxie-dis.lo moxie-opc.lo" ;;
+ 	bfd_h8300_arch)		ta="$ta h8300-dis.lo" ;;
+ 	bfd_hppa_arch)		ta="$ta hppa-dis.lo" ;;
+-	bfd_i386_arch|bfd_iamcu_arch)
++	bfd_i386_arch|bfd_iamcu_arch|bfd_k1om_arch)
+ 				ta="$ta i386-dis.lo" ;;
+ 	bfd_ia64_arch)		ta="$ta ia64-dis.lo ia64-opc.lo" ;;
+ 	bfd_ip2k_arch)		ta="$ta ip2k-asm.lo ip2k-desc.lo ip2k-dis.lo ip2k-ibld.lo ip2k-opc.lo" using_cgen=yes ;;
+diff --git a/opcodes/disassemble.c b/opcodes/disassemble.c
+index 77d44bb08db..530d0e2c71f 100644
+--- a/opcodes/disassemble.c
++++ b/opcodes/disassemble.c
+@@ -211,6 +211,7 @@ disassembler (enum bfd_architecture a,
+ #ifdef ARCH_i386
+     case bfd_arch_i386:
+     case bfd_arch_iamcu:
++    case bfd_arch_k1om:
+       disassemble = print_insn_i386;
+       break;
+ #endif
+diff --git a/opcodes/i386-gen.c b/opcodes/i386-gen.c
+index dd8f936edcd..0a8de879f1f 100644
+--- a/opcodes/i386-gen.c
++++ b/opcodes/i386-gen.c
+@@ -367,6 +367,7 @@ static bitfield cpu_flags[] =
+   BITFIELD (AVX512VL),
+   BITFIELD (AVX512DQ),
+   BITFIELD (AVX512BW),
++  BITFIELD (K1OM),
+   BITFIELD (IAMCU),
+   BITFIELD (SSE4a),
+   BITFIELD (3dnow),
+diff --git a/opcodes/i386-opc.h b/opcodes/i386-opc.h
+index 54038f90761..906afd6283c 100644
+--- a/opcodes/i386-opc.h
++++ b/opcodes/i386-opc.h
+@@ -109,6 +109,8 @@ enum i386_cpu
+   CpuAVX512DQ,
+   /* Intel AVX-512 BW Instructions support required.  */
+   CpuAVX512BW,
++  /* Intel K1OM support required */
++  CpuK1OM,
+   /* Intel IAMCU support required */
+   CpuIAMCU,
+   /* Xsave/xrstor New Instructions support required */
+@@ -457,6 +459,7 @@ typedef union i386_cpu_flags
+       unsigned int cpuavx512pf:1;
+       unsigned int cpuavx512dq:1;
+       unsigned int cpuavx512bw:1;
++      unsigned int cpuk1om:1;
+       unsigned int cpuiamcu:1;
+       unsigned int cpuxsave:1;
+       unsigned int cpuxsaveopt:1;
+-- 
+2.54.0
+

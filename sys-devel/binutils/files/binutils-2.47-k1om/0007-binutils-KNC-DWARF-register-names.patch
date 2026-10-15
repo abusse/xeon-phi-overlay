@@ -1,0 +1,60 @@
+From 3010ff6c66ada1b6c5864045bd4c8b58b4da1645 Mon Sep 17 00:00:00 2001
+From: Intel MPSS <mpss@intel.invalid>
+Date: Wed, 30 Sep 2026 22:00:59 +0200
+Subject: [PATCH 7/7] binutils: KNC DWARF register names
+
+From Intel MPSS 3.8.6: name DWARF register 126 vxcsr (what the k1om GCC
+emits for it); 118-125 are k0-k7 upstream already.  Upstream names
+126-129 bnd0-bnd3 since 2.45; K1OM has no MPX, so 126 is vxcsr for
+EM_K1OM only.  Intel's L1OM v0-v31 names for 86-117 are left out.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Anselm Busse <anselm.busse@outlook.com>
+---
+ binutils/dwarf.c | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/binutils/dwarf.c b/binutils/dwarf.c
+index 829bcb761f7..b1768cd0da3 100644
+--- a/binutils/dwarf.c
++++ b/binutils/dwarf.c
+@@ -10019,6 +10019,21 @@ init_dwarf_regnames_x86_64 (void)
+   dwarf_regnames_lookup_func = regname_internal_by_table_only;
+ }
+ 
++static const char *
++regname_internal_k1om (unsigned int regno)
++{
++  if (regno == 126)
++    return "vxcsr";
++  return regname_internal_by_table_only (regno);
++}
++
++static void
++init_dwarf_regnames_k1om (void)
++{
++  init_dwarf_regnames_x86_64 ();
++  dwarf_regnames_lookup_func = regname_internal_k1om;
++}
++
+ static const char *const dwarf_regnames_aarch64[] =
+ {
+    "x0",  "x1",  "x2",  "x3",  "x4",  "x5",  "x6",  "x7",
+@@ -10191,10 +10206,13 @@ init_dwarf_by_elf_machine_code (unsigned int e_machine)
+ 
+     case EM_X86_64:
+     case EM_L1OM:
+-    case EM_K1OM:
+       init_dwarf_regnames_x86_64 ();
+       break;
+ 
++    case EM_K1OM:
++      init_dwarf_regnames_k1om ();
++      break;
++
+     case EM_AARCH64:
+       init_dwarf_regnames_aarch64 ();
+       is_mach_augmentation = is_aarch64_augmentation;
+-- 
+2.54.0
+
