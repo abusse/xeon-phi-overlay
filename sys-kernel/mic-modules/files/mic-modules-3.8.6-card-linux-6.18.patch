@@ -1,0 +1,3227 @@
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..683b744
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,13 @@
++# Kernel out-of-tree module build artifacts
++*.o
++*.ko
++*.mod
++*.mod.c
++*.mod.o
++*.cmd
++.*.cmd
++*.order
++*.symvers
++modules.order
++Module.symvers
++.tmp_versions/
+diff --git a/Kbuild b/Kbuild
+index f56e01c..fb310f5 100644
+--- a/Kbuild
++++ b/Kbuild
+@@ -53,8 +53,9 @@ subdir-ccflags-y += -D__LINUX_GPL__ -D_MODULE_SCIF_
+ 
+ subdir-ccflags-y += -I$(M)/include
+ 
+-obj-$(CONFIG_X86_MICPCI) += dma/ micscif/ pm_scif/ ras/
+-obj-$(CONFIG_X86_MICPCI) += vcons/ vnet/ mpssboot/ ramoops/ virtio/
++obj-$(CONFIG_X86_MICPCI) += dma/ micscif/ ras/
++# pm_scif + ras un-deferred (micpm built-in)
++obj-$(CONFIG_X86_MICPCI) += vcons/ vnet/ mpssboot/ ramoops/ virtio/ pm_scif/
+ 
+ obj-$(m-not-$(CONFIG_X86_MICPCI)) += mic.o
+ 
+diff --git a/dma/mic_dma_lib.c b/dma/mic_dma_lib.c
+index 80a4a0b..197a584 100644
+--- a/dma/mic_dma_lib.c
++++ b/dma/mic_dma_lib.c
+@@ -33,6 +33,7 @@
+  * intellectual property rights is granted herein.
+  */
+ 
++#include "../mic_proc_compat.h"
+ #include<linux/module.h>
+ #include<linux/init.h>
+ #include<linux/slab.h>
+@@ -464,7 +465,7 @@ mic_dma_lib_init(uint8_t *mmio_va_base, struct mic_dma_ctx_t *dma_ctx)
+ 			alloc_dma_desc_ring_mem(ch, dma_ctx);
+ 
+ #ifdef _MIC_SCIF_ // DMA now shares the IRQ handler with other system interrupts
+-			ret_value = request_irq(i, dma_interrupt_handler, IRQF_DISABLED,
++			ret_value = request_irq(i, dma_interrupt_handler, 0,
+ 						"dma channel", ch);
+ 			ret_value = ret_value;
+ 			//pr_debug(PR_PREFIX "Interrupt handler ret value for  chan %d = %d\n", i, ret_value);
+@@ -1356,7 +1357,9 @@ module_init(mic_dma_init);
+ module_exit(mic_dma_uninit);
+ #endif
+ 
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
++/* card (_MIC_SCIF_) uses the pre-3.10 create_proc_read_entry-shim branch;
++ * the modern branch below is host-only (get_per_dev_ctx). */
++#if !defined(_MIC_SCIF_) && (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
+ static int
+ mic_dma_proc_ring_show(struct seq_file *m, void *data)
+ {
+@@ -1558,18 +1561,18 @@ mic_dma_proc_reg_open(struct inode *inode, struct file *file)
+ 	return single_open(file, mic_dma_proc_reg_show, PDE_DATA(inode));
+ }
+ 
+-struct file_operations micdma_ring_fops = {
+-	.open		= mic_dma_proc_ring_open,
+-	.read		= seq_read,
+-	.llseek		= seq_lseek,
+-        .release 	= single_release,
++const struct proc_ops micdma_ring_fops = {
++	.proc_open		= mic_dma_proc_ring_open,
++	.proc_read		= seq_read,
++	.proc_lseek		= seq_lseek,
++        .proc_release 	= single_release,
+ };
+ 
+-struct file_operations micdma_reg_fops = {
+-	.open		= mic_dma_proc_reg_open,
+-	.read		= seq_read,
+-	.llseek		= seq_lseek,
+-        .release 	= single_release,
++const struct proc_ops micdma_reg_fops = {
++	.proc_open		= mic_dma_proc_reg_open,
++	.proc_read		= seq_read,
++	.proc_lseek		= seq_lseek,
++        .proc_release 	= single_release,
+ };
+ 
+ static void
+@@ -1767,15 +1770,9 @@ mic_dma_proc_init(struct mic_dma_ctx_t *dma_ctx)
+ 	char name[64];
+ 
+ 	snprintf(name, 63, "%s%d", proc_dma_ring, dma_ctx->device_num);
+-	if ((dma_proc = create_proc_entry(name,  S_IFREG | S_IRUGO, NULL)) != NULL) {
+-		dma_proc->read_proc = mic_dma_proc_read_fn;
+-		dma_proc->data      = dma_ctx;
+-	}
++	create_proc_read_entry(name, S_IRUGO, NULL, mic_dma_proc_read_fn, dma_ctx);
+ 	snprintf(name, 63, "%s%d", proc_dma_reg, dma_ctx->device_num);
+-	if ((dma_proc = create_proc_entry(name, S_IFREG | S_IRUGO, NULL)) != NULL) {
+-		dma_proc->read_proc = mic_dma_proc_read_registers_fn;
+-		dma_proc->data      = dma_ctx;
+-	}
++	create_proc_read_entry(name, S_IRUGO, NULL, mic_dma_proc_read_registers_fn, dma_ctx);
+ 
+ }
+ #endif // LINUX VERSION
+diff --git a/host/linpsmi.c b/host/linpsmi.c
+index 8c2780e..ab8e193 100644
+--- a/host/linpsmi.c
++++ b/host/linpsmi.c
+@@ -33,6 +33,7 @@
+  * intellectual property rights is granted herein.
+  */
+ 
++#include <linux/module.h>
+ #include "micint.h"
+ 
+ int mic_psmi_open(struct file *filp)
+diff --git a/host/linux.c b/host/linux.c
+index fd0411a..01afc95 100644
+--- a/host/linux.c
++++ b/host/linux.c
+@@ -33,6 +33,7 @@
+  * intellectual property rights is granted herein.
+  */
+ 
++#include <linux/module.h>
+ #include <linux/string.h>
+ 
+ #include "mic/micscif_kmem_cache.h"
+diff --git a/host/linvcons.c b/host/linvcons.c
+index 556a9b5..708db45 100644
+--- a/host/linvcons.c
++++ b/host/linvcons.c
+@@ -33,6 +33,7 @@
+  * intellectual property rights is granted herein.
+  */
+ 
++#include <linux/module.h>
+ #include "micint.h"
+ 
+ /* TODO: Improve debug messages */
+diff --git a/host/tools_support.c b/host/tools_support.c
+index 93922f8..49d37d4 100644
+--- a/host/tools_support.c
++++ b/host/tools_support.c
+@@ -64,7 +64,7 @@ mic_unpin_user_pages(struct page **pages, uint32_t nf_pages)
+ 		for (j = 0; j < nf_pages; j++) {
+ 			if (pages[j]) {
+ 				SetPageDirty(pages[j]);
+-				page_cache_release(pages[j]);
++				put_page(pages[j]);
+ 			}
+ 		}
+ 		kfree(pages);
+diff --git a/include/mic/micscif_map.h b/include/mic/micscif_map.h
+index ef2f9a5..0d47e5e 100644
+--- a/include/mic/micscif_map.h
++++ b/include/mic/micscif_map.h
+@@ -128,7 +128,7 @@ scif_ioremap(phys_addr_t phys, size_t size, struct micscif_dev *dev)
+ 	if (is_self_scifdev(dev))
+ 		out_virt = phys_to_virt(phys);
+ 	else
+-		out_virt = ioremap_nocache(phys, size);
++		out_virt = ioremap(phys, size);
+ 
+ 	return out_virt;
+ }
+diff --git a/include/mic/micscif_nm.h b/include/mic/micscif_nm.h
+index 9f2ff48..6d89e5e 100644
+--- a/include/mic/micscif_nm.h
++++ b/include/mic/micscif_nm.h
+@@ -100,7 +100,7 @@ micscif_inc_node_refcnt(struct micscif_dev *dev, long cnt)
+ 			SCIFDEV_INIT == dev->sd_state)
+ 			goto bail_out;
+ 		if (test_bit(SCIF_NODE_MAGIC_BIT, 
+-			&dev->scif_ref_cnt.counter)) {
++			(unsigned long *)&dev->scif_ref_cnt.counter)) {
+ 			/* Notify host that the remote node must be woken */
+ 			struct nodemsg notif_msg;
+ 
+@@ -126,7 +126,7 @@ micscif_inc_node_refcnt(struct micscif_dev *dev, long cnt)
+ 			if (dev->sd_wait_status == OP_COMPLETED) {
+ 				dev->sd_state = SCIFDEV_RUNNING;
+ 				clear_bit(SCIF_NODE_MAGIC_BIT, 
+-					&dev->scif_ref_cnt.counter);
++					(unsigned long *)&dev->scif_ref_cnt.counter);
+ 			}
+ 		}
+ 		/* The ref count was not added if the node was idle. */
+diff --git a/include/mic/micscif_rma.h b/include/mic/micscif_rma.h
+index 275e086..366ace3 100644
+--- a/include/mic/micscif_rma.h
++++ b/include/mic/micscif_rma.h
+@@ -37,6 +37,8 @@
+ #define MICSCIF_RMA_H
+ 
+ #ifdef CONFIG_MMU_NOTIFIER
++#include <linux/sched/signal.h>
++#include <linux/sched/mm.h>
+ #include <linux/mmu_notifier.h>
+ #ifdef CONFIG_TRANSPARENT_HUGEPAGE
+ #include <linux/huge_mm.h>
+@@ -832,7 +834,7 @@ static __always_inline void *scif_zalloc(size_t size)
+ 	if (!align)
+ 		return NULL;
+ 
+-	if (align <= (1 << (MAX_ORDER + PAGE_SHIFT - 1)))
++	if (align <= (1 << (MAX_PAGE_ORDER + PAGE_SHIFT)))
+ 		if ((ret = (void*)__get_free_pages(GFP_KERNEL | __GFP_ZERO,
+ 						get_order(align))))
+ 			goto done;
+@@ -915,18 +917,14 @@ static inline int __scif_dec_pinned_vm_lock(struct mm_struct *mm,
+ {
+ 	if (mm && nr_pages && mic_ulimit_check) {
+ 		if (try_lock) {
+-			if (!down_write_trylock(&mm->mmap_sem)) {
++			if (!down_write_trylock(&mm->mmap_lock)) {	/* mmap_write_trylock() gone in 6.5 */
+ 				return -1;
+ 			}
+ 		} else {
+-			down_write(&mm->mmap_sem);
++			mmap_write_lock(mm);
+ 		}
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 1, 0))
+-		mm->pinned_vm -= nr_pages;
+-#else
+-		mm->locked_vm -= nr_pages;
+-#endif
+-		up_write(&mm->mmap_sem);
++		atomic64_sub(nr_pages, &mm->pinned_vm);
++		mmap_write_unlock(mm);
+ 	}
+ 	return 0;
+ }
+@@ -937,22 +935,14 @@ static inline int __scif_check_inc_pinned_vm(struct mm_struct *mm,
+ 	if (mm && mic_ulimit_check && nr_pages) {
+ 		unsigned long locked, lock_limit;
+ 		locked = nr_pages;
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 1, 0))
+-		locked += mm->pinned_vm;
+-#else
+-		locked += mm->locked_vm;
+-#endif
++		locked += atomic64_read(&mm->pinned_vm);
+ 		lock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
+ 		if ((locked > lock_limit) && !capable(CAP_IPC_LOCK)) {
+ 			pr_debug("locked(%lu) > lock_limit(%lu)\n", 
+ 				    locked, lock_limit);
+ 			return -ENOMEM;
+ 		} else {
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 1, 0))
+-			mm->pinned_vm = locked;
+-#else
+-			mm->locked_vm = locked;
+-#endif
++			atomic64_set(&mm->pinned_vm, locked);
+ 		}
+ 	}
+ 	return 0;
+diff --git a/include/mic_common.h b/include/mic_common.h
+index 92554ad..b222d7a 100644
+--- a/include/mic_common.h
++++ b/include/mic_common.h
+@@ -688,7 +688,9 @@ mic_signal_daemon(void)
+ 
+ extern char *micstates[];
+ 
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
++/* k1om: WQ_MEM_RECLAIM rescuer-thread creation hangs on the card; use the
++ * no-rescuer ordered workqueue (available since 3.4). */
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,4,0))
+ #define __mic_create_singlethread_workqueue(name)	alloc_ordered_workqueue(name, 0)
+ #else
+ #define __mic_create_singlethread_workqueue(name)	create_singlethread_workqueue(name)
+diff --git a/mic_proc_compat.h b/mic_proc_compat.h
+new file mode 100644
+index 0000000..c38f66a
+--- /dev/null
++++ b/mic_proc_compat.h
+@@ -0,0 +1,46 @@
++#ifndef _MIC_PROC_COMPAT_H
++#define _MIC_PROC_COMPAT_H
++/* v3.10 removed create_proc_entry/create_proc_read_entry (read_proc_t API).
++ * Minimal shim: wrap the old read_proc callback in a single_open seq_file. */
++#include <linux/proc_fs.h>
++#include <linux/seq_file.h>
++#include <linux/slab.h>
++#include <linux/version.h>
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 17, 0)
++#define PDE_DATA(inode) pde_data(inode)
++#endif
++typedef int (*compat_read_proc_t)(char *page, char **start, off_t off,
++				  int count, int *eof, void *data);
++struct compat_proc_priv { compat_read_proc_t rp; void *data; };
++static int compat_proc_show(struct seq_file *m, void *v)
++{
++	struct compat_proc_priv *p = m->private;
++	char *page = (char *)__get_free_page(GFP_KERNEL);
++	char *start = NULL; int eof = 0, len;
++	if (!page) return -ENOMEM;
++	len = p->rp(page, &start, 0, PAGE_SIZE - 1, &eof, p->data);
++	if (len > 0) seq_write(m, page, len);
++	free_page((unsigned long)page);
++	return 0;
++}
++static int compat_proc_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, compat_proc_show, PDE_DATA(inode));
++}
++static const struct proc_ops compat_proc_fops = {
++	.proc_open = compat_proc_open,
++	.proc_read = seq_read, .proc_lseek = seq_lseek, .proc_release = single_release,
++};
++static inline struct proc_dir_entry *
++compat_create_proc_read_entry(const char *name, umode_t mode,
++			      struct proc_dir_entry *parent,
++			      compat_read_proc_t rp, void *data)
++{
++	struct compat_proc_priv *p = kmalloc(sizeof(*p), GFP_KERNEL);
++	if (!p) return NULL;
++	p->rp = rp; p->data = data;
++	return proc_create_data(name, mode, parent, &compat_proc_fops, p);
++}
++#define create_proc_read_entry(n, m, par, rp, d) \
++	compat_create_proc_read_entry(n, m, par, rp, d)
++#endif
+diff --git a/micscif/micscif_api.c b/micscif/micscif_api.c
+index e13e59d..17a351a 100644
+--- a/micscif/micscif_api.c
++++ b/micscif/micscif_api.c
+@@ -1643,7 +1643,7 @@ scif_user_send(scif_epd_t epd, void *msg, int len, int flags)
+ 	int sent_len = 0;
+ 	char *tmp;
+ 	int loop_len;
+-	int chunk_len = min(len, (1 << (MAX_ORDER + PAGE_SHIFT - 1)));;
++	int chunk_len = min(len, (1 << (MAX_PAGE_ORDER + PAGE_SHIFT)));;
+ 	pr_debug("SCIFAPI send (U): ep %p %s\n", ep, scif_ep_states[ep->state]);
+ 
+ 	if (!len)
+@@ -1708,7 +1708,7 @@ scif_user_recv(scif_epd_t epd, void *msg, int len, int flags)
+ 	int recv_len = 0;
+ 	char *tmp;
+ 	int loop_len;
+-	int chunk_len = min(len, (1 << (MAX_ORDER + PAGE_SHIFT - 1)));;
++	int chunk_len = min(len, (1 << (MAX_PAGE_ORDER + PAGE_SHIFT)));;
+ 	pr_debug("SCIFAPI recv (U): ep %p %s\n", ep, scif_ep_states[ep->state]);
+ 
+ 	if (!len)
+@@ -1971,26 +1971,22 @@ __scif_pin_pages(void *addr, size_t len, int *out_prot,
+ 		prot |= SCIF_PROT_WRITE;
+ retry:
+ 		mm = current->mm;
+-		down_write(&mm->mmap_sem);
++		mmap_write_lock(mm);
+ 		if (ulimit) {
+ 			err = __scif_check_inc_pinned_vm(mm, nr_pages);
+ 			if (err) {
+-				up_write(&mm->mmap_sem);
++				mmap_write_unlock(mm);
+ 				pinned_pages->nr_pages = 0;
+ 				goto error_unmap;
+ 			}
+ 		}
+ 
+ 		pinned_pages->nr_pages = get_user_pages(
+-				current,
+-				mm,
+ 				(uint64_t)addr,
+ 				nr_pages,
+-				!!(prot & SCIF_PROT_WRITE),
+-				0,
+-				pinned_pages->pages,
+-				pinned_pages->vma);
+-		up_write(&mm->mmap_sem);
++				(prot & SCIF_PROT_WRITE) ? FOLL_WRITE : 0,
++				pinned_pages->pages);	/* no vmas since 6.5 */
++		mmap_write_unlock(mm);
+ 		if (nr_pages == pinned_pages->nr_pages) {
+ #ifdef RMA_DEBUG
+ 			atomic_long_add_return(nr_pages, &ms_info.rma_pin_cnt);
+@@ -2007,7 +2003,7 @@ retry:
+ 				/* Roll back any pinned pages */
+ 				for (i = 0; i < pinned_pages->nr_pages; i++) {
+ 					if (pinned_pages->pages[i])
+-						page_cache_release(pinned_pages->pages[i]);
++						put_page(pinned_pages->pages[i]);
+ 				}
+ 				prot &= ~SCIF_PROT_WRITE;
+ 				try_upgrade = false;
+@@ -2436,13 +2432,13 @@ scif_put_pages(struct scif_range *pages)
+ 	int ret;
+ 	struct reg_range_t *window = pages->cookie;
+ 	struct endpt *ep = (struct endpt *)window->ep;
+-	if (atomic_read(&(&(ep->ref_count))->refcount) > 0) {
++	if (kref_read(&ep->ref_count) > 0) {
+ 		kref_get(&(ep->ref_count));
+ 	} else {
+ 		WARN_ON(1);
+ 	}
+ 	ret = __scif_put_pages(pages);
+-	if (atomic_read(&(&(ep->ref_count))->refcount) > 0) {
++	if (kref_read(&ep->ref_count) > 0) {
+ 		kref_put(&(ep->ref_count), scif_ref_rel);
+ 	} else {
+ 		//WARN_ON(1);
+@@ -2730,7 +2726,7 @@ unsigned int __scif_pollfd(struct file *f, poll_table *wait, struct endpt *ep)
+ 	spin_lock_irqsave(&ep->lock, sflags);
+ 
+ 	if (ep->conn_async_state == ASYNC_CONN_INPROGRESS) {
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,4,0))
+ 		if (!wait || poll_requested_events(wait) & SCIF_POLLOUT) {
+ #else
+ 		if (!wait || wait->key & SCIF_POLLOUT) {
+@@ -2747,7 +2743,7 @@ unsigned int __scif_pollfd(struct file *f, poll_table *wait, struct endpt *ep)
+ 
+ 	/* Is it OK to use wait->key?? */
+ 	if (ep->state == SCIFEP_LISTENING) {
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,4,0))
+ 		if (!wait || poll_requested_events(wait) & SCIF_POLLIN) {
+ #else
+ 		if (!wait || wait->key & SCIF_POLLIN) {
+@@ -2763,7 +2759,7 @@ unsigned int __scif_pollfd(struct file *f, poll_table *wait, struct endpt *ep)
+ 		goto return_scif_poll;
+ 	}
+ 
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,4,0))
+ 	if (!wait || poll_requested_events(wait) & SCIF_POLLIN) {
+ #else
+ 	if (!wait || wait->key & SCIF_POLLIN) {
+@@ -2782,7 +2778,7 @@ unsigned int __scif_pollfd(struct file *f, poll_table *wait, struct endpt *ep)
+ 			mask |= SCIF_POLLIN;
+ 	}
+ 
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,4,0))
+ 	if (!wait || poll_requested_events(wait) & SCIF_POLLOUT) {
+ #else
+ 	if (!wait || wait->key & SCIF_POLLOUT) {
+@@ -2995,7 +2991,7 @@ scif_mmap(struct vm_area_struct *vma, scif_epd_t epd)
+ 	/*
+ 	 * VM_DONTCOPY - Do not copy this vma on fork
+ 	 * VM_DONTEXPAND - Cannot expand with mremap()
+-	 * VM_RESERVED - Count as reserved_vm like IO
++	 * (VM_DONTEXPAND | VM_DONTDUMP) - Count as reserved_vm like IO
+ 	 * VM_PFNMAP - Page-ranges managed without "struct page"
+ 	 * VM_IO - Memory mapped I/O or similar
+ 	 *
+@@ -3004,14 +3000,10 @@ scif_mmap(struct vm_area_struct *vma, scif_epd_t epd)
+ 	 * the VMA is actually backed by physical pages in the remote
+ 	 * node's physical memory and not via a struct page.
+ 	 */
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
+-	vma->vm_flags |= VM_DONTCOPY | VM_DONTEXPAND | VM_DONTDUMP | VM_PFNMAP;
+-#else
+-	vma->vm_flags |= VM_DONTCOPY | VM_DONTEXPAND | VM_RESERVED | VM_PFNMAP;
+-#endif
++	vm_flags_set(vma, VM_DONTCOPY | VM_DONTEXPAND | VM_DONTDUMP | VM_PFNMAP);
+ 
+ 	if (!is_self_scifdev(ep->remote_dev))
+-		((vma)->vm_flags) |= VM_IO;
++		vm_flags_set(vma, VM_IO);
+ 
+ 	/* Map this range of windows */
+ 	if ((err = micscif_rma_list_mmap(window,
+diff --git a/micscif/micscif_debug.c b/micscif/micscif_debug.c
+index 7f26f5a..9fdc29e 100644
+--- a/micscif/micscif_debug.c
++++ b/micscif/micscif_debug.c
+@@ -33,6 +33,7 @@
+  * intellectual property rights is granted herein.
+  */
+ 
++#include "../mic_proc_compat.h"
+ #include "mic/micscif.h"
+ #ifndef _MIC_SCIF_
+ #include "mic_common.h"
+@@ -129,11 +130,11 @@ scif_ep_open(struct inode *inode, struct file *file)
+ 	return single_open(file, scif_ep_show, NULL);
+ }
+ 
+-struct file_operations scif_ep_fops = {
+-	.open		= scif_ep_open,
+-	.read		= seq_read,
+-	.llseek		= seq_lseek,
+-        .release 	= single_release,
++const struct proc_ops scif_ep_fops = {
++	.proc_open		= scif_ep_open,
++	.proc_read		= seq_read,
++	.proc_lseek		= seq_lseek,
++        .proc_release 	= single_release,
+ };
+ 
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
+@@ -231,11 +232,11 @@ scif_rma_window_open(struct inode *inode, struct file *file)
+ 	return single_open(file, scif_rma_window_show, NULL);
+ }
+ 
+-struct file_operations scif_rma_window_fops = {
+-	.open		= scif_rma_window_open,
+-	.read		= seq_read,
+-	.llseek		= seq_lseek,
+-        .release 	= single_release,
++const struct proc_ops scif_rma_window_fops = {
++	.proc_open		= scif_rma_window_open,
++	.proc_read		= seq_read,
++	.proc_lseek		= seq_lseek,
++        .proc_release 	= single_release,
+ };
+ 
+ static int
+@@ -267,11 +268,11 @@ scif_rma_xfer_open(struct inode *inode, struct file *file)
+ 	return single_open(file, scif_rma_xfer_show, NULL);
+ }
+ 
+-struct file_operations scif_rma_xfer_fops = {
+-	.open		= scif_rma_xfer_open,
+-	.read		= seq_read,
+-	.llseek		= seq_lseek,
+-        .release 	= single_release,
++const struct proc_ops scif_rma_xfer_fops = {
++	.proc_open		= scif_rma_xfer_open,
++	.proc_read		= seq_read,
++	.proc_lseek		= seq_lseek,
++        .proc_release 	= single_release,
+ };
+ 
+ static int
+@@ -304,11 +305,11 @@ scif_dev_open(struct inode *inode, struct file *file)
+ 	return single_open(file, scif_dev_show, NULL);
+ }
+ 
+-struct file_operations scif_dev_fops = {
+-	.open		= scif_dev_open,
+-	.read		= seq_read,
+-	.llseek		= seq_lseek,
+-        .release 	= single_release,
++const struct proc_ops scif_dev_fops = {
++	.proc_open		= scif_dev_open,
++	.proc_read		= seq_read,
++	.proc_lseek		= seq_lseek,
++        .proc_release 	= single_release,
+ };
+ 
+ static int
+@@ -349,16 +350,20 @@ scif_debug_open(struct inode *inode, struct file *file)
+ 	return single_open(file, scif_debug_show, NULL);
+ }
+ 
+-struct file_operations scif_debug_fops = {
+-	.open		= scif_debug_open,
+-	.read		= seq_read,
+-	.llseek		= seq_lseek,
+-        .release 	= single_release,
++const struct proc_ops scif_debug_fops = {
++	.proc_open		= scif_debug_open,
++	.proc_read		= seq_read,
++	.proc_lseek		= seq_lseek,
++        .proc_release 	= single_release,
+ };
+ 
+ static int
+ scif_suspend_show(struct seq_file *m, void *data)
+ {
++#ifdef _MIC_SCIF_
++	/* card side: request suspend; micscif_disconnect_node is host-only */
++	micscif_suspend_handler(NULL, 0, NULL);
++#else
+ 	int node;
+ 	uint64_t ret;
+ 	seq_printf(m, "Removing Nodes mask 0x7\n");
+@@ -368,7 +373,7 @@ scif_suspend_show(struct seq_file *m, void *data)
+ 		seq_printf(m, "Node %d requested disconnect. ret = %lld\n",
+ 			      node, ret);
+ 	}
+-
++#endif
+ 	return 0;
+ }
+ 
+@@ -378,11 +383,11 @@ scif_suspend_open(struct inode *inode, struct file *file)
+ 	return single_open(file, scif_suspend_show, NULL);
+ }
+ 
+-struct file_operations scif_suspend_fops = {
+-	.open		= scif_suspend_open,
+-	.read		= seq_read,
+-	.llseek		= seq_lseek,
+-        .release 	= single_release,
++const struct proc_ops scif_suspend_fops = {
++	.proc_open		= scif_suspend_open,
++	.proc_read		= seq_read,
++	.proc_lseek		= seq_lseek,
++        .proc_release 	= single_release,
+ };
+ 
+ static int
+@@ -398,11 +403,11 @@ scif_cache_limit_open(struct inode *inode, struct file *file)
+ 	return single_open(file, scif_cache_limit_show, NULL);
+ }
+ 
+-struct file_operations scif_cache_limit_fops = {
+-	.open		= scif_cache_limit_open,
+-	.read		= seq_read,
+-	.llseek		= seq_lseek,
+-        .release 	= single_release,
++const struct proc_ops scif_cache_limit_fops = {
++	.proc_open		= scif_cache_limit_open,
++	.proc_read		= seq_read,
++	.proc_lseek		= seq_lseek,
++        .proc_release 	= single_release,
+ };
+ 
+ #else // LINUX VERSION 3.10
+@@ -888,7 +893,7 @@ scif_proc_init(void)
+ 	struct proc_dir_entry *reg_cache_limit_entry;
+ 	struct proc_dir_entry *ep_entry;
+ 
+-	if ((scif_proc = create_proc_entry("scif", S_IFDIR | S_IRUGO, NULL)) != NULL) {
++	if ((scif_proc = proc_mkdir("scif", NULL)) != NULL) {
+ 		create_proc_read_entry("rma_window", 0444, scif_proc, scif_rma_window_read, NULL);
+ 		create_proc_read_entry("rma_xfer", 0444, scif_proc, scif_rma_xfer_read, NULL);
+ 		create_proc_read_entry("scif_dev", 0444, scif_proc, scif_dev_info, NULL);
+@@ -900,14 +905,8 @@ scif_proc_init(void)
+ 		create_proc_read_entry("crash", 0444, scif_proc, scif_crash, NULL);
+ 		create_proc_read_entry("bugon", 0444, scif_proc, scif_bugon, NULL);
+ #endif
+-		if ((reg_cache_limit_entry = create_proc_entry("reg_cache_limit", S_IFREG | S_IRUGO | S_IWUGO, scif_proc))) {
+-			reg_cache_limit_entry->write_proc = scif_set_reg_cache_limit;
+-			reg_cache_limit_entry->read_proc = scif_get_reg_cache_limit;
+-			reg_cache_limit_entry->data = NULL;
+-		}
+-		if ((ep_entry = create_proc_entry("ep", S_IFREG | S_IRUGO | S_IWUGO, scif_proc))) {
+-			ep_entry->proc_fops = &scif_ep_fops;
+-		}		
++		/* reg_cache_limit debug knob dropped on 3.10 (read_proc+write_proc API gone) */
++		ep_entry = proc_create("ep", S_IRUGO | S_IWUGO, scif_proc, &scif_ep_fops);
+ 
+ 
+ 	}
+diff --git a/micscif/micscif_fd.c b/micscif/micscif_fd.c
+index 9a4eb9c..cbc5384 100644
+--- a/micscif/micscif_fd.c
++++ b/micscif/micscif_fd.c
+@@ -70,7 +70,7 @@ scif_fdclose(struct file *f)
+ 	/* Only actually request of tear down of end point if file reference
+ 	 * count is greater than 1.  This accounts for the fork() issue.
+ 	 */
+-	if (atomic64_read(&f->f_count) == 0) {
++	if (file_count(f) == 0) {	/* 6.13: f_count is a file_ref now */
+ 		err = __scif_close(priv->epd);
+ 		kfree(priv);
+ 	}
+diff --git a/micscif/micscif_main.c b/micscif/micscif_main.c
+index 45d5bf4..c42c927 100644
+--- a/micscif/micscif_main.c
++++ b/micscif/micscif_main.c
+@@ -33,6 +33,7 @@
+  * intellectual property rights is granted herein.
+  */
+ 
++#include <linux/module.h>
+ #include <linux/cdev.h>
+ #include <linux/reboot.h>
+ #include <linux/version.h>
+@@ -226,7 +227,7 @@ static void _micscif_exit(void)
+ 	}
+ 	mutex_destroy(&ms_info.mi_event_cblock);
+ 
+-#ifdef CONFIG_MK1OM
++#if defined(CONFIG_MK1OM) && defined(CONFIG_MIC_PM)
+ 	micpm_device_unregister(&mic_deviceevent);
+ #endif
+ 
+@@ -290,7 +291,7 @@ struct file_operations micscif_ops = {
+ 	.release = micscif_release,
+ };
+ 
+-static char * scif_devnode(struct device *dev, mode_t *mode)
++static char * scif_devnode(const struct device *dev, umode_t *mode)
+ {
+ 	return kasprintf(GFP_KERNEL, "mic/%s", dev_name(dev));
+ }
+@@ -317,7 +318,7 @@ static int micscif_setup_base(void)
+ 		goto unreg_chrdev;
+ 	}
+ 
+-	micinfo.m_class = class_create(THIS_MODULE, "micscif");
++	micinfo.m_class = class_create("micscif");
+ 	if (IS_ERR(micinfo.m_class)) {
+ 		result = PTR_ERR(micinfo.m_class);
+ 		goto del_m_dev;
+@@ -355,18 +356,18 @@ static int micscif_setup_base(void)
+ 	INIT_LIST_HEAD(&ms_info.mi_mmu_notif_cleanup);
+ #endif
+ 	INIT_LIST_HEAD(&ms_info.mi_fence);
+-	if (!(ms_info.mi_misc_wq = create_singlethread_workqueue("SCIF_MISC"))) {
++	if (!(ms_info.mi_misc_wq = alloc_ordered_workqueue("SCIF_MISC", 0))) {
+ 		result = -ENOMEM;
+ 		goto remove_group;
+ 	}
+ 	INIT_WORK(&ms_info.mi_misc_work, micscif_misc_handler);
+-	if (!(ms_info.mi_conn_wq = create_singlethread_workqueue("SCIF_NB_CONN"))) {
++	if (!(ms_info.mi_conn_wq = alloc_ordered_workqueue("SCIF_NB_CONN", 0))) {
+ 		result = -ENOMEM;
+ 		goto destroy_misc_wq;
+ 	}
+ 	INIT_WORK(&ms_info.mi_conn_work, micscif_conn_handler);
+ #ifdef CONFIG_MMU_NOTIFIER
+-	if (!(ms_info.mi_mmu_notif_wq = create_singlethread_workqueue("SCIF_MMU"))) {
++	if (!(ms_info.mi_mmu_notif_wq = alloc_ordered_workqueue("SCIF_MMU", 0))) {
+ 		result = -ENOMEM;
+ 		goto destroy_conn_wq;
+ 	}
+@@ -446,7 +447,7 @@ static int micscif_init(void)
+ 	scif_dev[SCIF_HOST_NODE].sd_node = SCIF_HOST_NODE;
+ 	scif_dev[SCIF_HOST_NODE].sd_state = SCIFDEV_RUNNING;
+ 	if (!(scif_dev[SCIF_HOST_NODE].mm_sbox =
+-		ioremap_nocache(SBOX_BASE, SBOX_MMIO_LENGTH))) {
++		ioremap(SBOX_BASE, SBOX_MMIO_LENGTH))) {
+ 		result = -ENOMEM;
+ 		goto error;
+ 	}
+@@ -532,7 +533,7 @@ static int micscif_init(void)
+ 
+ 	pr_debug("micscif_init(): Setup successful: 0x%llx \n", host_queue_phys);
+ 
+-#ifdef CONFIG_MK1OM
++#if defined(CONFIG_MK1OM) && defined(CONFIG_MIC_PM)
+ 	micpm_device_register(&mic_deviceevent);
+ #endif
+ 	if ((result = register_reboot_notifier(&micscif_reboot_notifier)))
+@@ -550,7 +551,7 @@ static int micscif_init(void)
+ 
+ 	return result;
+ cache_destroy:
+-#ifdef CONFIG_MK1OM
++#if defined(CONFIG_MK1OM) && defined(CONFIG_MIC_PM)
+ 	micpm_device_unregister(&mic_deviceevent);
+ #endif
+ 	micscif_kmem_cache_destroy();
+diff --git a/micscif/micscif_nodeqp.c b/micscif/micscif_nodeqp.c
+index 7dc5350..e30c7ce 100644
+--- a/micscif/micscif_nodeqp.c
++++ b/micscif/micscif_nodeqp.c
+@@ -881,7 +881,7 @@ scif_nodeadd_resp(struct micscif_dev *scifdev, struct nodemsg *msg)
+ 		goto interrupt_setup_error;
+ 	}
+ 
+-	newdev->mm_sbox = ioremap_nocache(msg->payload[1] + SBOX_OFFSET, SBOX_MMIO_LENGTH);
++	newdev->mm_sbox = ioremap(msg->payload[1] + SBOX_OFFSET, SBOX_MMIO_LENGTH);
+ 
+ 	if (!newdev->mm_sbox) {
+ 		printk(KERN_ERR "failed to map mmio for %d\n", msg->src.node);
+diff --git a/micscif/micscif_rma.c b/micscif/micscif_rma.c
+index 9c6de2e..b3e2205 100644
+--- a/micscif/micscif_rma.c
++++ b/micscif/micscif_rma.c
+@@ -33,6 +33,7 @@
+  * intellectual property rights is granted herein.
+  */
+ 
++#include <linux/sched/signal.h>
+ #include "mic/micscif.h"
+ #include "mic/micscif_smpt.h"
+ #include "mic/micscif_kmem_cache.h"
+@@ -57,20 +58,13 @@ void micscif_rma_destroy_tcw(struct rma_mmu_notifier *mmn,
+ #ifdef CONFIG_MMU_NOTIFIER
+ static void scif_mmu_notifier_release(struct mmu_notifier *mn,
+ 			struct mm_struct *mm);
+-static void scif_mmu_notifier_invalidate_page(struct mmu_notifier *mn,
+-				struct mm_struct *mm,
+-				unsigned long address);
+-static void scif_mmu_notifier_invalidate_range_start(struct mmu_notifier *mn,
+-				       struct mm_struct *mm,
+-				       unsigned long start, unsigned long end);
++static int scif_mmu_notifier_invalidate_range_start(struct mmu_notifier *mn,
++				       const struct mmu_notifier_range *range);
+ static void scif_mmu_notifier_invalidate_range_end(struct mmu_notifier *mn,
+-				     struct mm_struct *mm,
+-				     unsigned long start, unsigned long end);
++				     const struct mmu_notifier_range *range);
+ static const struct mmu_notifier_ops scif_mmu_notifier_ops = {
+ 	.release = scif_mmu_notifier_release,
+ 	.clear_flush_young = NULL,
+-	.change_pte = NULL,/*TODO*/
+-	.invalidate_page = scif_mmu_notifier_invalidate_page,
+ 	.invalidate_range_start = scif_mmu_notifier_invalidate_range_start,
+ 	.invalidate_range_end = scif_mmu_notifier_invalidate_range_end};
+ 
+@@ -86,35 +80,21 @@ static void scif_mmu_notifier_release(struct mmu_notifier *mn,
+ 	return;
+ }
+ 
+-static void scif_mmu_notifier_invalidate_page(struct mmu_notifier *mn,
+-				struct mm_struct *mm,
+-				unsigned long address)
+-{
+-	struct endpt *ep;
+-	struct rma_mmu_notifier	*mmn;
+-	mmn = container_of(mn, struct rma_mmu_notifier, ep_mmu_notifier);
+-	ep = mmn->ep;
+-	micscif_rma_destroy_tcw(mmn, ep, true, address, PAGE_SIZE);
+-	pr_debug("%s address 0x%lx\n", __func__, address);
+-	return;
+-}
+-
+-static void scif_mmu_notifier_invalidate_range_start(struct mmu_notifier *mn,
+-				       struct mm_struct *mm,
+-				       unsigned long start, unsigned long end)
++static int scif_mmu_notifier_invalidate_range_start(struct mmu_notifier *mn,
++				       const struct mmu_notifier_range *range)
+ {
++	unsigned long start = range->start, end = range->end;
+ 	struct endpt *ep;
+ 	struct rma_mmu_notifier	*mmn;
+ 	mmn = container_of(mn, struct rma_mmu_notifier, ep_mmu_notifier);
+ 	ep = mmn->ep;
+ 	micscif_rma_destroy_tcw(mmn, ep, true, (uint64_t)start, (uint64_t)(end - start));
+ 	pr_debug("%s start=%lx, end=%lx\n", __func__, start, end);
+-	return;
++	return 0;
+ }
+ 
+ static void scif_mmu_notifier_invalidate_range_end(struct mmu_notifier *mn,
+-				     struct mm_struct *mm,
+-				     unsigned long start, unsigned long end)
++				     const struct mmu_notifier_range *range)
+ {
+ 	/* Nothing to do here, everything needed was done in invalidate_range_start */
+ 	pr_debug("%s\n", __func__);
+@@ -413,7 +393,7 @@ int micscif_destroy_pinned_pages(struct scif_pinned_pages *pinned_pages)
+ 				BUG_ON(!page_count(pinned_pages->pages[j]));
+ 				BUG_ON(atomic_long_sub_return(1, &ms_info.rma_pin_cnt) < 0);
+ #endif
+-				page_cache_release(pinned_pages->pages[j]);
++				put_page(pinned_pages->pages[j]);
+ 			}
+ 		}
+ 	}
+diff --git a/micscif/micscif_rma_dma.c b/micscif/micscif_rma_dma.c
+index 9fafc4c..995a635 100644
+--- a/micscif/micscif_rma_dma.c
++++ b/micscif/micscif_rma_dma.c
+@@ -40,6 +40,7 @@
+ #include "mic/micscif_rma.h"
+ #include "mic/micscif_rma_list.h"
+ #if !defined(WINDOWS) && !defined(CONFIG_PREEMPT)
++#include <linux/nmi.h>
+ #include <linux/sched.h>
+ #endif
+ #include <linux/highmem.h>
+@@ -82,7 +83,7 @@ void *ioremap_remote(off_t off, struct reg_range_t *window,
+ 		return NULL;
+ #endif
+ 	if (!loopback)
+-		ret = ioremap_nocache(phys, len);
++		ret = ioremap(phys, len);
+ 	else
+ 		ret = (void *)((uint64_t)phys_to_virt(phys));
+ 	return ret;
+@@ -435,7 +436,7 @@ static int micscif_rma_list_dma_copy_unaligned(struct mic_copy_work *work, uint8
+ static inline bool is_local_dma_addr(uint64_t addr)
+ {
+ #ifdef _MIC_SCIF_
+-	return (addr >> PAGE_SHIFT < num_physpages);
++	return (addr >> PAGE_SHIFT < get_num_physpages());
+ #else
+ 	return is_syspa(addr);
+ #endif
+@@ -823,9 +824,15 @@ error:
+ 
+ #if !defined(WINDOWS) && !defined(CONFIG_PREEMPT)
+ static int softlockup_threshold = 60;
+-static void avert_softlockup(unsigned long data)
++struct softlockup_timer {
++	struct timer_list timer;
++	unsigned long *flag;
++};
++
++static void avert_softlockup(struct timer_list *t)
+ {
+-	*(unsigned long*)data = 1;
++	struct softlockup_timer *st = timer_container_of(st, t, timer);
++	*st->flag = 1;
+ }
+ 
+ /*
+@@ -837,11 +844,12 @@ static void avert_softlockup(unsigned long data)
+  * timers are run at softirq context)
+  *
+  */
+-static inline void add_softlockup_timer(struct timer_list *timer, unsigned long *data)
++static inline void add_softlockup_timer(struct softlockup_timer *st, unsigned long *data)
+ {
+-	setup_timer(timer, avert_softlockup, (unsigned long) data);
+-	timer->expires = jiffies + usecs_to_jiffies(softlockup_threshold * 1000000 / 3);
+-	add_timer(timer);
++	st->flag = data;
++	timer_setup(&st->timer, avert_softlockup, 0);
++	st->timer.expires = jiffies + usecs_to_jiffies(softlockup_threshold * 1000000 / 3);
++	add_timer(&st->timer);
+ }
+ 
+ static inline void del_softlockup_timer(struct timer_list *timer)
+@@ -849,7 +857,7 @@ static inline void del_softlockup_timer(struct timer_list *timer)
+ 	/* We need delete synchronously since the variable being touched by
+ 	 * timer interrupt is on the stack
+ 	 */
+-	del_timer_sync(timer);
++	timer_delete_sync(timer);
+ }
+ #endif
+ 
+@@ -874,7 +882,7 @@ int micscif_rma_list_cpu_copy(struct mic_copy_work *work)
+ 	int ret = 0;
+ #if !defined(WINDOWS) && !defined(CONFIG_PREEMPT)
+ 	unsigned long timer_fired = 0;
+-	struct timer_list timer;
++	struct softlockup_timer timer;
+ 	int cpu = smp_processor_id();
+ 	add_softlockup_timer(&timer, &timer_fired);
+ #endif
+@@ -976,7 +984,7 @@ int micscif_rma_list_cpu_copy(struct mic_copy_work *work)
+ 	}
+ error:
+ #if !defined(WINDOWS) && !defined(CONFIG_PREEMPT)
+-	del_softlockup_timer(&timer);
++	del_softlockup_timer(&timer.timer);
+ #endif
+ 	return ret;
+ }
+diff --git a/micscif/micscif_select.c b/micscif/micscif_select.c
+index c6f125f..cd5a8f6 100644
+--- a/micscif/micscif_select.c
++++ b/micscif/micscif_select.c
+@@ -38,8 +38,10 @@
+  *     of fds to overcome nfds < 16390 descriptors limit (Tigran Aivazian).
+  */
+ 
++#include <linux/sched/signal.h>
+ #include <linux/kernel.h>
+ #include <linux/sched.h>
++#include <linux/sched/rt.h>
+ #include <linux/file.h>
+ #include <linux/hrtimer.h>
+ #include <linux/module.h>
+@@ -47,7 +49,6 @@
+ #include "mic/micscif.h"
+ 
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
+-#include <linux/sched/rt.h>
+ #endif
+ 
+ struct poll_table_page {
+@@ -70,7 +71,7 @@ struct poll_table_page {
+ 
+ #define MAX_SLACK	(100 * NSEC_PER_MSEC)
+ 
+-static long __estimate_accuracy(struct timespec *tv)
++static long __estimate_accuracy(struct timespec64 *tv)
+ {
+ 	long slack;
+ 	int divfactor = 1000;
+@@ -93,10 +94,10 @@ static long __estimate_accuracy(struct timespec *tv)
+ 	return slack;
+ }
+ 
+-static long estimate_accuracy(struct timespec *tv)
++static long estimate_accuracy(struct timespec64 *tv)
+ {
+ 	unsigned long ret;
+-	struct timespec now;
++	struct timespec64 now;
+ 
+ 	/*
+ 	 * Realtime tasks get a slack of 0 for obvious reasons.
+@@ -105,8 +106,8 @@ static long estimate_accuracy(struct timespec *tv)
+ 	if (rt_task(current))
+ 		return 0;
+ 
+-	ktime_get_ts(&now);
+-	now = timespec_sub(*tv, now);
++	ktime_get_ts64(&now);
++	now = timespec64_sub(*tv, now);
+ 	ret = __estimate_accuracy(&now);
+ 	if (ret < current->timer_slack_ns)
+ 		return current->timer_slack_ns;
+@@ -191,7 +192,7 @@ static struct poll_table_entry *poll_get_entry(struct poll_wqueues *p)
+ 	return table->entry++;
+ }
+ 
+-static int __pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
++static int __pollwake(wait_queue_entry_t *wait, unsigned mode, int sync, void *key)
+ {
+ 	struct poll_wqueues *pwq = wait->private;
+ 	DECLARE_WAITQUEUE(dummy_wait, pwq->polling_task);
+@@ -217,7 +218,7 @@ static int __pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
+ 	return default_wake_function(&dummy_wait, mode, sync, key);
+ }
+ 
+-static int pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
++static int pollwake(wait_queue_entry_t *wait, unsigned mode, int sync, void *key)
+ {
+ 	struct poll_table_entry *entry;
+ 
+@@ -237,7 +238,7 @@ static void __pollwait(struct file *filp __attribute__((unused)), wait_queue_hea
+ 		return;
+ 	entry->filp = NULL;
+ 	entry->wait_address = wait_address;
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,4,0))
+ 	entry->key = p->_key;
+ #else
+ 	entry->key = p->key;
+@@ -300,7 +301,7 @@ static inline unsigned int do_pollfd(struct scif_pollepd *pollfd, poll_table *pw
+ 		mask = POLLNVAL;
+ 		mask = DEFAULT_POLLMASK;
+ 		if (pwait)
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,4,0))
+ 			pwait->_key = pollfd->events | POLLERR | POLLHUP;
+ #else
+ 			pwait->key = pollfd->events | POLLERR | POLLHUP;
+@@ -315,7 +316,7 @@ static inline unsigned int do_pollfd(struct scif_pollepd *pollfd, poll_table *pw
+ }
+ 
+ static int do_poll(unsigned int nfds,  struct scif_pollepd *ufds,
+-		   struct poll_wqueues *wait, struct timespec *end_time)
++		   struct poll_wqueues *wait, struct timespec64 *end_time)
+ {
+ 	poll_table* pt = &wait->pt;
+ 	ktime_t expire, *to = NULL;
+@@ -364,7 +365,7 @@ static int do_poll(unsigned int nfds,  struct scif_pollepd *ufds,
+ 		 * pointer to the expiry value.
+ 		 */
+ 		if (end_time && !to) {
+-			expire = timespec_to_ktime(*end_time);
++			expire = timespec64_to_ktime(*end_time);
+ 			to = &expire;
+ 		}
+ 
+@@ -375,7 +376,7 @@ static int do_poll(unsigned int nfds,  struct scif_pollepd *ufds,
+ }
+ 
+ static int do_scif_poll(struct scif_pollepd *ufds, unsigned int nfds,
+-		struct timespec *end_time)
++		struct timespec64 *end_time)
+ {
+ 	struct poll_wqueues table;
+  	int epdcount;
+@@ -391,16 +392,16 @@ static int do_scif_poll(struct scif_pollepd *ufds, unsigned int nfds,
+  * Add two timespec values and do a safety check for overflow.
+  * It's assumed that both values are valid (>= 0)
+  */
+-static struct timespec scif_timespec_add_safe(const struct timespec lhs,
+-				  const struct timespec rhs)
++static struct timespec64 scif_timespec64_add_safe(const struct timespec64 lhs,
++				  const struct timespec64 rhs)
+ {
+-	struct timespec res;
++	struct timespec64 res;
+ 
+-	set_normalized_timespec(&res, lhs.tv_sec + rhs.tv_sec,
++	set_normalized_timespec64(&res, lhs.tv_sec + rhs.tv_sec,
+ 				lhs.tv_nsec + rhs.tv_nsec);
+ 
+ 	if (res.tv_sec < lhs.tv_sec || res.tv_sec < rhs.tv_sec)
+-		res.tv_sec = TIME_T_MAX;
++		res.tv_sec = TIME64_MAX;
+ 
+ 	return res;
+ }
+@@ -415,26 +416,26 @@ static struct timespec scif_timespec_add_safe(const struct timespec lhs,
+  *
+  * Returns -EINVAL if sec/nsec are not normalized. Otherwise 0.
+  */
+-static int scif_poll_select_set_timeout(struct timespec *to, long sec, long nsec)
++static int scif_poll_select_set_timeout(struct timespec64 *to, long sec, long nsec)
+ {
+-	struct timespec ts = {.tv_sec = sec, .tv_nsec = nsec};
++	struct timespec64 ts = {.tv_sec = sec, .tv_nsec = nsec};
+ 
+-	if (!timespec_valid(&ts))
++	if (!timespec64_valid(&ts))
+ 		return -EINVAL;
+ 
+ 	/* Optimize for the zero timeout value here */
+ 	if (!sec && !nsec) {
+ 		to->tv_sec = to->tv_nsec = 0;
+ 	} else {
+-		ktime_get_ts(to);
+-		*to = scif_timespec_add_safe(*to, ts);
++		ktime_get_ts64(to);
++		*to = scif_timespec64_add_safe(*to, ts);
+ 	}
+ 	return 0;
+ }
+ 
+ int scif_poll(struct scif_pollepd *ufds, unsigned int nfds, long timeout_msecs)
+ {
+-	struct timespec end_time, *to = NULL;
++	struct timespec64 end_time, *to = NULL;
+ 	if (timeout_msecs >= 0) {
+ 		to = &end_time;
+ 		scif_poll_select_set_timeout(to, timeout_msecs / MSEC_PER_SEC,
+diff --git a/mpssboot/mpssboot.c b/mpssboot/mpssboot.c
+index 7939613..967965a 100644
+--- a/mpssboot/mpssboot.c
++++ b/mpssboot/mpssboot.c
+@@ -82,7 +82,7 @@ static struct class *class;
+ static struct device *mbdev;
+ 
+ static int host_notified;
+-static struct timespec tod;
++static struct timespec64 tod;	/* same 16-byte layout the host sends */
+ static int timeset = 0;
+ 
+ static ssize_t
+@@ -132,7 +132,7 @@ set_synctime(struct device *dev, struct device_attribute *attr, const char *buf,
+ 		goto close_synctime;
+ 	}
+ 
+-	do_settimeofday(&tod);
++	do_settimeofday64(&tod);
+ 	printk("MPSSBOOT Time of day sycned with host\n");
+ 	timeset = 1;
+ 
+@@ -210,7 +210,7 @@ mpssboot_exit(void)
+ }
+ 
+ static char *
+-mpssboot_devnode(struct device *dev, mode_t *mode)
++mpssboot_devnode(const struct device *dev, umode_t *mode)
+ {
+ 	return kasprintf(GFP_KERNEL, "%s", dev_name(dev));
+ }
+@@ -223,7 +223,7 @@ mpssboot_init(void)
+ 	int result;
+ 
+ 	alloc_chrdev_region(&dev, 0, 2, "micnotify");
+-	class = class_create(THIS_MODULE, "micnotify");
++	class = class_create("micnotify");
+ 	class->devnode = mpssboot_devnode;
+ 	mbdev = device_create(class, NULL, dev, NULL, "notify");
+ 
+diff --git a/pm_scif/pm_scif.c b/pm_scif/pm_scif.c
+index aa18b7a..5908ea6 100644
+--- a/pm_scif/pm_scif.c
++++ b/pm_scif/pm_scif.c
+@@ -36,6 +36,7 @@
+ #include <linux/init.h>
+ #include <linux/module.h>
+ #include <linux/workqueue.h>
++#include <linux/kthread.h>
+ #include <linux/slab.h>
+ #include <linux/cdev.h>
+ #include <linux/device.h>
+@@ -65,6 +66,7 @@ typedef struct _mic_pm_scif {
+ } mic_pm_scif;
+ 
+ mic_pm_scif *pm_scif;
++static struct task_struct *pm_scif_conn_task;
+ 
+ void
+ pm_dump(char *buf, size_t len)
+@@ -255,7 +257,7 @@ spm_release(struct inode *in, struct file *f)
+ }
+ 
+ static char *
+-spm_devnode(struct device *dev, mode_t *mode)
++spm_devnode(const struct device *dev, umode_t *mode)
+ {
+ 	return kasprintf(GFP_KERNEL, "spm/%s", dev_name(dev));
+ }
+@@ -316,7 +318,7 @@ spm_dev_init(void)
+ 	if (err)
+ 		goto err;
+ 
+-	spmclass = class_create(THIS_MODULE, "spm");
++	spmclass = class_create("spm");
+ 	if (IS_ERR(spmclass)) {
+ 		err = PTR_ERR(spmclass);
+ 		goto err;
+@@ -336,6 +338,39 @@ err:
+ }
+ #endif
+ 
++/* Connect to the host PM SCIF port in the background so module_init never
++ * blocks boot; if the host has no PM listener (ENODEV) we stay loaded but
++ * disconnected until it appears. */
++static int pm_scif_connect_fn(void *unused)
++{
++	int err, retry = 0;
++
++	if ((pm_scif->ep = scif_open()) == NULL) {
++		PM_DB(" scif_open failed\n");
++		return 0;
++	}
++	if ((pm_scif->lport = scif_bind(pm_scif->ep, 0)) < 0) {
++		PM_DB(" scif_bind failed\n");
++		return 0;
++	}
++	pm_scif->rport_id.node = 0;
++	pm_scif->rport_id.port = SCIF_PM_PORT_0;
++	while (!kthread_should_stop() &&
++	       (err = scif_connect(pm_scif->ep, &pm_scif->rport_id)) != 0) {
++		PM_DB(" scif_connect failed err=%d\n", err);
++		if (retry++ > PM_SCIF_RETRY_COUNT)
++			return 0;
++		msleep(1000);
++	}
++	if (kthread_should_stop())
++		return 0;
++	pm_scif->pm_recvq = create_singlethread_workqueue("pm_recvq");
++	INIT_WORK(&pm_scif->pm_recv, pm_recv_from_host);
++	queue_work(pm_scif->pm_recvq, &pm_scif->pm_recv);
++	pm_scif->con_state = PM_CONNECTED;
++	return 0;
++}
++
+ int pm_scif_init(void)
+ {
+ 	int err = 1;
+@@ -359,34 +394,7 @@ int pm_scif_init(void)
+ 
+ 	pm_scif_register(&micpmscif);
+ 
+-	if ((pm_scif->ep = scif_open()) == NULL) {
+-		PM_DB(" scif_open failed\n");
+-		goto end_con;
+-	}
+-
+-	if ((pm_scif->lport = scif_bind(pm_scif->ep, 0)) < 0) {
+-		PM_DB(" scif_bind failed\n");
+-		goto end_con;
+-	}
+-
+-	PM_DB(" scif_bind successfull. Local port number = %d, ep =  \n",
+-							 pm_scif->lport);
+-	dump_ep(pm_scif->ep, __func__,__LINE__);
+-	pm_scif->rport_id.node = 0;
+-	pm_scif->rport_id.port = SCIF_PM_PORT_0;
+-
+-	while ((err = scif_connect(pm_scif->ep, &pm_scif->rport_id)) != 0) {
+-		PM_DB(" scif_connect failed with err = %d ep %p\n",err,
+-			pm_scif->ep);
+-		msleep(1000);
+-		if (retry++ > PM_SCIF_RETRY_COUNT)
+-			goto end_con;
+-	}
+-
+-	pm_scif->pm_recvq = create_singlethread_workqueue("pm_recvq");
+-	INIT_WORK(&pm_scif->pm_recv, pm_recv_from_host);
+-	queue_work(pm_scif->pm_recvq, &pm_scif->pm_recv);
+-	pm_scif->con_state = PM_CONNECTED;
++	pm_scif_conn_task = kthread_run(pm_scif_connect_fn, NULL, "pm_scif_conn");
+ 	err = 0;
+ #ifdef PM_SCIF_IOCTL
+ done:
+@@ -405,6 +413,10 @@ void pm_scif_exit(void)
+ 
+ 	FUNCTION_ENTRY;
+ 	PM_DB("Good Bye!, pm scif \n");
++	if (pm_scif_conn_task) {
++		kthread_stop(pm_scif_conn_task);
++		pm_scif_conn_task = NULL;
++	}
+ 
+ 	pm_send_to_host(PM_MESSAGE_CLOSE, NULL, 0);
+ 	write_lock_irqsave(&pmscif_send,flags);
+diff --git a/ramoops/ramoops.c b/ramoops/ramoops.c
+index 76cd53f..577b5aa 100644
+--- a/ramoops/ramoops.c
++++ b/ramoops/ramoops.c
+@@ -27,7 +27,7 @@
+ #include <linux/ioport.h>
+ 
+ #define RAMOOPS_KERNMSG_HDR "===="
+-#define RAMOOPS_HEADER_SIZE   (5 + sizeof(struct timeval))
++#define RAMOOPS_HEADER_SIZE   (5 + sizeof(struct timespec64))
+ 
+ #define RECORD_SIZE 4096
+ 
+@@ -56,37 +56,39 @@ static struct ramoops_context {
+ } oops_cxt;
+ 
+ static void ramoops_do_dump(struct kmsg_dumper *dumper,
+-		enum kmsg_dump_reason reason, const char *s1, unsigned long l1,
+-		const char *s2, unsigned long l2)
++		struct kmsg_dump_detail *detail)	/* 6.12: reason via kmsg_dump_detail */
+ {
++	enum kmsg_dump_reason reason = detail->reason;
+ 	struct ramoops_context *cxt = container_of(dumper,
+ 			struct ramoops_context, dump);
+-	unsigned long s1_start, s2_start;
+-	unsigned long l1_cpy, l2_cpy;
++	char *record, *buf;
++	unsigned long buffer_size;
++	size_t len = 0;
+ 	int res;
+-	char *buf;
+-	struct timeval timestamp;
++	struct timespec64 timestamp;
++	struct kmsg_dump_iter iter;
+ 
+ 	/* Only dump oopses if dump_oops is set */
+ 	if ((reason != KMSG_DUMP_OOPS) || !dump_oops)
+ 		return;
+ 
+-	buf = (char *)(cxt->virt_addr + (cxt->count * RECORD_SIZE));
+-	memset(buf, '\0', RECORD_SIZE);
++	record = (char *)(cxt->virt_addr + (cxt->count * RECORD_SIZE));
++	buf = record;
++	memset(record, 0, RECORD_SIZE);
+ 	res = sprintf(buf, "%s", RAMOOPS_KERNMSG_HDR);
+ 	buf += res;
+-	do_gettimeofday(&timestamp);
+-	res = sprintf(buf, "%lu.%lu\n", (long)timestamp.tv_sec, (long)timestamp.tv_usec);
++	ktime_get_real_ts64(&timestamp);
++	res = sprintf(buf, "%lu.%lu\n", (long)timestamp.tv_sec,
++			(long)timestamp.tv_nsec / 1000);
+ 	buf += res;
+ 
+-	l2_cpy = min(l2, (unsigned long)(RECORD_SIZE - RAMOOPS_HEADER_SIZE));
+-	l1_cpy = min(l1, (unsigned long)(RECORD_SIZE - RAMOOPS_HEADER_SIZE) - l2_cpy);
+-
+-	s2_start = l2 - l2_cpy;
+-	s1_start = l1 - l1_cpy;
+-
+-	memcpy(buf, s1 + s1_start, l1_cpy);
+-	memcpy(buf + l1_cpy, s2 + s2_start, l2_cpy);
++	/*
++	 * kmsg_dump() has already positioned the iterator, so pull the tail
++	 * of the kernel log straight into the remaining record space.
++	 */
++	buffer_size = RECORD_SIZE - (buf - record);
++	kmsg_dump_rewind(&iter);
++	kmsg_dump_get_buffer(&iter, true, buf, buffer_size, &len);
+ 
+ 	cxt->count = (cxt->count + 1) % cxt->max_count;
+ }
+diff --git a/ras/Kbuild b/ras/Kbuild
+index 7778866..543fb88 100644
+--- a/ras/Kbuild
++++ b/ras/Kbuild
+@@ -1,5 +1,9 @@
+ obj-m := micras.o
+ 
++# micras stamps its build date via __DATE__ (RAS version reporting);
++# 3.14+ adds -Werror=date-time, so relax it just for this module.
++ccflags-y += -Wno-error=date-time
++
+ micras-y := micras_main.o micras_common.o
+ micras-y += micras_core.o micras_uncore.o micras_elog.o
+ micras-$(CONFIG_ML1OM) += micras_knf.o
+diff --git a/ras/micras.h b/ras/micras.h
+index faa3e91..0829346 100644
+--- a/ras/micras.h
++++ b/ras/micras.h
+@@ -380,9 +380,6 @@ extern void	mr_tbox_wq(int, uint32_t, uint64_t);
+ extern uint32_t	rd_cr4_on_cpu(int);
+ extern void	set_in_cr4_on_cpu(int, uint32_t);
+ extern void	clear_in_cr4_on_cpu(int, uint32_t);
+-extern uint64_t	rdtsc(void);
+-
+-
+ /*
+  * General EEPROM and POST card UART access
+  * Located in micras_elog.c
+diff --git a/ras/micras_common.c b/ras/micras_common.c
+index 4011ec0..2d616c4 100644
+--- a/ras/micras_common.c
++++ b/ras/micras_common.c
+@@ -48,6 +48,11 @@
+  * in this module.
+  */
+ 
++#include <linux/cred.h>
++#include <linux/sched/mm.h>
++#include <linux/sched/signal.h>
++#include <linux/sched/loadavg.h>
++#include <linux/user_namespace.h>
+ #include <linux/types.h>
+ #include <linux/errno.h>
+ #include <linux/kernel.h>
+@@ -551,27 +556,28 @@ int
+ mr_get_cutl(void * p)
+ {
+   struct mr_rsp_cutl  * r;
+-  struct timespec	tp;
+-  struct cpu_usage_stat * u;
++  struct timespec64	tp;
++  u64 *u;
+   uint64_t		user, nice, sys, idle;
+   int			i, n;
+ 
+   r = (struct mr_rsp_cutl *) p;
+   memset(r, '\0', sizeof(*r));
+-  r->tck  = ACTHZ;
++  r->tck  = HZ;		/* ACTHZ removed in 3.x; HZ is the tick rate */
+   r->core = clst.count;
+   r->thr  = clst.thr;
+-  ktime_get_ts(&tp);
+-  monotonic_to_bootbased(&tp);
+-  r->jif = timespec_to_jiffies(&tp);
++  /* 3.18 removed monotonic_to_bootbased(); ktime_get_boottime_ts64() is
++   * monotonic + suspended time = boot-based uptime. */
++  ktime_get_boottime_ts64(&tp);
++  r->jif = timespec64_to_jiffies(&tp);
+ 
+   for_each_possible_cpu(i) {
+-    u = & kstat_cpu(i).cpustat;
++    u = kcpustat_cpu(i).cpustat;
+ 
+-    user = u->user;
+-    nice = u->nice;
+-    sys  = u->system + u->irq + u->softirq;
+-    idle = u->idle + u->iowait;
++    user = u[CPUTIME_USER];
++    nice = u[CPUTIME_NICE];
++    sys  = u[CPUTIME_SYSTEM] + u[CPUTIME_IRQ] + u[CPUTIME_SOFTIRQ];
++    idle = u[CPUTIME_IDLE] + u[CPUTIME_IOWAIT];
+ 
+     r->sum.user += user;
+     r->sum.nice += nice;
+@@ -589,7 +595,7 @@ mr_get_cutl(void * p)
+      * The core is included in the per-cpu CpuInfo struct,
+      * and it should be safe to get it from there.
+      */
+-    n = cpu_data(i).cpu_core_id;
++    n = cpu_data(i).topo.core_id;
+     if (n < r->core) {
+       r->cpu[n].user += user;
+       r->cpu[n].nice += nice;
+@@ -625,11 +631,10 @@ mr_get_os(void * p)
+ {
+   struct mr_rsp_os    * r;
+   uint16_t		i;
+-  struct timespec       tp;
++  struct timespec64       tp;
+   struct task_struct  * t;
+ 
+-  ktime_get_ts(&tp);
+-  monotonic_to_bootbased(&tp);
++  ktime_get_boottime_ts64(&tp);  /* 3.18: was ktime_get_ts + monotonic_to_bootbased */
+ 
+   r = (struct mr_rsp_os *) p;
+   memset(r, '\0', sizeof(*r));
+@@ -652,7 +657,7 @@ mr_get_os(void * p)
+   i = 0;
+   rcu_read_lock();
+   for_each_process(t) {
+-    if ((t->flags & (PF_KTHREAD | PF_STARTING | PF_EXITING)) ||
++    if ((t->flags & (PF_KTHREAD | PF_EXITING)) ||
+         (t->group_leader && t->group_leader != t))
+       continue;
+ 
+@@ -673,8 +678,8 @@ mr_get_proc(void * p)
+   struct mr_rsp_proc  * r;
+   struct task_struct  * t, * s;
+   struct mm_struct    * mm;
+-  struct timespec	uptime, start, ts;
+-  cputime_t		utime, stime;
++  struct timespec64	uptime, start, ts;
++  u64			utime, stime;	/* ns since 4.11 */
+   pid_t			pid;
+   int			err, i;
+ 
+@@ -685,7 +690,7 @@ mr_get_proc(void * p)
+ 
+   r = (struct mr_rsp_proc *) p;
+   memset(r, '\0', sizeof(*r));
+-  do_posix_clock_monotonic_gettime(&uptime);
++  ktime_get_ts64(&uptime);
+ 
+   rcu_read_lock();
+   t = pid_task(find_pid_ns(pid, &init_pid_ns), PIDTYPE_PID);
+@@ -695,18 +700,14 @@ mr_get_proc(void * p)
+      */
+     r->pid = pid;
+     strncpy(r->name +1, t->comm, sizeof(r->name) -1);
+-    start = t->start_time;
++    start = ns_to_timespec64(t->start_time);
+     utime = t->utime;
+     stime = t->stime;
+     mm = get_task_mm(t);
+     if (mm) {
+-#ifdef SPLIT_RSS_COUNTING
+-      r->rss = atomic_long_read(& mm->rss_stat.count[MM_FILEPAGES]) +
+-	       atomic_long_read(& mm->rss_stat.count[MM_ANONPAGES]);
+-#else
+-      r->rss = mm->rss_stat.count[MM_FILEPAGES] +
+-	       mm->rss_stat.count[MM_ANONPAGES];
+-#endif
++      /* rss_stat is a percpu_counter array since 6.2 */
++      r->rss = get_mm_counter(mm, MM_FILEPAGES) +
++	       get_mm_counter(mm, MM_ANONPAGES);
+       r->vm = mm->total_vm;
+       mmput(mm);
+     }
+@@ -734,10 +735,10 @@ mr_get_proc(void * p)
+    */
+   if (err > 0) {
+     r->name[0] = strlen(r->name +1);
+-    ts = timespec_sub(uptime, start);
+-    r->etime = timespec_to_ns(&ts) / NSEC_PER_USEC;
+-    r->utime = jiffies_to_usecs(utime);
+-    r->stime = jiffies_to_usecs(stime);
++    ts = timespec64_sub(uptime, start);
++    r->etime = timespec64_to_ns(&ts) / NSEC_PER_USEC;
++    r->utime = div_u64(utime, NSEC_PER_USEC);
++    r->stime = div_u64(stime, NSEC_PER_USEC);
+     r->vm  = r->vm  << (PAGE_SHIFT - 10);
+     r->rss = r->rss << (PAGE_SHIFT - 10);
+   }
+@@ -817,11 +818,11 @@ mr_cmd_pkill(void * p)
+   rcu_read_lock();
+   t = pid_task(find_pid_ns(pid, &init_pid_ns), PIDTYPE_PID);
+   if (t) {
+-    if (!(t->flags & (PF_KTHREAD | PF_STARTING | PF_EXITING)) &&
++    if (!(t->flags & (PF_KTHREAD | PF_EXITING)) &&
+         !(t->group_leader && t->group_leader != t)) {
+ 
+       cred = __task_cred(t);
+-      if (cred->euid >= 500) {
++      if (from_kuid(&init_user_ns, cred->euid) >= 500) {
+         if (!send_sig(sig, t, 1))
+           ret = 0;
+       }
+@@ -854,12 +855,12 @@ mr_cmd_ukill(void * p)
+   ret = 0;
+   rcu_read_lock();
+   for_each_process(t) {
+-    if ((t->flags & (PF_KTHREAD | PF_STARTING | PF_EXITING)) ||
++    if ((t->flags & (PF_KTHREAD | PF_EXITING)) ||
+         (t->group_leader && t->group_leader != t))
+       continue;
+ 
+     cred = __task_cred(t);
+-    if (cred->euid == uid) {
++    if (from_kuid(&init_user_ns, cred->euid) == uid) {
+       ret = send_sig(sig, t, 1);
+       if (ret)
+         break;
+diff --git a/ras/micras_core.c b/ras/micras_core.c
+index 2cdbb4b..1b24663 100644
+--- a/ras/micras_core.c
++++ b/ras/micras_core.c
+@@ -69,6 +69,7 @@
+ #include <linux/cpumask.h>
+ #include <asm/mce.h>
+ #include <asm/apic.h>
++#include <asm/trapnr.h>
+ #include "micras.h"
+ 
+ 
+@@ -187,8 +188,8 @@ extern void (*mca_exc_panic)(struct mce *, char *, char *, int);
+ extern void (*mca_exc_exit)(struct mce *, int, int, int, int);
+ extern int  (*mca_print)(char *, ...);
+ 
+-extern struct mce_log   mcelog;		/* Export from kernel */
+-extern struct mutex     mce_read_mutex;	/* Export from kernel */
++extern struct mce_log_buffer *mcelog;		/* Export from kernel (5.8+: allocated) */
++extern struct mutex     mce_chrdev_read_mutex;	/* Export from kernel */
+ static unsigned		mcc_seen;	/* Last event in kernel log */
+ int			in_sync;	/* Flag when sync'ing */
+ 
+@@ -203,7 +204,7 @@ mcc_conv(struct mce * mce, struct mce_info * mc)
+   mc->org    = mce->bank;
+   mc->id     = mce->extcpu;
+ #ifdef CONFIG_MK1OM
+-  mc->pid    = xlat_cpu[cpu_data(mc->id).apicid];
++  mc->pid    = xlat_cpu[cpu_data(mc->id).topo.apicid];
+ #endif
+   mc->stamp  = mce->time;
+   mc->status = mce->status;
+@@ -550,7 +551,7 @@ mcc_poll(struct mce * mce, uint64_t ctl, int fake)
+ #endif
+ 
+   if (micras_mc_send(&mc, fake))
+-    mcc_seen = mcelog.next;
++    mcc_seen = mcelog->next;
+ 
+   /*
+    * According to MCA HAS the MCI_STATUS_VAL will only
+@@ -659,7 +660,7 @@ mcc_exc_entry(struct mce * mce, int fake, int no_way_out, int entry, char * msg)
+    * other CPUs.
+    */
+   // apic->send_IPI_mask(&mcc_exc_mask, MCE_VECTOR);
+-  apic->send_IPI_allbutself(MCE_VECTOR);
++  apic->send_IPI_allbutself(X86_TRAP_MC);	/* MCE_VECTOR left with the 5.8 IDT rework */
+ }
+ 
+ 
+@@ -732,7 +733,7 @@ mcc_exc_log(struct mce * mce, uint64_t ctl, int fake,
+    * Always notify host and sync to kernel log
+    */
+   if (micras_mc_send(&mc, 1))
+-    mcc_seen = mcelog.next;
++    mcc_seen = mcelog->next;
+ 
+ #if RAS_HALT
+   if ((mc.flags & MC_FLG_FATAL) && !fake)
+@@ -802,7 +803,7 @@ mcc_exc_exit(struct mce * mce, int no_way_out, int worst, int entry, int order)
+   eoi = cpumask_test_and_clear_cpu(cpu, &mcc_exc_mask);
+   smp_wmb();
+   if (eoi)
+-    ack_APIC_irq();
++    apic->eoi();
+ }
+ 
+ 
+@@ -824,7 +825,7 @@ mcc_exc_exit(struct mce * mce, int no_way_out, int worst, int entry, int order)
+  * 'finished' flag says whether mce content is valid or not. The
+  * 'next' field is the index of the first element in the array that
+  * has not been assigned for an MC event. It is incremented when a
+- * new event is entered, and reset to zero on reads to /dev/mcelog.
++ * new event is entered, and reset to zero on reads to /dev/mcelog->
+  * The kernel's event log does not wrap, so it is safe to use it as
+  * an indicator of how many events (finished or not) are in it.
+  * The mcelog's next field is protected by RCU style mechanisms
+@@ -836,7 +837,7 @@ mcc_exc_exit(struct mce * mce, int no_way_out, int worst, int entry, int order)
+  * and the 'finished' flag is set after a wmb() on the mce contents
+  * which means this routine will not clash with the MCE handler.
+  * Collisions with memset() on reads from /dev/mcelog are prevented
+- * by locking of mce_read_mutex.
++ * by locking of mce_chrdev_read_mutex.
+  */
+ 
+ void
+@@ -862,30 +863,30 @@ mcc_sync(void)
+   /*
+    * Lock out kernel log access through /dev/mcelog
+    */
+-  mutex_lock(&mce_read_mutex);
++  mutex_lock(&mce_chrdev_read_mutex);
+ 
+   /*
+    * Start over if the log has been cleared cleared
+    */
+-  if (mcc_seen > mcelog.next)
++  if (mcc_seen > mcelog->next)
+     mcc_seen = 0;
+ 
+-  for(seen = mcc_seen; seen < mcelog.next; seen++) {
++  for(seen = mcc_seen; seen < mcelog->next; seen++) {
+     /*
+      * Basic checks. Index, CPU & bank must be reasonable.
+      */
+-    if (mcelog.entry[seen].finished) {
+-      if (mcelog.entry[seen].cpu >= NR_CPUS ||
+-          mcelog.entry[seen].bank >= 3) {
++    if (mcelog->entry[seen].finished) {
++      if (mcelog->entry[seen].cpu >= NR_CPUS ||
++          mcelog->entry[seen].bank >= 3) {
+ 	printk("mcc_sync: entry %d contains garbage, cpu %d, bank %d\n",
+-			seen, mcelog.entry[seen].cpu, mcelog.entry[seen].bank);
++			seen, mcelog->entry[seen].cpu, mcelog->entry[seen].bank);
+ 	continue;
+       }
+ 
+       /*
+        * Have good entry, can be UC, but it is 'old'.
+        */
+-      mcc_conv(&mcelog.entry[seen], &mc);
++      mcc_conv(&mcelog->entry[seen], &mc);
+       mc.ctl = 0;
+ 
+ #ifdef CONFIG_MK1OM
+@@ -909,12 +910,12 @@ mcc_sync(void)
+         break;
+     }
+   }
+-  mcc_seen = mcelog.next;
++  mcc_seen = mcelog->next;
+ 
+   /*
+    * Done, release lock
+    */
+-  mutex_unlock(&mce_read_mutex);
++  mutex_unlock(&mce_chrdev_read_mutex);
+ }
+ 
+ 
+diff --git a/ras/micras_elog.c b/ras/micras_elog.c
+index 349c4cb..5f36709 100644
+--- a/ras/micras_elog.c
++++ b/ras/micras_elog.c
+@@ -51,6 +51,8 @@
+  * Therefore, a local exception safe driver is included here.
+  */
+ 
++#include <linux/uaccess.h>
++#include <linux/slab.h>
+ #include <linux/types.h>
+ #include <linux/errno.h>
+ #include <linux/kernel.h>
+@@ -2801,12 +2803,12 @@ elog_open(struct inode *inode, struct file *filp)
+   return seq_open(filp, &elog_seq_ops);
+ }
+ 
+-static struct file_operations proc_elog_operations = {
+-  .open           = elog_open,
+-  .read           = seq_read,
+-  .llseek         = seq_lseek,
+-  .release        = seq_release,
+-  .write	  = elog_write,
++static struct proc_ops proc_elog_operations = {
++  .proc_open           = elog_open,
++  .proc_read           = seq_read,
++  .proc_lseek         = seq_lseek,
++  .proc_release        = seq_release,
++  .proc_write	  = elog_write,
+ };
+ 
+ #endif /* EE_PROC */
+@@ -3084,7 +3086,7 @@ ee_init(void)
+         mode = 0644;
+     }
+     if (mode == 0444)
+-      proc_elog_operations.write = 0;
++      proc_elog_operations.proc_write = 0;
+ #endif
+     elog_pe = proc_create("elog", mode, 0, &proc_elog_operations);
+   }
+diff --git a/ras/micras_knc.c b/ras/micras_knc.c
+index 86ec013..1c585d1 100644
+--- a/ras/micras_knc.c
++++ b/ras/micras_knc.c
+@@ -71,6 +71,7 @@
+ #include <linux/jiffies.h>
+ #include <linux/kernel_stat.h>
+ #include <linux/bitmap.h>
++#include <asm/mpspec_def.h>
+ #include <asm/mic/mic_knc/autobaseaddress.h>
+ #include <asm/mic/mic_knc/micsboxdefine.h>
+ #include "micras.h"
+diff --git a/ras/micras_main.c b/ras/micras_main.c
+index 7e92fed..e026b47 100644
+--- a/ras/micras_main.c
++++ b/ras/micras_main.c
+@@ -42,7 +42,9 @@
+  * other one-time tasks.
+  */
+ 
++#include <linux/user_namespace.h>
+ #include <linux/types.h>
++#include <linux/delay.h>
+ #include <linux/ctype.h>
+ #include <linux/errno.h>
+ #include <linux/init.h>
+@@ -439,10 +441,10 @@ die_read(struct file * file, char __user * buff, size_t count, loff_t *ppos)
+ }
+ 
+ 
+-static const struct file_operations proc_die_operations = {
+-  .read           = die_read,
+-  .write	  = die_write,
+-  .llseek         = no_llseek,
++static const struct proc_ops proc_die_operations = {
++  .proc_read           = die_read,
++  .proc_write	  = die_write,
++  .proc_lseek         = no_llseek,
+ };
+ #endif	/* DIE_PROC */
+ #endif	/* WA_4845465 */
+@@ -776,8 +778,8 @@ arr64(uint64_t * arr, int len, char * buf, int siz)
+ 
+ #define _SHOW(op,rec,nam,str...) \
+   static ssize_t \
+-  micras_show_##nam(struct class *class, \
+-  		    struct class_attribute *attr, \
++  micras_show_##nam(const struct class *class, \
++  		    const struct class_attribute *attr, \
+ 		    char *buf) \
+   { \
+     struct mr_rsp_##rec	* r; \
+@@ -932,8 +934,8 @@ _SHOW(OS, os, os, "%llu %llu %llu %llu %u [%s]\n",
+ 
+ #define _STORE(op, nam) \
+   static ssize_t \
+-  micras_store_##nam (struct class *class, \
+-  		     struct class_attribute *attr, \
++  micras_store_##nam (const struct class *class, \
++  		     const struct class_attribute *attr, \
+ 		     const char *buf, \
+ 		     size_t count) \
+   { \
+@@ -943,7 +945,7 @@ _SHOW(OS, os, os, "%llu %llu %llu %llu %u [%s]\n",
+     int			err; \
+     char	      * ep; \
+ \
+-    if (current_euid() != 0) \
++    if (from_kuid(&init_user_ns, current_euid()) != 0) \
+       return -EPERM; \
+ \
+     ocount = count; \
+@@ -1028,10 +1030,19 @@ static struct class_attribute micras_attr[] = {
+ };
+ 
+ 
++/* 4.10: class attributes are passed as attribute groups */
++static struct attribute *micras_attr_ptrs[ARRAY_SIZE(micras_attr)];
++static const struct attribute_group micras_attr_group = {
++  .attrs = micras_attr_ptrs,
++};
++static const struct attribute_group *micras_attr_groups[] = {
++  &micras_attr_group,
++  NULL,
++};
++
+ static struct class ras_class = {
+   .name           = "micras",
+-  .owner	  = THIS_MODULE,
+-  .class_attrs    = micras_attr,
++  .class_groups   = micras_attr_groups,
+ };
+ 
+ 
+@@ -2169,15 +2180,6 @@ clear_in_cr4_on_cpu(int cpu, uint32_t m)
+ }
+ #endif
+ 
+-uint64_t
+-rdtsc(void) {
+-  uint32_t lo, hi;
+-  __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
+-  return ((uint64_t) hi) << 32 | lo;
+-}
+-
+-
+-
+ /*
+ **
+ ** Module load/unload logic
+@@ -2252,6 +2254,11 @@ micras_init(void)
+    * Register top sysfs class (directory) and attach attributes (files)
+    * beneath it. No 'device's involved.
+    */
++  {
++    int _i;
++    for (_i = 0; micras_attr[_i].attr.name; _i++)
++      micras_attr_ptrs[_i] = &micras_attr[_i].attr;
++  }
+   err = class_register(&ras_class);
+   if (err) {
+     printk("RAS.init: cannot register class 'micras', error %d\n", err);
+diff --git a/ras/micras_pm.c b/ras/micras_pm.c
+index 77172aa..3fd84a9 100644
+--- a/ras/micras_pm.c
++++ b/ras/micras_pm.c
+@@ -1004,7 +1004,7 @@ pm_init(void)
+   micpm_atomic_notifier_register(&ras_throttle_event_ns);
+   micpm_notifier_register(&ras_throttle_event);
+ 
+-  if (boot_cpu_data.x86_mask == KNC_C_STEP)
++  if (boot_cpu_data.x86_stepping == KNC_C_STEP)
+     micpm_device_register(&ras_deviceevent);
+ 
+   printk("RAS.pm: init complete\n");
+@@ -1030,7 +1030,7 @@ pm_exit(void)
+   micpm_atomic_notifier_unregister(&ras_throttle_event_ns);
+   micpm_notifier_unregister(&ras_throttle_event);
+ 
+-  if (boot_cpu_data.x86_mask == KNC_C_STEP)
++  if (boot_cpu_data.x86_stepping == KNC_C_STEP)
+     micpm_device_unregister(&ras_deviceevent);
+ 
+   /*
+diff --git a/ras/micras_uncore.c b/ras/micras_uncore.c
+index af1e3a4..3ff9778 100644
+--- a/ras/micras_uncore.c
++++ b/ras/micras_uncore.c
+@@ -57,6 +57,7 @@
+  */
+ 
+ #include <linux/types.h>
++#include <linux/delay.h>
+ #include <linux/errno.h>
+ #include <linux/kernel.h>
+ #include <linux/interrupt.h>
+@@ -67,6 +68,7 @@
+ #include <asm/mic/mic_common.h>
+ #include <asm/mic/mic_knc/autobaseaddress.h>
+ #include <asm/mic/mic_knc/micsboxdefine.h>
++#include <asm/apic.h>
+ #include "micras.h"
+ 
+ 
+@@ -392,7 +394,7 @@ mcu_scan(void)
+        */
+       mc.org = mr->org;
+       mc.id = j;
+-      mc.stamp = get_seconds();
++      mc.stamp = ktime_get_real_seconds();
+       mc.flags = (mc.status & MCI_STATUS_UC) ? MC_FLG_FATAL : 0;
+ 
+       /*
+@@ -695,7 +697,7 @@ mcu_nmi(int cpu)
+ 
+       mc.org = mr->org;
+       mc.id = j;
+-      mc.stamp = get_seconds();
++      mc.stamp = ktime_get_real_seconds();
+       mc.flags = (mc.status & MCI_STATUS_UC) ? MC_FLG_FATAL : 0;
+     
+       micras_mc_send(&mc, 1);
+@@ -868,7 +870,7 @@ invited:
+   eoi = cpumask_test_and_clear_cpu(cpu, &mcu_exc_mask);
+   smp_wmb();
+   if (eoi)
+-    ack_APIC_irq();
++    apic->eoi();
+ 
+   /*
+    * Restore core MCG status and return 1 indicating to the
+@@ -1045,7 +1047,7 @@ mcu_init(void)
+      *   NMI delivery | Destination CPU APIC ID
+      */
+     mcu_cpu = 0;
+-    mcu_redir = PUT_BITS(10, 8, 4) | PUT_BITS(47, 32, (uint64_t) cpu_data(mcu_cpu).apicid);
++    mcu_redir = PUT_BITS(10, 8, 4) | PUT_BITS(47, 32, (uint64_t) cpu_data(mcu_cpu).topo.apicid);
+     mcu_old_redir = mr_sbox_rq(0, SBOX_APICRT16);
+     mr_sbox_wq(0, SBOX_APICRT16, mcu_redir | PUT_BITS(16, 16, 1));
+     mr_sbox_wq(0, SBOX_APICRT16, mcu_redir);
+diff --git a/trace_capture/trace_capture.c b/trace_capture/trace_capture.c
+index 5cf1bfe..4dcc17d 100644
+--- a/trace_capture/trace_capture.c
++++ b/trace_capture/trace_capture.c
+@@ -40,6 +40,7 @@
+  * and dump their state, then dump all physical memeory.
+  */
+ 
++#include <linux/module.h>
+ #include "trace_capture.h"
+ 
+ //#define DEBUG
+diff --git a/vcons/hvc_console.h b/vcons/hvc_console.h
+index 54381eb..cf4c1af 100644
+--- a/vcons/hvc_console.h
++++ b/vcons/hvc_console.h
+@@ -1,3 +1,4 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
+ /*
+  * hvc_console.h
+  * Copyright (C) 2005 IBM Corporation
+@@ -8,20 +9,6 @@
+  * hvc_console header information:
+  *      moved here from arch/powerpc/include/asm/hvconsole.h
+  *      and drivers/char/hvc_console.c
+- *
+- * This program is free software; you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation; either version 2 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program; if not, write to the Free Software
+- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+  */
+ 
+ #ifndef HVC_CONSOLE_H
+@@ -46,12 +33,10 @@
+ #define HVC_ALLOC_TTY_ADAPTERS	8
+ 
+ struct hvc_struct {
++	struct tty_port port;
+ 	spinlock_t lock;
+ 	int index;
+-	struct tty_struct *tty;
+-	int count;
+ 	int do_wakeup;
+-	char *outbuf;
+ 	int outbuf_size;
+ 	int n_outbuf;
+ 	uint32_t vtermno;
+@@ -61,18 +46,27 @@ struct hvc_struct {
+ 	struct winsize ws;
+ 	struct work_struct tty_resize;
+ 	struct list_head next;
+-	struct kref kref; /* ref count & hvc_struct lifetime */
++	unsigned long flags;
++	u8 outbuf[] __aligned(sizeof(long));
+ };
+ 
+ /* implemented by a low level driver */
+ struct hv_ops {
+-	int (*get_chars)(uint32_t vtermno, char *buf, int count);
+-	int (*put_chars)(uint32_t vtermno, const char *buf, int count);
++	ssize_t (*get_chars)(uint32_t vtermno, u8 *buf, size_t count);
++	ssize_t (*put_chars)(uint32_t vtermno, const u8 *buf, size_t count);
++	int (*flush)(uint32_t vtermno, bool wait);
+ 
+ 	/* Callbacks for notification. Called in open, close and hangup */
+ 	int (*notifier_add)(struct hvc_struct *hp, int irq);
+ 	void (*notifier_del)(struct hvc_struct *hp, int irq);
+ 	void (*notifier_hangup)(struct hvc_struct *hp, int irq);
++
++	/* tiocmget/set implementation */
++	int (*tiocmget)(struct hvc_struct *hp);
++	int (*tiocmset)(struct hvc_struct *hp, unsigned int set, unsigned int clear);
++
++	/* Callbacks to handle tty ports */
++	void (*dtr_rts)(struct hvc_struct *hp, bool active);
+ };
+ 
+ /* Register a vterm and a slot index for use as a console (console_init) */
+@@ -83,7 +77,7 @@ extern int hvc_instantiate(uint32_t vtermno, int index,
+ extern struct hvc_struct * hvc_alloc(uint32_t vtermno, int data,
+ 				     const struct hv_ops *ops, int outbuf_size);
+ /* remove a vterm from hvc tty operation (module_exit or hotplug remove) */
+-extern int hvc_remove(struct hvc_struct *hp);
++extern void hvc_remove(struct hvc_struct *hp);
+ 
+ /* data available */
+ int hvc_poll(struct hvc_struct *hp);
+diff --git a/vcons/hvc_mic.c b/vcons/hvc_mic.c
+index 21640c0..858a77e 100644
+--- a/vcons/hvc_mic.c
++++ b/vcons/hvc_mic.c
+@@ -92,13 +92,13 @@ static struct vcons_info vcons_info;
+ static int dbg = 0;
+ 
+ /* Receive data from the host (mic i/p buffer) */
+-static int hvc_mic_get_chars(uint32_t vt, char *buf, int count)
++static ssize_t hvc_mic_get_chars(uint32_t vt, u8 *buf, size_t count)
+ {
+ 	int ret, len, get_count;
+ 
+-	len = micscif_rb_count(&mic_in_buf, count);
+-	get_count = min(len, count);
+-	ret = micscif_rb_get_next(&mic_in_buf, buf, get_count);
++	len = micscif_rb_count(&mic_in_buf, (int)count);
++	get_count = min(len, (int)count);
++	ret = micscif_rb_get_next(&mic_in_buf, (char *)buf, get_count);
+ 	if (ret == get_count)
+ 		micscif_rb_update_read_ptr(&mic_in_buf);
+ 
+@@ -106,14 +106,14 @@ static int hvc_mic_get_chars(uint32_t vt, char *buf, int count)
+ }
+ 
+ /* Send data to the host (mic o/p buffer) */
+-static int hvc_mic_put_chars(uint32_t vt, const char *buf, int count)
++static ssize_t hvc_mic_put_chars(uint32_t vt, const u8 *buf, size_t count)
+ {
+ 	int ret;
+ 	int put_count;
+ 	volatile int *host_status =
+ 		(volatile int *)&vcons_info.mic_hdr->host_status;
+ 	
+-	put_count = min(micscif_rb_space(&mic_out_buf), count);
++	put_count = min(micscif_rb_space(&mic_out_buf), (int)count);
+ 	if (put_count) {
+ 		ret = micscif_rb_write(&mic_out_buf, (void *)buf, put_count);
+ 		BUG_ON(ret);
+@@ -137,7 +137,7 @@ static irqreturn_t hvc_mic_handle_interrupt(int irq, void *dev_id)
+ static int hvc_mic_notifier_add_irq(struct hvc_struct *hp, int irq)
+ {
+ 	int ret = request_irq(get_sbox_irq(HVC_SBOX_INT_IDX),
+-				hvc_mic_handle_interrupt, IRQF_DISABLED,
++				hvc_mic_handle_interrupt, 0,
+ 				"hvc intr", hp);
+ 	if (ret) {
+ 		printk("Unable to register interrupt\n");
+@@ -221,7 +221,7 @@ static int __init hvc_mic_init(void)
+ 		vcons_info.mic_hdr = (struct vcons_mic_header *)hvc_buf;
+ 	}
+ 
+-	vcons_info.hdr = hdr = ioremap_nocache(vcons_hdr_addr, 
++	vcons_info.hdr = hdr = ioremap(vcons_hdr_addr, 
+ 			sizeof(struct vcons_buf));
+ 	if (!hdr) {
+ 		printk(KERN_ERR "unable to map vcons header\n");
+@@ -251,7 +251,7 @@ static int __init hvc_mic_init(void)
+ 	}
+ 	memcpy_fromio(&tmp_hdr, hdr, sizeof(struct vcons_buf));
+ 
+-	if (!(vcons_info.vcons_op_buf = ioremap_nocache(tmp_hdr.o_buf_dma_addr, 
++	if (!(vcons_info.vcons_op_buf = ioremap(tmp_hdr.o_buf_dma_addr, 
+ 							tmp_hdr.o_size))) {
+ 		printk(KERN_ERR "unable to map vcons output buffer\n");
+ 		err = -ENOMEM;
+diff --git a/virtio/Kbuild b/virtio/Kbuild
+index a0033e5..aec0323 100644
+--- a/virtio/Kbuild
++++ b/virtio/Kbuild
+@@ -1,2 +1,16 @@
+ obj-m += mic_virtblk.o
+ 
++# Adapt to virtio API changes across the 3.2->3.4 range (probe kernel headers precisely).
++ifneq ($(shell sed -n '/vring_new_virtqueue(/,/);/p' $(srctree)/include/linux/virtio_ring.h 2>/dev/null | grep -c weak_barriers),0)
++ccflags-y += -DHAVE_VRING_WEAK_BARRIERS
++endif
++ifneq ($(shell grep -c virtqueue_add_buf $(srctree)/include/linux/virtio.h 2>/dev/null),0)
++ccflags-y += -DHAVE_VIRTQUEUE_ADD_BUF
++endif
++
++ifneq ($(shell grep -c virtio_config_val $(srctree)/include/linux/virtio_config.h 2>/dev/null),0)
++ccflags-y += -DHAVE_VIRTIO_CONFIG_VAL
++endif
++ifneq ($(shell sed -n '/int virtqueue_add_buf(/,/);/p' $(srctree)/include/linux/virtio.h 2>/dev/null | grep -c 'gfp_t gfp'),0)
++ccflags-y += -DHAVE_VQ_ADD_BUF_GFP
++endif
+diff --git a/virtio/mic_virtblk.c b/virtio/mic_virtblk.c
+index 356b48f..d6f2e31 100644
+--- a/virtio/mic_virtblk.c
++++ b/virtio/mic_virtblk.c
+@@ -23,13 +23,18 @@
+  * the file called "COPYING".
+  */
+ //#define DEBUG
++#include <linux/module.h>
+ #include <linux/spinlock.h>
+ #include <linux/slab.h>
+ #include <linux/blkdev.h>
++#include <linux/blk-mq.h>
+ #include <linux/hdreg.h>
+ #include <linux/virtio.h>
+ #include <linux/virtio_ring.h>
+ #include <linux/virtio_blk.h>
++#ifndef VIRTIO_BLK_F_FLUSH
++#define VIRTIO_BLK_F_FLUSH 9
++#endif
+ #include <linux/scatterlist.h>
+ #include <linux/list.h>
+ #include "mic_common.h"
+@@ -55,82 +60,41 @@ static mic_data_t virtblk_mic_data;
+ struct virtio_blk
+ {
+ 	spinlock_t lock;
+-
+ 	struct virtio_device *vdev;
+ 	struct virtqueue *vq;
+-
+-	/* The disk structure for the kernel. */
+ 	struct gendisk *disk;
+-
+-	/* Request tracking. */
+-	struct list_head reqs;
+-
+-	mempool_t *pool;
+-
+-	/* virtual address of blk_config */
++	struct blk_mq_tag_set tag_set;
+ 	void __iomem *ioaddr;
+-
+-	/* What host tells us, plus 2 for header & tailer. */
+ 	unsigned int sg_elems;
+-
+-	/* sbox va */
+ 	u8 *sbox;
+-
+-	/* Scatterlist: can be too big for stack. */
+-	struct scatterlist sg[/*sg_elems*/];
+ };
+ 
++/* per-request PDU (blk_mq_rq_to_pdu) */
+ struct virtblk_req
+ {
+-	struct list_head list;
+-	struct request *req;
+ 	struct virtio_blk_outhdr out_hdr;
+-	struct virtio_scsi_inhdr in_hdr;
+ 	u8 status;
++	struct scatterlist sg[];
+ };
+ 
+-#define blk_pc_request(rq)     ((rq)->cmd_type == REQ_TYPE_BLOCK_PC)
+-
+-/* The following vring_virtqueue and to_vvq() are copied from virtio_ring.c. Please name sure you have the same structure
+-   as in virtio_ring.c. The reason why they are copied is that I don't want to change virtio_ring.c which is a symbolic link.
+-*/
+-struct vring_virtqueue
++static inline blk_status_t virtblk_result(struct virtblk_req *vbr)
+ {
+-	struct virtqueue vq;
+-
+-	/* Actual memory layout for this queue */
+-	struct vring vring;
+-
+-	/* Other side has made a mess, don't try any more. */
+-	bool broken;
+-
+-	/* Host supports indirect buffers */
+-	bool indirect;
+-
+-	/* Number of free buffers */
+-	unsigned int num_free;
+-	/* Head of free buffer list. */
+-	unsigned int free_head;
+-	/* Number we've added since last sync. */
+-	unsigned int num_added;
+-
+-	/* Last used index we've seen. */
+-	u16 last_used_idx;
+-
+-	/* How to notify other side. FIXME: commonalize hcalls! */
+-	void (*notify)(struct virtqueue *vq);
+-
+-#ifdef DEBUG
+-	/* They're supposed to lock for us. */
+-	unsigned int in_use;
+-#endif
++	switch (vbr->status) {
++	case VIRTIO_BLK_S_OK:
++		return BLK_STS_OK;
++	case VIRTIO_BLK_S_UNSUPP:
++		return BLK_STS_NOTSUPP;
++	default:
++		return BLK_STS_IOERR;
++	}
++}
+ 
+-	struct _mic_ctx_t *mic_ctx;
+-	/* Tokens for callbacks. */
+-	void *data[];
+-};
++static void virtblk_request_done(struct request *req)
++{
++	struct virtblk_req *vbr = blk_mq_rq_to_pdu(req);
+ 
+-#define to_vvq(_vq) container_of(_vq, struct vring_virtqueue, vq)
++	blk_mq_end_request(req, virtblk_result(vbr));
++}
+ 
+ static void blk_done(struct virtqueue *vq)
+ {
+@@ -140,140 +104,124 @@ static void blk_done(struct virtqueue *vq)
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&vblk->lock, flags);
+-	while ((vbr = virtqueue_get_buf(vblk->vq, &len)) != NULL) {
+-		int error;
+-
+-		switch (vbr->status) {
+-		case VIRTIO_BLK_S_OK:
+-			error = 0;
+-			break;
+-		case VIRTIO_BLK_S_UNSUPP:
+-			error = -ENOTTY;
+-			break;
+-		default:
+-			error = -EIO;
+-			break;
+-		}
+-
+-		if (blk_pc_request(vbr->req)) {
+-			vbr->req->resid_len = vbr->in_hdr.residual;
+-			vbr->req->sense_len = vbr->in_hdr.sense_len;
+-			vbr->req->errors = vbr->in_hdr.errors;
+-		}
+-
+-		__blk_end_request_all(vbr->req, error);
+-		list_del(&vbr->list);
+-		mempool_free(vbr, vblk->pool);
+-	}
+-	/* In case queue is stopped waiting for more buffers. */
+-	blk_start_queue(vblk->disk->queue);
++	while ((vbr = virtqueue_get_buf(vblk->vq, &len)) != NULL)
++		blk_mq_complete_request(blk_mq_rq_from_pdu(vbr));
++	/* a queue_rq that ran out of ring descriptors stopped the hw queue */
++	blk_mq_start_stopped_hw_queues(vblk->disk->queue, true);
+ 	spin_unlock_irqrestore(&vblk->lock, flags);
+ }
+ 
+-static bool do_req(struct request_queue *q, struct virtio_blk *vblk,
+-		   struct request *req)
++static int virtblk_add_req(struct virtio_blk *vblk, struct virtblk_req *vbr,
++			   struct scatterlist *data_sg, bool have_data)
+ {
+-	unsigned long num, out = 0, in = 0;
+-	struct virtblk_req *vbr;
+-
+-	vbr = mempool_alloc(vblk->pool, GFP_ATOMIC);
+-	if (!vbr)
+-		/* When another request finishes we'll try again. */
+-		return false;
+-
+-	vbr->req = req;
+-
+-	if (req->cmd_flags & REQ_FLUSH) {
+-		vbr->out_hdr.type = VIRTIO_BLK_T_FLUSH;
+-		vbr->out_hdr.sector = 0;
+-		vbr->out_hdr.ioprio = req_get_ioprio(vbr->req);
+-	} else {
+-		switch (req->cmd_type) {
+-		case REQ_TYPE_FS:
+-			vbr->out_hdr.type = 0;
+-			vbr->out_hdr.sector = blk_rq_pos(vbr->req);
+-			vbr->out_hdr.ioprio = req_get_ioprio(vbr->req);
+-			break;
+-		case REQ_TYPE_BLOCK_PC:
+-			vbr->out_hdr.type = VIRTIO_BLK_T_SCSI_CMD;
+-			vbr->out_hdr.sector = 0;
+-			vbr->out_hdr.ioprio = req_get_ioprio(vbr->req);
+-			break;
+-		case REQ_TYPE_SPECIAL:
+-			vbr->out_hdr.type = VIRTIO_BLK_T_GET_ID;
+-			vbr->out_hdr.sector = 0;
+-			vbr->out_hdr.ioprio = req_get_ioprio(vbr->req);
+-			break;
+-		default:
+-			/* We don't put anything else in the queue. */
+-			BUG();
+-		}
++	struct scatterlist hdr, status, *sgs[3];
++	unsigned int num_out = 0, num_in = 0;
++
++	sg_init_one(&hdr, &vbr->out_hdr, sizeof(vbr->out_hdr));
++	sgs[num_out++] = &hdr;
++	if (have_data) {
++		if (vbr->out_hdr.type & VIRTIO_BLK_T_OUT)
++			sgs[num_out++] = data_sg;
++		else
++			sgs[num_out + num_in++] = data_sg;
+ 	}
++	sg_init_one(&status, &vbr->status, sizeof(vbr->status));
++	sgs[num_out + num_in++] = &status;
+ 
+-	sg_set_buf(&vblk->sg[out++], &vbr->out_hdr, sizeof(vbr->out_hdr));
++	return virtqueue_add_sgs(vblk->vq, sgs, num_out, num_in, vbr, GFP_ATOMIC);
++}
+ 
+-	/*
+-	 * If this is a packet command we need a couple of additional headers.
+-	 * Behind the normal outhdr we put a segment with the scsi command
+-	 * block, and before the normal inhdr we put the sense data and the
+-	 * inhdr with additional status information before the normal inhdr.
+-	 */
+-	if (blk_pc_request(vbr->req))
+-		sg_set_buf(&vblk->sg[out++], vbr->req->cmd, vbr->req->cmd_len);
++static blk_status_t virtblk_queue_rq(struct blk_mq_hw_ctx *hctx,
++				     const struct blk_mq_queue_data *bd)
++{
++	struct virtio_blk *vblk = hctx->queue->queuedata;
++	struct request *req = bd->rq;
++	struct virtblk_req *vbr = blk_mq_rq_to_pdu(req);
++	unsigned long flags;
++	unsigned int num;
++	bool notify = false;
++	int err;
+ 
+-	num = blk_rq_map_sg(q, vbr->req, vblk->sg + out);
++	BUG_ON(req->nr_phys_segments + 2 > vblk->sg_elems);
+ 
+-	if (blk_pc_request(vbr->req)) {
+-		sg_set_buf(&vblk->sg[num + out + in++], vbr->req->sense, 96);
+-		sg_set_buf(&vblk->sg[num + out + in++], &vbr->in_hdr,
+-			   sizeof(vbr->in_hdr));
++	switch (req_op(req)) {
++	case REQ_OP_READ:
++	case REQ_OP_WRITE:
++		vbr->out_hdr.type = 0;
++		vbr->out_hdr.sector = blk_rq_pos(req);
++		break;
++	case REQ_OP_FLUSH:
++		vbr->out_hdr.type = VIRTIO_BLK_T_FLUSH;
++		vbr->out_hdr.sector = 0;
++		break;
++	case REQ_OP_DRV_IN:
++		vbr->out_hdr.type = VIRTIO_BLK_T_GET_ID;
++		vbr->out_hdr.sector = 0;
++		break;
++	default:
++		WARN_ON_ONCE(1);
++		return BLK_STS_IOERR;
+ 	}
++	vbr->out_hdr.ioprio = req_get_ioprio(req);
+ 
+-	sg_set_buf(&vblk->sg[num + out + in++], &vbr->status,
+-		   sizeof(vbr->status));
++	blk_mq_start_request(req);
+ 
++	num = blk_rq_map_sg(req, vbr->sg);	/* 6.14: no queue arg */
+ 	if (num) {
+-		if (rq_data_dir(vbr->req) == WRITE) {
++		if (rq_data_dir(req) == WRITE)
+ 			vbr->out_hdr.type |= VIRTIO_BLK_T_OUT;
+-			out += num;
+-		} else {
++		else
+ 			vbr->out_hdr.type |= VIRTIO_BLK_T_IN;
+-			in += num;
+-		}
+ 	}
+ 
+-	if (virtqueue_add_buf(vblk->vq, vblk->sg, out, in, vbr) < 0) {
+-		mempool_free(vbr, vblk->pool);
+-		return false;
++	spin_lock_irqsave(&vblk->lock, flags);
++	err = virtblk_add_req(vblk, vbr, vbr->sg, num != 0);
++	if (err) {
++		blk_mq_stop_hw_queue(hctx);
++		spin_unlock_irqrestore(&vblk->lock, flags);
++		if (err == -ENOSPC)
++			return BLK_STS_DEV_RESOURCE;
++		return BLK_STS_IOERR;
+ 	}
++	if (bd->last && virtqueue_kick_prepare(vblk->vq))
++		notify = true;
++	spin_unlock_irqrestore(&vblk->lock, flags);
+ 
+-	list_add_tail(&vbr->list, &vblk->reqs);
+-	return true;
++	if (notify)
++		virtqueue_notify(vblk->vq);
++	return BLK_STS_OK;
+ }
+ 
+-static void do_virtblk_request(struct request_queue *q)
++static void virtblk_commit_rqs(struct blk_mq_hw_ctx *hctx)
+ {
+-	struct virtio_blk *vblk = q->queuedata;
+-	struct request *req;
+-	unsigned int issued = 0;
+-
+-	while ((req = blk_peek_request(q)) != NULL) {
+-		BUG_ON(req->nr_phys_segments + 2 > vblk->sg_elems);
+-
+-		/* If this request fails, stop queue and wait for something to
+-		   finish to restart it. */
+-		if (!do_req(q, vblk, req)) {
+-			blk_stop_queue(q);
+-			break;
+-		}
+-		blk_start_request(req);
+-		issued++;
+-	}
++	struct virtio_blk *vblk = hctx->queue->queuedata;
++	unsigned long flags;
++	bool kick;
+ 
+-	if (issued)
+-		virtqueue_kick(vblk->vq);
++	spin_lock_irqsave(&vblk->lock, flags);
++	kick = virtqueue_kick_prepare(vblk->vq);
++	spin_unlock_irqrestore(&vblk->lock, flags);
++	if (kick)
++		virtqueue_notify(vblk->vq);
+ }
+ 
++static int virtblk_init_request(struct blk_mq_tag_set *set, struct request *rq,
++				unsigned int hctx_idx, unsigned int numa_node)
++{
++	struct virtio_blk *vblk = set->driver_data;
++	struct virtblk_req *vbr = blk_mq_rq_to_pdu(rq);
++
++	sg_init_table(vbr->sg, vblk->sg_elems);
++	return 0;
++}
++
++static const struct blk_mq_ops virtio_mq_ops = {
++	.queue_rq	= virtblk_queue_rq,
++	.commit_rqs	= virtblk_commit_rqs,
++	.complete	= virtblk_request_done,
++	.init_request	= virtblk_init_request,
++};
++
+ static int
+ set_capacity_from_host(struct virtio_blk *vblk)
+ {
+@@ -300,34 +248,33 @@ set_capacity_from_host(struct virtio_blk *vblk)
+ }
+ 
+ static int
+-virtblk_open(struct block_device *bdev, fmode_t mode)
++virtblk_open(struct gendisk *disk, blk_mode_t mode)	/* 6.5: gendisk + blk_mode_t */
+ {
+-	struct gendisk *disk = bdev->bd_disk;
+ 	struct virtio_blk *vblk = disk->private_data;
+ 
+ 	return set_capacity_from_host(vblk);
+ }
+ 
+-static int virtblk_ioctl(struct block_device *bdev, fmode_t mode,
+-			 unsigned cmd, unsigned long data)
++#ifndef HAVE_VIRTIO_CONFIG_VAL
++/* 3.14 removed virtio_config_val(); reimplement it via the low-level
++ * config->get accessor (still present), preserving the old semantics:
++ * read the field only if the feature bit is set, else return -ENOENT. */
++#define virtio_config_val(vdev, fbit, offset, valp) \
++	__mic_virtio_config_val((vdev), (fbit), (offset), (valp), sizeof(*(valp)))
++static inline int __mic_virtio_config_val(struct virtio_device *vdev,
++		unsigned int fbit, unsigned int offset, void *buf, unsigned len)
+ {
+-	struct gendisk *disk = bdev->bd_disk;
+-	struct virtio_blk *vblk = disk->private_data;
+-
+-	/*
+-	 * Only allow the generic SCSI ioctls if the host can support it.
+-	 */
+-	if (!virtio_has_feature(vblk->vdev, VIRTIO_BLK_F_SCSI))
+-		return -ENOTTY;
+-
+-	return scsi_cmd_ioctl(disk->queue, disk, mode, cmd,
+-			      (void __user *)data);
++	if (!virtio_has_feature(vdev, fbit))
++		return -ENOENT;
++	vdev->config->get(vdev, offset, buf, len);
++	return 0;
+ }
++#endif
+ 
+ /* We provide getgeo only to please some old bootloader/partitioning tools */
+-static int virtblk_getgeo(struct block_device *bd, struct hd_geometry *geo)
++static int virtblk_getgeo(struct gendisk *disk, struct hd_geometry *geo)	/* 6.15: gendisk */
+ {
+-	struct virtio_blk *vblk = bd->bd_disk->private_data;
++	struct virtio_blk *vblk = disk->private_data;
+ 	struct virtio_blk_geometry vgeo;
+ 	int err;
+ 
+@@ -344,14 +291,13 @@ static int virtblk_getgeo(struct block_device *bd, struct hd_geometry *geo)
+ 		/* some standard values, similar to sd */
+ 		geo->heads = 1 << 6;
+ 		geo->sectors = 1 << 5;
+-		geo->cylinders = get_capacity(bd->bd_disk) >> 11;
++		geo->cylinders = get_capacity(disk) >> 11;
+ 	}
+ 	return 0;
+ }
+ 
+ static const struct block_device_operations virtblk_fops = {
+ 	.open = virtblk_open,
+-	.ioctl = virtblk_ioctl,
+ 	.owner  = THIS_MODULE,
+ 	.getgeo = virtblk_getgeo,
+ };
+@@ -361,36 +307,18 @@ static int index_to_minor(int index)
+ 	return index << PART_BITS;
+ }
+  
+-static inline bool more_used(const struct vring_virtqueue *vq)
+-{
+-  return vq->last_used_idx != vq->vring.used->idx;
+-}
+-
+ static irqreturn_t
+ mic_virtblk_intr_handler(int irq, void *_vq)
+ {
+-	struct vring_virtqueue *vq = to_vvq(_vq);
+-
+-	if (!more_used(vq)) {
+-		pr_debug("virtqueue interrupt with no work for %p\n", vq);
+-		goto _exit_;
+-	}
+-
+-	if (unlikely(vq->broken))
+-		goto _exit_;
+-
+-	pr_debug("virtqueue callback for %p (%p)\n", vq, vq->vq.callback);
+-	if (vq->vq.callback)
+-		vq->vq.callback(&vq->vq);
+-
+- _exit_:
+-	return IRQ_HANDLED;
++	/* The core knows the vring layout; a private copy of it went stale. */
++	return vring_interrupt(irq, _vq);
+ }
+ 
+-static int __devinit virtblk_probe(struct virtio_device *vdev)
++static int virtblk_probe(struct virtio_device *vdev)
+ {
+ 	struct virtio_blk *vblk;
+ 	struct request_queue *q;
++	struct queue_limits lim;
+ 	int err;
+ 	u32 v, blk_size, sg_elems, opt_io_size;
+ 	u16 min_io_size;
+@@ -402,7 +330,7 @@ static int __devinit virtblk_probe(struct virtio_device *vdev)
+ 		return -ENOSPC;
+ 
+ 	vb_shared = ((struct mic_virtblk *)bd_info->bi_virtio)->vb_shared;
+-	vdev->features[0] = readl(&vb_shared->host_features);
++	vdev->features = readl(&vb_shared->host_features) & ~(1U << VIRTIO_RING_F_EVENT_IDX);
+ 
+ 	/* We need to know how many segments before we allocate. */
+ 	err = virtio_config_val(vdev, VIRTIO_BLK_F_SEG_MAX,
+@@ -413,21 +341,18 @@ static int __devinit virtblk_probe(struct virtio_device *vdev)
+ 
+ 	/* We need an extra sg elements at head and tail. */
+ 	sg_elems += 2;
+-	vdev->priv = vblk = kmalloc(sizeof(*vblk) +
+-				    sizeof(vblk->sg[0]) * sg_elems, GFP_KERNEL);
++	vdev->priv = vblk = kmalloc(sizeof(*vblk), GFP_KERNEL);
+ 	if (!vblk) {
+ 		err = -ENOMEM;
+ 		goto out;
+ 	}
+ 
+-	INIT_LIST_HEAD(&vblk->reqs);
+ 	spin_lock_init(&vblk->lock);
+ 	vblk->vdev = vdev;
+ 	vblk->sg_elems = sg_elems;
+-	sg_init_table(vblk->sg, vblk->sg_elems);
+ 
+ 	/* map sbox */
+-	vblk->sbox = ioremap_nocache(SBOX_BASE, SBOX_MMIO_LENGTH);
++	vblk->sbox = ioremap(SBOX_BASE, SBOX_MMIO_LENGTH);
+ 	if (!vblk->sbox) {
+ 		printk(KERN_ERR "%s: NULL SBOX ptr\n", __func__);
+ 		err = -ENOMEM;
+@@ -442,129 +367,126 @@ static int __devinit virtblk_probe(struct virtio_device *vdev)
+ 	}
+ 
+ 	if ((err = request_irq(get_sbox_irq(VIRTIO_SBOX_INT_IDX),
+-						   mic_virtblk_intr_handler, IRQF_DISABLED,
++						   mic_virtblk_intr_handler, 0,
+ 						   "virtio intr", vblk->vq))) {
+ 		printk(KERN_ERR "%s: can't register interrupt: %d\n", __func__, err);
+ 		goto out_free_vq;
+ 	}
+ 
+-	vblk->pool = mempool_create_kmalloc_pool(1,sizeof(struct virtblk_req));
+-	if (!vblk->pool) {
+-		err = -ENOMEM;
+-		goto out_free_irq;
+-	}
+-
+-	/* FIXME: How many partitions?  How long is a piece of string? */
+-	vblk->disk = alloc_disk(1 << PART_BITS);
+-	if (!vblk->disk) {
+-		err = -ENOMEM;
+-		goto out_mempool;
+-	}
+-
+-	q = vblk->disk->queue = blk_init_queue(do_virtblk_request, &vblk->lock);
+-	if (!q) {
+-		err = -ENOMEM;
+-		goto out_put_disk;
+-	}
+-
+-	q->queuedata = vblk;
+-
+-	if (index < 26) {
+-		sprintf(vblk->disk->disk_name, "vd%c", 'a' + index % 26);
+-	} else if (index < (26 + 1) * 26) {
+-		sprintf(vblk->disk->disk_name, "vd%c%c",
+-			'a' + index / 26 - 1, 'a' + index % 26);
+-	} else {
+-		const unsigned int m1 = (index / 26 - 1) / 26 - 1;
+-		const unsigned int m2 = (index / 26 - 1) % 26;
+-		const unsigned int m3 =  index % 26;
+-		sprintf(vblk->disk->disk_name, "vd%c%c%c",
+-			'a' + m1, 'a' + m2, 'a' + m3);
+-	}
+-
+-	vblk->disk->major = major;
+-	vblk->disk->first_minor = index_to_minor(index);
+-	vblk->disk->private_data = vblk;
+-	vblk->disk->fops = &virtblk_fops;
+-	vblk->disk->driverfs_dev = NULL;  // There is no parent device.
+-	index++;
+-
+-	/* configure queue flush support */
+-	if (virtio_has_feature(vdev, VIRTIO_BLK_F_FLUSH))
+-		blk_queue_flush(q, REQ_FLUSH);
+-
+-	/* If disk is read-only in the host, the guest should obey */
+-	if (virtio_has_feature(vdev, VIRTIO_BLK_F_RO)) {
+-	  if (vdev->config->get_features(vdev) & (1U << VIRTIO_BLK_F_RO)) {
+-		set_disk_ro(vblk->disk, 1);
+-	  }
+-	}
+-
+-	err = set_capacity_from_host(vblk);
++	memset(&vblk->tag_set, 0, sizeof(vblk->tag_set));
++	vblk->tag_set.ops = &virtio_mq_ops;
++	vblk->tag_set.queue_depth = VIRTQUEUE_LENGTH;
++	vblk->tag_set.numa_node = NUMA_NO_NODE;
++	vblk->tag_set.flags = 0;	/* BLK_MQ_F_SHOULD_MERGE is the default since 6.13 */
++	vblk->tag_set.cmd_size = sizeof(struct virtblk_req) +
++				 sizeof(struct scatterlist) * sg_elems;
++	vblk->tag_set.driver_data = vblk;
++	vblk->tag_set.nr_hw_queues = 1;
++	err = blk_mq_alloc_tag_set(&vblk->tag_set);
+ 	if (err)
+-		goto out_put_disk;
++		goto out_free_irq;
+ 
++	/* 6.9+: queue limits are handed to blk_mq_alloc_disk(); the blk_queue_*
++	 * setters are gone (6.11). */
++	memset(&lim, 0, sizeof(lim));
+ 	/* We can handle whatever the host told us to handle. */
+-	blk_queue_max_segments(q, vblk->sg_elems-2);
+-
+-	/* No need to bounce any requests */
+-	blk_queue_bounce_limit(q, BLK_BOUNCE_ANY);
+-
++	lim.max_segments = vblk->sg_elems - 2;
+ 	/* No real sector limit. */
+-	blk_queue_max_hw_sectors(q, -1U);
++	lim.max_hw_sectors = UINT_MAX;
+ 
+ 	/* Host can optionally specify maximum segment size and number of
+ 	 * segments. */
+ 	err = virtio_config_val(vdev, VIRTIO_BLK_F_SIZE_MAX,
+ 				offsetof(struct virtio_blk_config, size_max),
+ 				&v);
+-	if (!err)
+-		blk_queue_max_segment_size(q, v);
+-	else
+-		blk_queue_max_segment_size(q, -1U);
++	lim.max_segment_size = err ? UINT_MAX : v;
+ 
+ 	/* Host can optionally specify the block size of the device */
+ 	err = virtio_config_val(vdev, VIRTIO_BLK_F_BLK_SIZE,
+ 				offsetof(struct virtio_blk_config, blk_size),
+ 				&blk_size);
+ 	if (!err)
+-		blk_queue_logical_block_size(q, blk_size);
++		lim.logical_block_size = blk_size;
+ 	else
+-		blk_size = queue_logical_block_size(q);
++		blk_size = 512;
+ 
+ 	/* Use topology information if available */
+ 	err = virtio_config_val(vdev, VIRTIO_BLK_F_TOPOLOGY,
+ 			offsetof(struct virtio_blk_config, physical_block_exp),
+ 			&physical_block_exp);
+ 	if (!err && physical_block_exp)
+-		blk_queue_physical_block_size(q,
+-				blk_size * (1 << physical_block_exp));
++		lim.physical_block_size = blk_size * (1 << physical_block_exp);
+ 
+ 	err = virtio_config_val(vdev, VIRTIO_BLK_F_TOPOLOGY,
+ 			offsetof(struct virtio_blk_config, alignment_offset),
+ 			&alignment_offset);
+ 	if (!err && alignment_offset)
+-		blk_queue_alignment_offset(q, blk_size * alignment_offset);
++		lim.alignment_offset = blk_size * alignment_offset;
+ 
+ 	err = virtio_config_val(vdev, VIRTIO_BLK_F_TOPOLOGY,
+ 			offsetof(struct virtio_blk_config, min_io_size),
+ 			&min_io_size);
+ 	if (!err && min_io_size)
+-		blk_queue_io_min(q, blk_size * min_io_size);
++		lim.io_min = blk_size * min_io_size;
+ 
+ 	err = virtio_config_val(vdev, VIRTIO_BLK_F_TOPOLOGY,
+ 			offsetof(struct virtio_blk_config, opt_io_size),
+ 			&opt_io_size);
+ 	if (!err && opt_io_size)
+-		blk_queue_io_opt(q, blk_size * opt_io_size);
++		lim.io_opt = blk_size * opt_io_size;
++
++	/* configure queue flush support */
++	if (virtio_has_feature(vdev, VIRTIO_BLK_F_FLUSH))
++		lim.features |= BLK_FEAT_WRITE_CACHE;
++
++	/* FIXME: How many partitions?  How long is a piece of string? */
++	vblk->disk = blk_mq_alloc_disk(&vblk->tag_set, &lim, vblk);
++	if (IS_ERR(vblk->disk)) {
++		err = PTR_ERR(vblk->disk);
++		goto out_free_tags;
++	}
++	vblk->disk->minors = 1 << PART_BITS;
++	q = vblk->disk->queue;
++
++	if (index < 26) {
++		sprintf(vblk->disk->disk_name, "vd%c", 'a' + index % 26);
++	} else if (index < (26 + 1) * 26) {
++		sprintf(vblk->disk->disk_name, "vd%c%c",
++			'a' + index / 26 - 1, 'a' + index % 26);
++	} else {
++		const unsigned int m1 = (index / 26 - 1) / 26 - 1;
++		const unsigned int m2 = (index / 26 - 1) % 26;
++		const unsigned int m3 =  index % 26;
++		sprintf(vblk->disk->disk_name, "vd%c%c%c",
++			'a' + m1, 'a' + m2, 'a' + m3);
++	}
++
++	vblk->disk->major = major;
++	vblk->disk->first_minor = index_to_minor(index);
++	vblk->disk->private_data = vblk;
++	vblk->disk->fops = &virtblk_fops;
++	index++;
+ 
+-	add_disk(vblk->disk);
++	/* If disk is read-only in the host, the guest should obey */
++	if (virtio_has_feature(vdev, VIRTIO_BLK_F_RO)) {
++	  if (vdev->config->get_features(vdev) & (1U << VIRTIO_BLK_F_RO)) {
++		set_disk_ro(vblk->disk, 1);
++	  }
++	}
++
++	err = set_capacity_from_host(vblk);
++	if (err)
++		goto out_cleanup_disk;
++
++	err = add_disk(vblk->disk);
++	if (err)
++		goto out_cleanup_disk;
+ 	return 0;
+ 
+-out_put_disk:
++out_cleanup_disk:
+ 	put_disk(vblk->disk);
+-out_mempool:
+-	mempool_destroy(vblk->pool);
++out_free_tags:
++	blk_mq_free_tag_set(&vblk->tag_set);
+ out_free_irq:
+ 	free_irq(get_sbox_irq(VIRTIO_SBOX_INT_IDX), vblk->vq);
+ out_free_vq:
+@@ -577,12 +499,11 @@ out:
+ 	return err;
+ }
+ 
+-static void __devexit virtblk_remove(struct virtio_device *vdev)
++static void virtblk_remove(struct virtio_device *vdev)
+ {
+ 	struct virtio_blk *vblk = vdev->priv;
+ 
+ 	/* Nothing should be pending. */
+-	BUG_ON(!list_empty(&vblk->reqs));
+ 
+ 	free_irq(get_sbox_irq(VIRTIO_SBOX_INT_IDX), vblk->vq);
+ 
+@@ -590,16 +511,15 @@ static void __devexit virtblk_remove(struct virtio_device *vdev)
+ 	vdev->config->reset(vdev);
+ 
+ 	del_gendisk(vblk->disk);
+-	blk_cleanup_queue(vblk->disk->queue);
+ 	put_disk(vblk->disk);
+-	mempool_destroy(vblk->pool);
++	blk_mq_free_tag_set(&vblk->tag_set);
+ 	vdev->config->del_vqs(vdev);
+ 	iounmap(vblk->sbox);
+ 	kfree(vblk);
+ }
+ 
+ /* config->get_features() implementation */
+-static u32 virtblk_get_features(struct virtio_device *vdev)
++static u64 virtblk_get_features(struct virtio_device *vdev)
+ {
+ 	/* When someone needs more than 32 feature bits, we'll need to
+ 	 * steal a bit to indicate that the rest are somewhere else. */
+@@ -607,11 +527,11 @@ static u32 virtblk_get_features(struct virtio_device *vdev)
+ 	struct vb_shared *vb_shared;
+ 
+ 	vb_shared = ((struct mic_virtblk *)bd_info->bi_virtio)->vb_shared;
+-	return readl(&vb_shared->host_features);
++	return readl(&vb_shared->host_features) & ~(1U << VIRTIO_RING_F_EVENT_IDX);
+ }
+ 
+ /* virtio config->finalize_features() implementation */
+-static void virtblk_finalize_features(struct virtio_device *vdev)
++static int virtblk_finalize_features(struct virtio_device *vdev)
+ {
+ 	struct board_info *bd_info = virtblk_mic_data.dd_bi[0];
+ 	struct vb_shared *vb_shared;
+@@ -619,11 +539,10 @@ static void virtblk_finalize_features(struct virtio_device *vdev)
+ 	/* Give virtio_ring a chance to accept features. */
+ 	vring_transport_features(vdev);
+ 
+-	/* We only support 32 feature bits. */
+-	BUILD_BUG_ON(ARRAY_SIZE(vdev->features) != 1);
+-
++	/* The host side is a legacy device with 32 feature bits. */
+ 	vb_shared = ((struct mic_virtblk *)bd_info->bi_virtio)->vb_shared;
+-	writel(vdev->features[0], &vb_shared->client_features);
++	writel((u32)vdev->features, &vb_shared->client_features);
++	return 0;
+ }
+ 
+ /* config->get() implementation */
+@@ -647,7 +566,9 @@ static void virtblk_reset(struct virtio_device *vdev)
+ }
+ 
+ /* the notify function used when creating a virt queue */
+-static void virtblk_notify(struct virtqueue *vq)
++/* 3.14 changed the vring notify callback to return bool (true = notified);
++ * returning void left a garbage return that could mark the vq broken. */
++static bool virtblk_notify(struct virtqueue *vq)
+ {
+ 	const int doorbell = 2;
+ 	struct virtio_blk *vblk = vq->vdev->priv;
+@@ -657,6 +578,7 @@ static void virtblk_notify(struct virtqueue *vq)
+ 	db_reg = readl(vblk->sbox + (SBOX_SDBIC0 + (4 * doorbell)))
+ 			| SBOX_SDBIC0_DBREQ_BIT;
+ 	writel(db_reg, vblk->sbox + (SBOX_SDBIC0 + (4 * doorbell)));
++	return true;
+ }
+ 
+ /* the config->del_vqs() implementation */
+@@ -675,15 +597,17 @@ static void virtblk_del_vqs(struct virtio_device *vdev)
+ /* the config->find_vqs() implementation */
+ static int virtblk_find_vqs(struct virtio_device *vdev, unsigned nvqs,
+ 		       struct virtqueue *vqs[],
+-		       vq_callback_t *callbacks[],
+-		       const char *names[])
++		       struct virtqueue_info vqs_info[],	/* 6.11 */
++		       struct irq_affinity *desc)
+ {
++	vq_callback_t *callbacks[1] = { vqs_info[0].callback };
++	const char *names[1] = { vqs_info[0].name };
+ 	struct virtio_blk *vblk = vdev->priv;
+ 	struct virtqueue *vq;
+ 	int err;
+ 	unsigned long size;
+ 	void *queue;  /* the virtual address of the ring queue */
+-	struct vring_virtqueue *vvq;
++	struct vring vr;
+ 	struct vring *vring;
+ 	struct board_info *bd_info = virtblk_mic_data.dd_bi[0];
+ 
+@@ -698,8 +622,14 @@ static int virtblk_find_vqs(struct virtio_device *vdev, unsigned nvqs,
+ 	}
+ 
+ 	/* create the vring */
+-	vq = vring_new_virtqueue(VIRTQUEUE_LENGTH, MIC_VRING_ALIGN,
++#ifdef HAVE_VRING_WEAK_BARRIERS
++	vq = vring_new_virtqueue(0, VIRTQUEUE_LENGTH, MIC_VRING_ALIGN,
++				 vdev, false, false, queue, virtblk_notify,
++				 callbacks[0], names[0]);
++#else
++	vq = vring_new_virtqueue(0, VIRTQUEUE_LENGTH, MIC_VRING_ALIGN,
+ 							 vdev, queue, virtblk_notify, callbacks[0], names[0]);
++#endif
+ 	if (vq == NULL) {
+ 		err = -ENOMEM;
+ 		goto out_activate_queue;
+@@ -708,12 +638,13 @@ static int virtblk_find_vqs(struct virtio_device *vdev, unsigned nvqs,
+ 
+ 	vqs[0] = vblk->vq = vq;
+ 
+-	vvq = to_vvq(vq);
++	/* Same layout vring_new_virtqueue() derived from queue/num/align. */
++	vring_init(&vr, VIRTQUEUE_LENGTH, queue, MIC_VRING_ALIGN);
+ 	vring = &((struct mic_virtblk *)bd_info->bi_virtio)->vb_shared->vring;
+-	writel(vvq->vring.num, &vring->num);
+-	writeq(virt_to_phys(vvq->vring.desc), &vring->desc);
+-	writeq(virt_to_phys(vvq->vring.avail), &vring->avail);
+-	writeq(virt_to_phys(vvq->vring.used), &vring->used);
++	writel(vr.num, &vring->num);
++	writeq(virt_to_phys(vr.desc), &vring->desc);
++	writeq(virt_to_phys(vr.avail), &vring->avail);
++	writeq(virt_to_phys(vr.used), &vring->used);
+ 
+ 	return 0;
+ 
+@@ -737,13 +668,13 @@ static struct virtio_config_ops virtio_blk_config_ops = {
+ 
+ static unsigned int features[] = {
+ 	VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_F_GEOMETRY,
+-	VIRTIO_BLK_F_RO, VIRTIO_BLK_F_BLK_SIZE, VIRTIO_BLK_F_SCSI,
++	VIRTIO_BLK_F_RO, VIRTIO_BLK_F_BLK_SIZE,
+ 	VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_TOPOLOGY
+ };
+ 
+ /*
+  * virtio_blk causes spurious section mismatch warning by
+- * simultaneously referring to a __devinit and a __devexit function.
++ * simultaneously referring to a and a function.
+  * Use __refdata to avoid this warning.
+  */
+ static struct virtio_driver __refdata virtio_blk = {
+@@ -753,17 +684,13 @@ static struct virtio_driver __refdata virtio_blk = {
+ 	.driver.owner =	THIS_MODULE,
+ };
+ 
+-struct class block_class = {
++struct class mic_vblk_class = {
+ 	.name		= "block",
+ };
+ 
+-static struct device_type disk_type = {
++/* the block core's disk_type is not exported; a bare one is all the virtio dev needs */
++static const struct device_type mic_disk_type = {
+ 	.name		= "disk",
+-	/*
+-	.groups		= disk_attr_groups,
+-	.release	= disk_release,
+-	.devnode	= block_devnode,
+-	*/
+ };
+ 
+ static int __init init(void)
+@@ -809,7 +736,7 @@ static int __init init(void)
+ 	  return -ENODEV;
+ 	  goto free_mic_virtblk;
+ 	}
+-	vb_shared = ioremap_nocache(virtio_addr, sizeof(*vb_shared));
++	vb_shared = ioremap(virtio_addr, sizeof(*vb_shared));
+ 	if (vb_shared == NULL) {
+ 	  ret = -ENODEV;
+ 	  goto free_mic_virtblk;
+@@ -826,8 +753,8 @@ static int __init init(void)
+ 	vdev->config = &virtio_blk_config_ops;
+ 	INIT_LIST_HEAD(&vdev->vqs);
+ 	vdev->dev.driver = &virtio_blk.driver;
+-	vdev->dev.class = &block_class;
+-	vdev->dev.type = &disk_type;
++	vdev->dev.class = &mic_vblk_class;
++	vdev->dev.type = &mic_disk_type;
+ 	device_initialize(&vdev->dev);
+ 	mic_virtblk->vdev = (void *)vdev;
+ 
+diff --git a/vnet/micveth.c b/vnet/micveth.c
+index 5ad96a9..307eb98 100644
+--- a/vnet/micveth.c
++++ b/vnet/micveth.c
+@@ -33,6 +33,7 @@
+  * intellectual property rights is granted herein.
+  */
+ 
++#include <linux/module.h>
+ #include <linux/ip.h>
+ #include <linux/tcp.h>
+ #include <linux/list.h>
+@@ -132,7 +133,7 @@ micveth_set_address(struct net_device *dev, void *p)
+ 	if (!is_valid_ether_addr(sa->sa_data))
+ 		return -EADDRNOTAVAIL;
+ 
+-	memcpy(dev->dev_addr, sa->sa_data, ETH_ALEN);
++	eth_hw_addr_set(dev, sa->sa_data);
+ 	return 0;
+ }
+ 
+@@ -203,7 +204,7 @@ micveth_xmit_dequeue(struct net_device *dev, micveth_info_t *veth_info)
+ 		}
+ 
+ 		desc = &tx_queue->rq_descs[tx_queue->rq_tail];
+-		dst = ioremap_nocache(desc->rd_phys, skb->len);
++		dst = ioremap(desc->rd_phys, skb->len);
+ 		if (!dst) {
+ 			tx_queue->rq_tail = (tx_queue->rq_tail + 1) % tx_queue->rq_length;
+ 			dev_kfree_skb(skb);
+@@ -315,7 +316,7 @@ static const struct net_device_ops veth_netdev_ops = {
+ 	.ndo_stop		= micveth_stop_dev,
+ 	.ndo_start_xmit		= micveth_xmit,
+ 	.ndo_validate_addr	= eth_validate_addr,
+-	.ndo_set_multicast_list = micveth_multicast_list,
++	.ndo_set_rx_mode = micveth_multicast_list,
+ 	.ndo_set_mac_address	= micveth_set_address,
+ 	.ndo_change_mtu		= micveth_change_mtu,
+ };
+@@ -335,17 +336,18 @@ micveth_setup(struct net_device *dev)
+ #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,28)
+ 	dev->netdev_ops = &veth_netdev_ops;
+ #endif
+-	dev->destructor = free_netdev;
++	dev->needs_free_netdev = true;	/* 4.12: destructor is gone */
+ 
+ 	/* Fill in device structure with ethernet-generic values. */
+ 	dev->mtu = (MICVETH_MAX_PACKET_SIZE);
+ 	dev->tx_queue_len = 0;
+ 	dev->flags &= ~IFF_MULTICAST;
+-	random_ether_addr(dev->dev_addr);
++	eth_hw_addr_random(dev);
+ }
+ 
+ static int
+-micveth_validate(struct nlattr *tb[], struct nlattr *data[])
++micveth_validate(struct nlattr *tb[], struct nlattr *data[],
++		 struct netlink_ext_ack *extack)
+ {
+ 	if (tb[IFLA_ADDRESS]) {
+ 		if (nla_len(tb[IFLA_ADDRESS]) != ETH_ALEN)
+@@ -368,7 +370,7 @@ micveth_probe_int(micveth_info_t *veth_info, mic_ctx_t *mic_ctx)
+ 	struct net_device *dev_veth;
+ 	int err = 0;
+ 
+-	veth_info->vi_sbox = ioremap_nocache(SBOX_BASE, SBOX_MMIO_LENGTH);
++	veth_info->vi_sbox = ioremap(SBOX_BASE, SBOX_MMIO_LENGTH);
+ 	veth_info->vi_scratch14 = (uint32_t *)(veth_info->vi_sbox + SBOX_SCRATCH14);
+ 	veth_info->vi_scratch15 = (uint32_t *)(veth_info->vi_sbox + SBOX_SCRATCH14);
+ 	writel(0x55, veth_info->vi_sbox + SBOX_DCR);
+@@ -389,7 +391,7 @@ micveth_probe_int(micveth_info_t *veth_info, mic_ctx_t *mic_ctx)
+ 
+ 	if (mic_vnet_mode == VNET_MODE_INTR) {
+ 		if ((err = request_irq(get_sbox_irq(VNET_SBOX_INT_IDX),
+-				micvnet_host_intr_handler, IRQF_DISABLED,
++				micvnet_host_intr_handler, 0,
+ 				"micveth intr", veth_info))) {
+ 			printk(KERN_ERR "%s: interrupt registration failed\n", __func__);
+ 			return err;
+@@ -571,6 +573,7 @@ micveth_clientpoll(struct work_struct *work)
+ 	mic_ctx_t *mic_ctx;
+ 	uint32_t scratch14;
+ 	uint32_t scratch15;
++	u8 mac[ETH_ALEN];
+ 	struct net_device *dev_veth;
+ 	veth_info = &micveth.lv_info[0];
+ 	dev_veth = veth_info->vi_netdev;
+@@ -601,12 +604,14 @@ micveth_clientpoll(struct work_struct *work)
+ 			printk("micveth_clientpoll(): SC14 and SC15 changed from MAGIC, I got the RB addresses!\n");
+ 			writel(MICVETH_LINK_UP_MAGIC, veth_info->vi_sbox + SBOX_SCRATCH14);
+ 			writel(MICVETH_LINK_UP_MAGIC, veth_info->vi_sbox + SBOX_SCRATCH15);
+-			dev_veth->dev_addr[4] = (scratch15 >> 24) & 0xff;
+-			dev_veth->dev_addr[5] = (scratch15 >> 16) & 0xff;
++			memcpy(mac, dev_veth->dev_addr, ETH_ALEN);
++			mac[4] = (scratch15 >> 24) & 0xff;
++			mac[5] = (scratch15 >> 16) & 0xff;
++			eth_hw_addr_set(dev_veth, mac);
+ 			veth_info->vi_ring.phys = ((uint64_t)(scratch15 & 0xffff) << 32) | scratch14;
+ 			veth_info->vi_ring.phys |= (1ULL << 39);
+ 			veth_info->vi_ring.length = sizeof(veth_ring_t);
+-			veth_info->ring_ptr = ioremap_nocache(veth_info->vi_ring.phys, veth_info->vi_ring.length);
++			veth_info->ring_ptr = ioremap(veth_info->vi_ring.phys, veth_info->vi_ring.length);
+ 			BUG_ON(veth_info->ring_ptr == NULL);
+ 
+ 			printk("micveth_clientpoll(): VETH_STATE_LINKUP\n");
+@@ -673,7 +678,7 @@ _micveth_process_descriptors(micveth_info_t *veth_info)
+ 		veth_info->vi_netdev->stats.rx_packets++;
+ 		veth_info->vi_netdev->stats.rx_bytes += desc.rd_length;
+ 
+-		pkt = ioremap_nocache(desc.rd_phys, desc.rd_length);
++		pkt = ioremap(desc.rd_phys, desc.rd_length);
+ 		if (pkt == NULL) {
+ 			veth_info->vi_netdev->stats.rx_dropped++;
+ 			goto update_ring;
+diff --git a/vnet/micveth_dma.c b/vnet/micveth_dma.c
+index c62675b..473fdfd 100644
+--- a/vnet/micveth_dma.c
++++ b/vnet/micveth_dma.c
+@@ -34,6 +34,7 @@
+  * intellectual property rights is granted herein.
+  */
+ 
++#include <linux/module.h>
+ #include <linux/ip.h>
+ #include <linux/tcp.h>
+ #include <linux/list.h>
+@@ -847,7 +848,7 @@ micvnet_set_address(struct net_device *dev, void *p)
+ 	if (!is_valid_ether_addr(sa->sa_data))
+ 		return -EADDRNOTAVAIL;
+ 
+-	memcpy(dev->dev_addr, sa->sa_data, ETH_ALEN);
++	eth_hw_addr_set(dev, sa->sa_data);
+ 	return 0;
+ }
+ 
+@@ -890,14 +891,17 @@ micvnet_setmac_from_serial(struct net_device *dev)
+ {
+ 	struct micvnet_info *vni = (struct micvnet_info *)dev->ml_priv;
+ 	char serialnum[17];
++	u8 mac[ETH_ALEN];
+ 	int err;
+ 	
+ 	mic_get_serial_from_dbox(vni, serialnum);
+ #ifdef HOST
+-	err = mic_get_mac_from_serial(serialnum, dev->dev_addr, 1);
++	err = mic_get_mac_from_serial(serialnum, mac, 1);
+ #else
+-	err = mic_get_mac_from_serial(serialnum, dev->dev_addr, 0);
++	err = mic_get_mac_from_serial(serialnum, mac, 0);
+ #endif
++	if (!err)
++		eth_hw_addr_set(dev, mac);
+ 	return err;
+ }
+ 
+@@ -907,7 +911,7 @@ static const struct net_device_ops micvnet_netdev_ops = {
+ 	.ndo_start_xmit		= micvnet_xmit,
+ 	.ndo_validate_addr	= eth_validate_addr,
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0)
+-	.ndo_set_multicast_list = micvnet_multicast_list,
++	.ndo_set_rx_mode = micvnet_multicast_list,
+ #endif
+ 	.ndo_set_mac_address	= micvnet_set_address,
+ 	.ndo_change_mtu		= micvnet_change_mtu,
+@@ -920,7 +924,7 @@ micvnet_setup(struct net_device *dev)
+ 
+ 	/* Initialize the device structure. */
+ 	dev->netdev_ops = &micvnet_netdev_ops;
+-	dev->destructor = free_netdev;
++	dev->needs_free_netdev = true;	/* 4.12: destructor is gone */
+ 
+ 	/* Fill in device structure with ethernet-generic values. */
+ 	dev->mtu = MICVNET_MAX_MTU;
+@@ -948,8 +952,8 @@ micvnet_init_hw_regs(struct micvnet_info *vnet_info)
+ 		= (uint32_t *)((unsigned long)mic_ctx->mmio.va +
+ 			       HOST_SBOX_BASE_ADDRESS + SBOX_SCRATCH14);
+ #else
+-	vnet_info->vi_sbox = ioremap_nocache(SBOX_BASE, SBOX_MMIO_LENGTH);
+-	vnet_info->vi_dbox = ioremap_nocache(DBOX_BASE, SBOX_MMIO_LENGTH);
++	vnet_info->vi_sbox = ioremap(SBOX_BASE, SBOX_MMIO_LENGTH);
++	vnet_info->vi_dbox = ioremap(DBOX_BASE, SBOX_MMIO_LENGTH);
+ 	if (!vnet_info->vi_sbox) {
+ 		printk(KERN_ERR "%s: NULL SBOX ptr\n", __func__);
+ 		return -ENOMEM;
+@@ -999,7 +1003,7 @@ micvnet_init_interrupts(struct micvnet_info *vnet_info)
+ 				      micvnet_host_doorbell_intr_handler))) {
+ #else
+ 	if ((ret = request_irq(get_sbox_irq(VNET_SBOX_INT_IDX),
+-				micvnet_host_intr_handler, IRQF_DISABLED,
++				micvnet_host_intr_handler, 0,
+ 				"vnet intr", vnet_info))) {
+ #endif
+ 		printk(KERN_ERR "%s: interrupt registration failed\n", __func__);
+@@ -1046,7 +1050,7 @@ micvnet_init_netdev(struct micvnet_info *vnet_info)
+ 	dev_vnet->ml_priv = vnet_info;
+ 
+ 	if (micvnet_setmac_from_serial(dev_vnet))
+-		random_ether_addr(dev_vnet->dev_addr);
++		eth_hw_addr_random(dev_vnet);
+ 
+ 	dev_vnet->rtnl_link_ops = &micvnet_link_ops;
+ 
+@@ -1080,7 +1084,7 @@ micvnet_init_msg_rings(struct micvnet_info *vnet_info)
+ 		return -ENOMEM;
+ 	}
+ 	vnet_info->ring_ptr
+-		= ioremap_nocache(vnet_info->vi_rp_phys, 
++		= ioremap(vnet_info->vi_rp_phys, 
+ 				       sizeof(struct micvnet_msg_ring_pair));
+ 	if (!vnet_info->ring_ptr) {
+ 		printk(KERN_ERR "%s: NULL ring ptr\n", __func__);
